@@ -124,7 +124,7 @@ fi
 set --
 for x in $FLOW_FACT_LINT_EXCLUDE; do
   x="${x#./}"
-  case "$x" in */*) set -- "$@" -not -path "$x" ;; *) set -- "$@" -not -name "$x" ;; esac
+  case "$x" in */*) set -- "$@" -not -path "$x" -not -path "./$x" -not -path "*/$x" ;; *) set -- "$@" -not -name "$x" ;; esac
 done
 HITS="$SELF/hits"; : > "$HITS"
 # shellcheck disable=SC2086

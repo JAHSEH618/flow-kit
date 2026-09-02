@@ -29,6 +29,7 @@ FLOW_MERGE_STRATEGY="--merge"
 # }
 FLOW_GATE_SUMMARY_RE='Test Files|Tests '    # 门输出里要抄进 rc.txt 的读数行(ERE)
 FLOW_INFRA_FAIL_RE='57P01|Connection terminated|does not exist in the current database'
+FLOW_INFRA_FAIL_GATES=''               # 只在这些门的输出里扫守卫(空格分隔;空 = 全部门)
 FLOW_GATE_REBUILD='build'              # 缓存命中时仍重跑的门名(空 = 全取缓存)
 
 # ── post-commit 哨兵(每行 路径模式<TAB>该更新的文档段;可不定义)──

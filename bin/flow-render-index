@@ -21,6 +21,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ -n "$TARGET" ] || TARGET="$FLOW_ROOT_DOC_PATH"
+case "$TARGET" in /*) ;; *) flow_die "--write 的文件参数须绝对路径(省略 = 仓根 $FLOW_ROOT_DOC): $TARGET" ;; esac
 
 OPEN=$(flow_open_heads)
 HASH=$(printf '%s\n' "$OPEN" | flow_sha256 | cut -c1-8)

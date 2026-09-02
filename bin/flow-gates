@@ -50,7 +50,7 @@ RERUN=""
 for r in $REBUILD; do
   case " $NAMES " in
     *" $r "*) RERUN="$RERUN $r" ;;
-    *) flow_warn "FLOW_GATE_REBUILD 里的门 $r 不在 flow_gates,缓存命中时不重跑它" ;;
+    *) flow_die "FLOW_GATE_REBUILD 里的门「$r」不在 flow_gates —— 改成真实门名,或显式设为空(空 = 缓存命中时全取缓存,护产物的责任自己担)" ;;
   esac
 done
 gate_cmd() { printf '%s\n' "$GATES" | awk -F'\t' -v n="$1" '$1==n {print substr($0, length($1)+2); exit}'; }
@@ -136,6 +136,8 @@ GEOF
 
 guard=0
 for n in $RAN; do
+  # 守卫射程:FLOW_INFRA_FAIL_GATES 非空时只扫列出的门(重置库/校验库的输出里合法出现同样字样)
+  if [ -n "$FLOW_INFRA_FAIL_GATES" ]; then case " $FLOW_INFRA_FAIL_GATES " in *" $n "*) ;; *) continue ;; esac; fi
   h=$(LC_ALL=C grep -cE "$FLOW_INFRA_FAIL_RE" "$OUT/$n.txt")
   [ -n "$h" ] || flow_die "FLOW_INFRA_FAIL_RE 编译不过: $FLOW_INFRA_FAIL_RE"
   guard=$((guard + h))

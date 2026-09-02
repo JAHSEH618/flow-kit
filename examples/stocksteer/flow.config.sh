@@ -33,6 +33,7 @@ flow_gates() {
 }
 FLOW_GATE_SUMMARY_RE='Test Files|Tests |全过|FAIL'   # 门输出里要抄进 rc.txt 的读数行(ERE)
 FLOW_INFRA_FAIL_RE='57P01|Connection terminated|does not exist in the current database'  # 传输层守卫:命中 >0 判 INFRA_FAIL 弃读数
+FLOW_INFRA_FAIL_GATES='integration'   # 只在这些门的输出里扫守卫(空格分隔;空 = 本次跑过的全部门)
 FLOW_GATE_REBUILD='build'              # 缓存命中时仍要重跑的门名(护 dist;空 = 全取缓存)
 
 # ── post-commit 哨兵(每行 路径模式<TAB>该更新的文档段;模式按 sh case 语法)──

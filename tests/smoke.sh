@@ -7,6 +7,7 @@ PATH="$KIT/bin:$PATH"; export PATH
 T=$(mktemp -d "${TMPDIR:-/tmp}/flow-smoke.XXXXXX") || exit 2
 trap 'rm -rf "$T"' EXIT
 red=0
+in_dir() { d="$1"; shift; ( cd "$d" && "$@" ); }   # 子 shell 只包住命令;红绿在父进程记(子 shell 里的 red=1 传不回来 = 假绿)
 ok()   { printf 'ok   %s\n' "$*"; }
 fail() { printf 'RED  %s\n' "$*"; red=1; }
 expect_rc() { # $1 期望 RC  $2 描述  $3.. 命令
@@ -119,6 +120,29 @@ expect_rc 0 "flow-fact-lint verify 新增 0" flow-fact-lint verify
 printf '// 树里没有第二个\n' >> src/c.ts
 expect_rc 1 "flow-fact-lint verify 新增 1" flow-fact-lint verify
 
+# ── 7b. 补充路径:接收位 / 合并模式 / 不重置的门 / 默认清账 / pr-merge 帮助 ──
+cat > "$WS/specs/plan.md" <<'EOF'
+## T1 · 示例任务
+- 接收位:欠账 #1 的闭点
+- 普通行
+## T2 · 另一个
+提到 T1 的行
+EOF
+expect_rc 0 "flow-receipts" flow-receipts specs/plan.md T1
+printf '%s' "$LAST_OUT" | grep -q '接收位' && ok "接收位轴1命中" || fail "接收位轴1未命中"
+expect_rc 2 "flow-receipts 找不到节 FATAL" flow-receipts specs/plan.md T9
+printf 'src/a.ts\nsrc/b.ts\n' > "$FL/.lane-paths.txt"
+expect_rc 0 "flow-dispatch --lane-merge" flow-dispatch T3 --tree 活树-独占 --db 禁用 --seq 50 --lane-merge "$FL/.lane-paths.txt"
+printf '%s' "$LAST_OUT" | grep -q '合并批' && ok "合并批头行" || fail "合并批头行缺失"
+expect_rc 2 "flow-dispatch --lane-merge 拒绝 --plan" flow-dispatch T3 --tree 活树-独占 --db 禁用 --seq 50 --lane-merge "$FL/.lane-paths.txt" --plan "$WS/specs/plan.md"
+expect_rc 0 "flow-gates 不重置" flow-gates
+printf '%s' "$LAST_OUT" | grep -q 'dbreset skipped\|CACHED' && ok "不重置口径:跳过 dbreset 或命中缓存" || fail "不重置口径异常"
+printf 'x\n' >> src/b.ts; git add -A; git commit -qm touch-b; C2=$(git rev-parse --short HEAD)
+printf '> **%s** 追写:触面变宽\n' "$(date +%F)" >> "$WS/specs/debts.md"
+expect_rc 0 "flow-clear-map-debt 默认口径" flow-clear-map-debt "$C2"
+printf '%s' "$LAST_OUT" | grep -q '勾掉 1 条' && ok "同日追写勾掉 #3" || fail "默认口径未勾掉: $LAST_OUT"
+expect_rc 0 "flow-pr-merge --help" flow-pr-merge --help
+
 # ── 8. freshness ──
 out=$(flow-freshness 2>&1); [ -n "$out" ] && ok "freshness 有事就响: $out" || fail "freshness 在有未勾队列时应响"
 sed -i.bak 's/^- \[ \]/- [x]/' "$WS/.claude/map-debt.md"; rm -f "$WS/.claude/map-debt.md.bak"
@@ -126,5 +150,35 @@ flow-render-index --write >/dev/null 2>&1
 head -n "$(cat "$WS/.flow/.rulebook-lines")" "$WS/.claude/flow-local.md" > "$T/fl" && cp "$T/fl" "$WS/.claude/flow-local.md"
 out=$(flow-freshness 2>&1); [ -z "$out" ] && ok "freshness 全绿静默" || fail "freshness 应静默,却说: $out"
 out=$(cd "$T" && flow-freshness 2>&1); [ -z "$out" ] && ok "freshness 无配置静默" || fail "freshness 无配置应静默"
+
+# ── 9. 多仓布局(工作区根在仓外;StockSteer-Mono 的生产布局)──
+WS2="$T/ws2"; mkdir -p "$WS2/repo/src" "$WS2/repo/specs"
+in_dir "$WS2/repo" sh -c 'git init -q && git config user.email t@t && git config user.name t && printf "specs/\n" > .gitignore && printf "a\n" > src/a.ts && printf "# s\n" > specs/s.md && printf "# root\n" > CLAUDE.md && git add -A && git commit -qm init'
+expect_rc 0 "多仓 flow-init --repo repo" flow-init --ws "$WS2" --repo repo --main main
+[ -f "$WS2/.claude/flow.config.sh" ] && grep -q 'FLOW_REPO="repo"' "$WS2/.claude/flow.config.sh" && ok "多仓 config 指向子仓" || fail "多仓 config 未指向子仓"
+cat >> "$WS2/.claude/flow.config.sh" <<'EOF'
+flow_gates() { printf '%s\n' 'lint	true' 'dbreset	true'; }
+FLOW_GATE_REBUILD=""
+FLOW_FACT_LINT_ROOTS="src"
+EOF
+printf '<!-- debt:1 mark:#1 status:open owner:T1 due:T1 touches:src/a.ts title:多仓示例 -->\n> #1 正文\n' > "$WS2/repo/specs/debts.md"
+expect_rc 0 "多仓 子目录起跑 lint" in_dir "$WS2/repo/src" flow-route-debts --lint
+expect_rc 0 "多仓 工作区根起跑 render-index" in_dir "$WS2" flow-render-index --write
+grep -q 'debts-index' "$WS2/repo/CLAUDE.md" && ok "多仓 索引写进子仓根文档" || fail "多仓 索引未写进子仓"
+in_dir "$WS2/repo" sh -c 'git add -A && git commit -qm setup' >/dev/null 2>&1
+FL2="$WS2/.flow/b1"; mkdir -p "$FL2"
+expect_rc 0 "多仓 baseline" in_dir "$WS2/repo" flow-manifest baseline "$FL2/.base.txt"
+printf 'z\n' >> "$WS2/repo/src/a.ts"; printf 'more\n' >> "$WS2/repo/specs/s.md"
+printf 'src/a.ts\nspecs/s.md\n' > "$FL2/.decl.txt"
+expect_rc 0 "多仓 verify OK(工作区文件零泄漏进仓)" in_dir "$WS2" flow-manifest verify "$FL2/.base.txt" "$FL2/.decl.txt"
+in_dir "$WS2/repo" sh -c 'git add -A && git commit -qm t1' >/dev/null 2>&1
+C3=$(git -C "$WS2/repo" rev-parse --short HEAD)
+grep -q "$C3" "$WS2/.claude/map-debt.md" && ok "多仓 post-commit 记进工作区队列" || fail "多仓 post-commit 未记队列"
+expect_rc 0 "多仓 flow-gates --reset" in_dir "$WS2/repo" flow-gates --reset
+[ -d "$WS2/.claude/flow-gates" ] && ok "多仓 门缓存落在工作区 .claude/" || fail "多仓 门缓存位置错"
+# 三态表证据格含转义竖线(照 review-template 的示例)
+printf '| 标记 | 判定 | 证据 | 落点 |\n|---|---|---|---|\n| #1 | 还 | `git diff \\| grep -c x` → 1 | debts.md #1 |\n' > "$FL2/verdicts.md"
+expect_rc 0 "三态表证据含 \\|" in_dir "$WS2/repo" flow-clear-map-debt --verdicts "$FL2/verdicts.md" "$C3"
+grep -q '④三态表:还' "$WS2/.claude/map-debt.md" && ok "转义竖线行被解析" || fail "转义竖线行未解析"
 
 [ "$red" = 0 ] && { echo "SMOKE OK"; exit 0; } || { echo "SMOKE RED"; exit 1; }

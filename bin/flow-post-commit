@@ -51,9 +51,11 @@ check_dir() {  # $1=目录 $2=描述
 }
 
 for d in $ADDED; do
+  [ -d "$d" ] || continue   # 深度 2 的新文件不是目录
   git ls-tree -d HEAD^ -- "$d" 2>/dev/null | grep -q . || check_dir "$d" "新目录"
 done
 for d in $GONE; do
+  git ls-tree -d HEAD^ -- "$d" 2>/dev/null | grep -q . || continue   # 在 HEAD^ 里不是目录的(被删文件)不算
   git ls-tree -d HEAD -- "$d" 2>/dev/null | grep -q . || check_dir "$d" "目录消失"
 done
 
@@ -83,7 +85,7 @@ if [ -f "$FLOW_LEDGER_PATH" ]; then
     touches=$(flow_head_field "$L" touches)
     hit=0
     for t in $(printf '%s' "$touches" | tr ',' ' '); do
-      printf '%s\n' "$TOUCHED" | grep -q "^$t" && { hit=1; break; }
+      printf '%s\n' "$TOUCHED" | grep -q "^$(printf '%s' "$t" | sed 's/[][\\.*^$]/\\&/g')" && { hit=1; break; }
     done
     [ "$hit" = 1 ] && note "触欠账$mark 的触面" "$FLOW_LEDGER 该条(核对要不要更新/该不该还)"
   done <<DEOF

@@ -58,14 +58,21 @@ write_file "$WS/.claude/flow.config.sh" "$TMP"
 # 2. flow-local
 write_file "$WS/.claude/flow-local.md" "$KIT/lib/templates/flow-local.md"
 
+# 1b. 读已有(或刚写的)config,之后的流程目录名以它为准,不硬编码
+FLOWDIR=".flow"
+if [ -f "$WS/.claude/flow.config.sh" ]; then
+  ( FLOW_CONFIG="$WS/.claude/flow.config.sh"; export FLOW_CONFIG; . "$KIT/lib/flow-lib.sh"; flow_load_config; printf '%s' "$FLOW_FLOW_DIR" ) > "$TMP.flowdir" 2>/dev/null && FLOWDIR=$(cat "$TMP.flowdir"); rm -f "$TMP.flowdir"
+  [ -n "$FLOWDIR" ] || FLOWDIR=".flow"
+fi
+
 # 3. 流程目录 + 规则书棘轮起点(已有就不动)
 if [ "$DRY" = 0 ]; then
-  mkdir -p "$WS/.flow"
-  if [ ! -f "$WS/.flow/.rulebook-lines" ] && [ -f "$WS/.claude/flow-local.md" ]; then
-    wc -l < "$WS/.claude/flow-local.md" | tr -d ' ' > "$WS/.flow/.rulebook-lines"
-    say "已写  $WS/.flow/.rulebook-lines(规则书棘轮起点 = $(cat "$WS/.flow/.rulebook-lines") 行)"
+  mkdir -p "$WS/$FLOWDIR"
+  if [ ! -f "$WS/$FLOWDIR/.rulebook-lines" ] && [ -f "$WS/.claude/flow-local.md" ]; then
+    wc -l < "$WS/.claude/flow-local.md" | tr -d ' ' > "$WS/$FLOWDIR/.rulebook-lines"
+    say "已写  $WS/$FLOWDIR/.rulebook-lines(规则书棘轮起点 = $(cat "$WS/$FLOWDIR/.rulebook-lines") 行)"
   else
-    say "已有  $WS/.flow/"
+    say "已有  $WS/$FLOWDIR/"
   fi
 fi
 
@@ -94,19 +101,17 @@ fi
 # 5b. 单仓布局:流程目录与门缓存落在仓内,用 .git/info/exclude(本地,不入库)挡掉,免得 post-commit 把它们记成新目录
 if [ "$REPO" = "." ] && [ "$DRY" = 0 ] && [ -d "$REPO_DIR/.git" ]; then
   EX="$REPO_DIR/.git/info/exclude"; mkdir -p "$(dirname "$EX")"; touch "$EX"
-  for pat in '.flow/' '.claude/flow-gates/'; do
+  for pat in "$FLOWDIR/" '.claude/flow-gates/' '.claude/map-debt.md' '.claude/fact-lint-baseline.tsv'; do
     grep -qxF "$pat" "$EX" || { printf '%s\n' "$pat" >> "$EX"; say "已加  $EX ← $pat"; }
   done
 fi
 
 # 6. 核对
-if [ "$DRY" = 0 ] && command -v flow-config >/dev/null 2>&1; then
-  say "—— flow-config --check ——"
-  ( cd "$WS" && flow-config --check ); rc=$?
-  say "flow-config --check RC=$rc"
-elif [ "$DRY" = 0 ] && [ -x "$KIT/bin/flow-config" ]; then
+rc=0
+if [ "$DRY" = 0 ]; then
   say "—— flow-config --check ——"
   ( cd "$WS" && "$KIT/bin/flow-config" --check ); rc=$?
   say "flow-config --check RC=$rc"
 fi
 say "下一步:在 $WS/.claude/flow.config.sh 填 flow_gates(门命令)与 FLOW_FACT_LINT_ROOTS;派单前读 /flow-kit:protocol。"
+exit "$rc"

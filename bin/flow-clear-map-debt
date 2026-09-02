@@ -53,9 +53,10 @@ else:
     verdicts={}
     trow=re.compile(r'^\|\s*('+MARK+r')\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*$')
     for l in open(table,encoding='utf-8').read().split('\n'):
+        l=l.replace('\\|','\x00')   # 证据格里的转义竖线先藏起来
         m=trow.match(l)
         if not m: continue
-        mark,verdict,evidence,_=m.groups()
+        mark,verdict,evidence,_=[x.replace('\x00','|') if x else x for x in m.groups()]
         if verdict not in ('还','追写','不动'):
             fatal(f'三态表 {mark} 的判定「{verdict}」不在 {{还, 追写, 不动}}')
         verdicts[mark]=(verdict,evidence)

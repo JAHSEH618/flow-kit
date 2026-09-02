@@ -67,7 +67,7 @@ verify)
   # ⚠ ① `-uall`:不带它未跟踪目录折成一行目录名,**藏在里面的未申报文件 verify 照绿**,
   #      而 verify 正是「实改集 ⊄ 申报」这条的唯一探测器,它自己有盲区就等于没有探测器。
   #   ② 剥状态位改用固定 3 字符前缀 + 显式处理 rename 的 ` -> `;原 `awk '{print $NF}'` 对含空格的路径会截断。
-  tracked=$(git status --porcelain -uall | sed 's/^...//' | sed 's/.* -> //')
+  tracked=$(git status --porcelain -uall | sed 's/^...//' | sed 's/.* -> //' | flow_filter_kit_owned)   # kit 自有件不算实改集(契约 8)
 
   # 轴2 ignored 区:当前 shasum vs 基线 —— 新增/改动(基线里没有这行)与删除(现况里没有)分列
   # 基线与配置要同源:基线里有 sha 行而本次配置关了 shasum 轴 ⟹ 轴2 会被静默丢掉,拒绝给结论

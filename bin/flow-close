@@ -20,16 +20,18 @@ cd "$FLOW_REPO_DIR" || exit 2
 echo "== 1. flow-manifest verify =="
 # 同层捕获:命令一次跑进文件,RC 紧跟其后;判读只读那个文件
 flow-manifest verify "$BASE" "$DECL" > "$TMP/verify" 2>&1; rc=$?
-tail -5 "$TMP/verify"; echo "RC=$rc"
+grep -E 'RED|OK|FATAL|WARN' "$TMP/verify"; echo "RC=$rc"
 grep -qE 'verify OK' "$TMP/verify" || red=1
 
 echo "== 2. 非空转(抽掉一条<ins>确在实改集里</ins>的申报行,应 RED 且点名它)=="
 # 抽的行必须真在实改集里:先取 tracked 轴(git status),空则取 ignored 轴(与基线比 sha)。抽不在实改集里的行永远不红 —— 那不是非空转,是空转。
 declp=$(sed -e 's/^[0-9a-f]\{40,\}  //' -e 's/^git \(..\) //' -e 's/^git //' "$DECL" | sed 's/.* -> //' | sed 's/^[[:space:]]*//' | grep -v '^#' | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' | grep . | sort -u)
 victim=""
-for p in $(git status --porcelain -uall | sed 's/^...//' | sed 's/.* -> //'); do printf '%s\n' "$declp" | grep -qxF -- "$p" && { victim="$p"; break; }; done
+for p in $(git status --porcelain -uall | sed 's/^...//' | sed 's/.* -> //' | flow_filter_kit_owned); do printf '%s\n' "$declp" | grep -qxF -- "$p" && { victim="$p"; break; }; done
 if [ -z "$victim" ]; then
-  areas=$(sed -n 's|^sha [0-9a-f]*  ||p' "$BASE" | cut -d/ -f1 | sort -u)
+  # 扫描区与 flow-manifest verify 同源:优先基线头行 areas:,旧格式基线才回退到路径首段
+  areas=$(sed -n '1s/^# freeze-baseline .* areas: //p' "$BASE")
+  [ -n "$areas" ] || areas=$(sed -n 's|^sha [0-9a-f]*  ||p' "$BASE" | cut -d/ -f1 | sort -u)
   sed -n 's/^sha //p' "$BASE" | sort > "$TMP/base-sha"
   for a in $areas; do [ -d "$a" ] && find "$a" -type f | while IFS= read -r f; do flow_sha256 "$f"; done; done | sort > "$TMP/cur-sha"
   for p in $(comm -13 "$TMP/base-sha" "$TMP/cur-sha" | sed 's/^[0-9a-f]*  //'); do printf '%s\n' "$declp" | grep -qxF -- "$p" && { victim="$p"; break; }; done
@@ -39,7 +41,7 @@ if [ -z "$victim" ]; then
 else
   printf '%s\n' "$declp" | grep -vxF -- "$victim" > "$TMP/decl-minus"
   flow-manifest verify "$BASE" "$TMP/decl-minus" > "$TMP/verify2" 2>&1; rc2=$?
-  grep -E 'RED|OK|FATAL' "$TMP/verify2" | head -3; echo "RC=$rc2(抽掉 $victim)"
+  grep -E 'RED|OK|FATAL' "$TMP/verify2"; echo "RC=$rc2(抽掉 $victim)"
   if [ "$rc2" = 1 ] && grep -qF "RED 漏申报: $victim" "$TMP/verify2"; then
     :
   else
@@ -53,7 +55,7 @@ if [ -n "$AFTER" ]; then
   ok=$(grep -c ': OK$' "$TMP/after"); bad=$(grep -vc ': OK$' "$TMP/after")
   echo "OK=$ok FAILED=$bad"
   [ $((ok+bad)) -gt 0 ] || { echo "  ⚠ 零条结果(清单为空或校验工具没跑起来)—— 空集不算绿(§J0)"; red=1; }
-  [ "$bad" = 0 ] || { grep -v ': OK$' "$TMP/after" | head -10; echo "  (FAILED 若全在编排方并行编辑面则不算红 —— 由编排方自判,本脚本按红报)"; red=1; }
+  [ "$bad" = 0 ] || { grep -v ': OK$' "$TMP/after"; echo "  (FAILED 若全在编排方并行编辑面则不算红 —— 由编排方自判,本脚本按红报)"; red=1; }
 fi
 
 echo "== 4. flow-route-debts --lint =="

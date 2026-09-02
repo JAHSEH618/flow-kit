@@ -6,6 +6,12 @@
 #   flow_load_config            # 之后 FLOW_WS / FLOW_REPO_DIR / FLOW_LEDGER_PATH … 可用
 # 环境覆盖(只给测试与特殊场合):FLOW_CONFIG=<配置文件绝对路径> 跳过向上查找。
 
+# 让同胞命令在任何会话里都能按裸名调用(plugin 会话之外 bin 不在 PATH)
+_flow_kit_dir=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)
+if [ -n "$_flow_kit_dir" ] && [ -d "$_flow_kit_dir/bin" ]; then
+  case ":$PATH:" in *":$_flow_kit_dir/bin:"*) ;; *) PATH="$_flow_kit_dir/bin:$PATH"; export PATH ;; esac
+fi
+
 flow_die()  { printf 'FATAL: %s\n' "$*" >&2; exit 2; }
 flow_warn() { printf 'WARN: %s\n' "$*" >&2; }
 
@@ -54,6 +60,7 @@ flow_load_config() {
   FLOW_FACT_LINT_EXCLUDE=""
   FLOW_GATE_SUMMARY_RE='Test Files|Tests '
   FLOW_INFRA_FAIL_RE='57P01|Connection terminated|does not exist in the current database'
+  FLOW_INFRA_FAIL_GATES=""
   FLOW_DOC_BUDGET_FILE=400
   FLOW_DOC_BUDGET_DIR=4000
   FLOW_DOC_BUDGET_RULEBOOK=250
@@ -81,8 +88,20 @@ flow_load_config() {
          FLOW_SPEC_DIRS FLOW_SPEC_UNTRACKED FLOW_FLOW_DIR FLOW_FLOW_DIR_PATH FLOW_MAIN_BRANCH FLOW_DEV_BRANCH \
          FLOW_MAP_DEBT FLOW_MAP_DEBT_PATH FLOW_LOCAL_DOC FLOW_LOCAL_DOC_PATH \
          FLOW_FACT_LINT_BASELINE FLOW_FACT_LINT_BASELINE_PATH FLOW_FACT_LINT_ROOTS FLOW_FACT_LINT_EXCLUDE \
-         FLOW_GATE_SUMMARY_RE FLOW_INFRA_FAIL_RE FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_DIR FLOW_DOC_BUDGET_RULEBOOK \
+         FLOW_GATE_SUMMARY_RE FLOW_INFRA_FAIL_RE FLOW_INFRA_FAIL_GATES FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_DIR FLOW_DOC_BUDGET_RULEBOOK \
          FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_FIX_BY_WRITER FLOW_FOLD_MAX FLOW_MERGE_STRATEGY
+}
+
+# —— kit 自己的记账件(队列 / 基线 / 流程目录 / 门缓存)落在仓内(单仓布局)时,不算任何一轮的实改集 ——
+flow_kit_owned_rel() {   # 打印仓库相对路径;目录带尾斜杠
+  for p in "$FLOW_MAP_DEBT_PATH" "$FLOW_FACT_LINT_BASELINE_PATH" "$FLOW_FLOW_DIR_PATH/" "$FLOW_WS/.claude/flow-gates/"; do
+    case "$p" in "$FLOW_REPO_DIR"/*) printf '%s\n' "${p#"$FLOW_REPO_DIR"/}" ;; esac
+  done
+}
+flow_filter_kit_owned() {   # stdin 一行一路径 → 去掉 kit 自有件(精确匹配或目录前缀)
+  pats=$(flow_kit_owned_rel)
+  if [ -z "$pats" ]; then cat; return 0; fi
+  awk -v pats="$pats" 'BEGIN{n=split(pats,a,"\n")} { keep=1; for(i=1;i<=n;i++){ p=a[i]; if(p=="") continue; if(substr(p,length(p),1)=="/"){ if(index($0,p)==1) keep=0 } else if($0==p) keep=0 } if(keep) print }'
 }
 
 # —— 门与哨兵:config 里以函数给出(sh 原生,免解析分隔符)。没定义就给空实现,调用方自判「零门」——
