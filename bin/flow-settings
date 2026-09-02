@@ -1,0 +1,109 @@
+#!/bin/sh
+# flow-settings —— 把工作区 .claude/settings.local.json 收窄到本项目要用的插件与 MCP(其余一律关),
+#                  让每个会话、每个 sub-agent 的开局上下文只带用得上的 skill 清单与工具表。
+# 用法: flow-settings [--check | --write | --dry-run]      默认 --check
+#   --check    算出应有内容与现文件比对;有漂移逐行 RED,RC=1;一致 OK,RC=0
+#   --write    写入(只动 enabledPlugins 与 disabledMcpServers 两个键,别的键原样保留),末行 OK
+#   --dry-run  只打印将写入的 JSON
+# 判据来源:用户级 settings.json 的 enabledPlugins 里为 true 的插件、用户级 .claude.json 的 mcpServers。
+#   留哪些由 config 的 FLOW_KEEP_PLUGINS / FLOW_KEEP_MCP 决定(空格分隔;插件写 name@marketplace 或裸 name);
+#   两者缺任一 = FATAL 并列出候选 —— 留什么是项目的事实,不给默认。flow-kit 自己永远保留。
+# 病根:实测开局上下文 44k token,三份 CLAUDE.md 只占 10k,其余是插件 skill 清单与 MCP 工具表,sub-agent 每一轮都重付一遍。
+# 为什么落在 settings.local.json 而不是 settings.json:插件 id 与 MCP 名是这台机器的事,不该进仓。
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_load_config
+MODE=--check
+case "${1:-}" in "") ;; --check|--write|--dry-run) MODE="$1" ;; *) echo "用法: flow-settings [--check|--write|--dry-run]" >&2; exit 2 ;; esac
+command -v python3 >/dev/null 2>&1 || flow_die "flow-settings 需要 python3 改 JSON"
+
+CFG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+USER_SETTINGS="$CFG_DIR/settings.json"
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then USER_MCP="$CLAUDE_CONFIG_DIR/.claude.json"; else USER_MCP="$HOME/.claude.json"; fi
+TARGET="$FLOW_WS/.claude/settings.local.json"
+KEEP_SET=1
+if [ -z "${FLOW_KEEP_PLUGINS+x}" ] || [ -z "${FLOW_KEEP_MCP+x}" ]; then KEEP_SET=0; fi
+export MODE USER_SETTINGS USER_MCP TARGET KEEP_SET
+export KEEP_PLUGINS="${FLOW_KEEP_PLUGINS-}" KEEP_MCP="${FLOW_KEEP_MCP-}"
+
+python3 - <<'PY'
+import json, os, sys, tempfile
+mode = os.environ['MODE']; target = os.environ['TARGET']
+keep_p = os.environ['KEEP_PLUGINS'].split(); keep_m = os.environ['KEEP_MCP'].split()
+
+def load(p):
+    if not os.path.exists(p): return {}
+    try:
+        with open(p) as f: return json.load(f)
+    except Exception as e:
+        print(f'FATAL: 读不了 {p}: {e}', file=sys.stderr); sys.exit(2)
+
+user_plugins = sorted(k for k, v in (load(os.environ['USER_SETTINGS']).get('enabledPlugins') or {}).items() if v is True)
+user_mcp = sorted((load(os.environ['USER_MCP']).get('mcpServers') or {}).keys())
+
+if os.environ['KEEP_SET'] != '1':
+    print('候选插件(用户级已启用):', ' '.join(user_plugins) or '(无)')
+    print('候选 MCP(用户级):', ' '.join(user_mcp) or '(无)')
+    print('FATAL: flow.config.sh 缺 FLOW_KEEP_PLUGINS / FLOW_KEEP_MCP(留什么是项目的事实,不给默认;flow-kit 自己不用写,永远保留)', file=sys.stderr)
+    sys.exit(2)
+
+def kept_plugin(pid):
+    name = pid.split('@', 1)[0]
+    return name == 'flow-kit' or pid in keep_p or name in keep_p
+
+off_p = [p for p in user_plugins if not kept_plugin(p)]
+off_m = [m for m in user_mcp if m not in keep_m]
+for k in keep_p:
+    if k != 'flow-kit' and not any(k == p or k == p.split('@', 1)[0] for p in user_plugins):
+        print(f'WARN: FLOW_KEEP_PLUGINS 里的 {k} 不在用户级已启用插件中', file=sys.stderr)
+for k in keep_m:
+    if k not in user_mcp:
+        print(f'WARN: FLOW_KEEP_MCP 里的 {k} 不在用户级 MCP 中', file=sys.stderr)
+
+cur = load(target)
+new = dict(cur)
+ep = dict(cur.get('enabledPlugins') or {})
+for p in user_plugins:                       # 只管用户级启用的那些;别人手写的键不动
+    if p in off_p: ep[p] = False
+    elif ep.get(p) is False: del ep[p]       # 曾被本工具关、现在要留:删键让用户级生效
+if ep: new['enabledPlugins'] = ep
+else: new.pop('enabledPlugins', None)
+dm = sorted(set([m for m in (cur.get('disabledMcpServers') or []) if m not in user_mcp] + off_m))
+if dm: new['disabledMcpServers'] = dm
+else: new.pop('disabledMcpServers', None)
+text = json.dumps(new, indent=2, ensure_ascii=False, sort_keys=True) + '\n'
+summary = f'关 {len(off_p)} 插件({" ".join(off_p) or "无"});关 {len(off_m)} MCP({" ".join(off_m) or "无"});留 {" ".join(p for p in user_plugins if p not in off_p)} / {" ".join(m for m in user_mcp if m not in off_m) or "无 MCP"}'
+
+if mode == '--dry-run':
+    sys.stdout.write(text); print(summary); sys.exit(0)
+
+def drift():
+    d = []
+    cep = cur.get('enabledPlugins') or {}
+    for p in off_p:
+        if cep.get(p) is not False: d.append(f'插件未关: {p}')
+    for p in user_plugins:
+        if p not in off_p and cep.get(p) is False: d.append(f'插件本该留却被关: {p}')
+    cdm = set(cur.get('disabledMcpServers') or [])
+    for m in off_m:
+        if m not in cdm: d.append(f'MCP 未关: {m}')
+    for m in user_mcp:
+        if m not in off_m and m in cdm: d.append(f'MCP 本该留却被关: {m}')
+    return d
+
+if mode == '--check':
+    d = drift()
+    if not os.path.exists(target) and (off_p or off_m): d.insert(0, f'{target} 不存在')
+    for x in d: print('RED: ' + x)
+    if d: print(f'RED: settings 未收窄({len(d)} 处漂移;跑 flow-settings --write)'); sys.exit(1)
+    print('OK: settings 已收窄;' + summary); sys.exit(0)
+
+# --write
+if os.path.exists(target) and open(target).read() == text:
+    print('OK: 无变化;' + summary); sys.exit(0)
+os.makedirs(os.path.dirname(target), exist_ok=True)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target), prefix='.settings.local.')
+with os.fdopen(fd, 'w') as f: f.write(text)
+os.replace(tmp, target)
+print(f'OK: 已写 {target};' + summary)
+PY

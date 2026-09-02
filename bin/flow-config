@@ -1,7 +1,8 @@
 #!/bin/sh
 # flow-config —— 打印解析后的全部 FLOW_* 变量(NAME=value 一行一个)与 flow_gates / flow_sentinels 两张表。
 # 用法: flow-config            → 只打印
-#       flow-config --check    → 另核:账本在、根文档在、每个规格目录在、git shim 已装(仓 .git/hooks/post-commit 可执行且含 flow-post-commit);
+#       flow-config --check    → 另核:账本在、根文档在、每个规格目录在、git shim 已装(仓 .git/hooks/post-commit 可执行且含 flow-post-commit)、
+#                                FLOW_KEEP_* 都写了则 settings.local.json 已收窄(flow-settings --check 同源);
 #                                缺项逐行 RED,RC=1;全在 OK,RC=0。flow-init 收尾用它,人怀疑「脚本读的是哪份文件」时也用它。
 # 病根:路径全从 config 派生之后,脚本实际落到哪个文件不再肉眼可见;默认值悄悄顶上去是静默错的来源,所以把解析结果整张摊开。
 set -u
@@ -36,6 +37,12 @@ if [ -f "$hook" ]; then
 else
   miss "git shim 未装: $hook"
 fi
+if [ -n "${FLOW_KEEP_PLUGINS+x}" ] && [ -n "${FLOW_KEEP_MCP+x}" ]; then
+  out=$(flow-settings --check 2>&1); src=$?
+  [ "$src" = 0 ] || miss "会话未瘦身(flow-settings --check RC=$src):$(printf '%s' "$out" | grep '^RED' | head -3 | tr '\n' ';')"
+else
+  echo "WARN: FLOW_KEEP_PLUGINS / FLOW_KEEP_MCP 未写,跳过会话瘦身核对(填上后 flow-settings --write)"
+fi
 [ "$red" = 0 ] || { echo "RED: config 自检未过"; exit 1; }
-echo "OK: config 自检全过(账本 / 根文档 / 规格目录 / git shim)"
+echo "OK: config 自检全过(账本 / 根文档 / 规格目录 / git shim / 会话瘦身)"
 exit 0

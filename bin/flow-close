@@ -27,7 +27,8 @@ echo "== 2. 非空转(抽掉一条<ins>确在实改集里</ins>的申报行,应 
 # 抽的行必须真在实改集里:先取 tracked 轴(git status),空则取 ignored 轴(与基线比 sha)。抽不在实改集里的行永远不红 —— 那不是非空转,是空转。
 declp=$(sed -e 's/^[0-9a-f]\{40,\}  //' -e 's/^git \(..\) //' -e 's/^git //' "$DECL" | sed 's/.* -> //' | sed 's/^[[:space:]]*//' | grep -v '^#' | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' | grep . | sort -u)
 victim=""
-for p in $(git status --porcelain -uall | sed 's/^...//' | sed 's/.* -> //' | flow_filter_kit_owned); do printf '%s\n' "$declp" | grep -qxF -- "$p" && { victim="$p"; break; }; done
+changed=$(flow_changed_paths) || { echo "  ⚠ 实改集枚举失败(flow_changed_paths RC≠0)—— 非空转无对象可抽"; red=1; changed=""; }
+for p in $changed; do printf '%s\n' "$declp" | grep -qxF -- "$p" && { victim="$p"; break; }; done
 if [ -z "$victim" ]; then
   # 扫描区与 flow-manifest verify 同源:优先基线头行 areas:,旧格式基线才回退到路径首段
   areas=$(sed -n '1s/^# freeze-baseline .* areas: //p' "$BASE")

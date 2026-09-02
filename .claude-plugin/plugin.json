@@ -1,6 +1,6 @@
 {
   "name": "flow-kit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "四轮制(写/双轴审/改/复审)多 agent 工作流的编排协议、脚本与 hook;跨项目复用,工作区只留 flow.config.sh 与 flow-local.md",
   "author": { "name": "okonma" }
 }

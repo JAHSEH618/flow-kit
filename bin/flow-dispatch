@@ -7,12 +7,16 @@
 #   · 必读总条数 > FLOW_DEBT_WARN ⟹ 只 WARN(触面宽前缀的欠账天然到处命中,那是账本刻意的;总数按门设会让 --cap-ok 变成仪式)。
 #
 # 用法:
-#   flow-dispatch <任务号> --tree <快照|活树-独占|禁入> --db <独占|只读|禁用> --seq <N> \
+#   flow-dispatch <任务号> --tree <快照|活树-独占|禁入> --db <独占|只读|禁用> --seq <N> [--round <①写|②A|②B|③改|④A|④B>] \
 #       [--core <core写权限面>] [--plan <plan文件绝对路径>] [--cap-ok <理由>] <触面路径(仓库相对)...>
+#   --round 只决定「轮次 / 模型」行:FLOW_ROLE_MODELS 里给了该轮就印 model=<x>(Agent 调用照抄),否则继承编排方。
+#   带 --plan 时另数任务节的 REQ:open > FLOW_REQ_CAP ⟹ RC=3(①写是最长的会话,携带成本随轮数平方长;拆任务,或 --cap-ok 带过,理由进派单)。
 #   flow-dispatch <任务号> --tree … --db … --seq … --lane-merge <路径清单文件(绝对)> [触面路径...]
 #       合并批模式:触面从清单文件读(一行一路径;# 注释与空行略过);命令行再给的触面必须都在清单里,否则 FATAL;拒绝 --plan。
-# 输出:整块 markdown 到 stdout,照贴进派单;「(待填)」标记的行由编排方补,其余勿手改 —— 要改就重跑。
-# 读的配置:FLOW_REPO_DIR FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_FIX_BY_WRITER FLOW_DOC_BUDGET_FILE FLOW_SPEC_DIRS FLOW_WS/FLOW_FACT_LINT_BASELINE;
+# 输出:整块 markdown 到 stdout,重定向成 <流程目录>/<轮号>-dispatch.md 就是派单;「(待填)」标记的行由编排方 Edit 补,其余勿手改 —— 要改就重跑。
+#   Agent prompt 只给这个文件的路径(编排方零 heredoc:它的输出按输出价计,一批里占它携带上下文的 33%)。
+#   带 --plan 时同源摘取任务节(`## <任务号> ` 到下一个 `## `,与 flow-receipts 同一套定位)印进块里:agent 只读节选,不整读 plan(一份 135 KB 的 plan 被读了 56 次)。
+# 读的配置:FLOW_REPO_DIR FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_REQ_CAP FLOW_ROLE_MODELS FLOW_FIX_BY_WRITER FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_BYTES FLOW_SPEC_DIRS FLOW_WS/FLOW_FACT_LINT_BASELINE;
 #   子命令 flow-route-debts / flow-receipts 按名调用(PATH),输出原样嵌入。
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
@@ -21,10 +25,11 @@ flow_load_config
 TASK="${1:-}"; [ -n "$TASK" ] || flow_die "缺任务号"
 shift
 TREE=""; DB=""; SEQ=""; CORE="(待填:两档之一 —— 「只许改 shell,核心库一个字节不许动」或「核心库限 <文件/性质>」,protocol §1)"
-PLAN=""; CAPOK=""; LANE=""
+PLAN=""; CAPOK=""; LANE=""; ROUND=""
 while [ $# -gt 0 ]; do
-  case "$1" in --tree|--db|--seq|--core|--plan|--cap-ok|--lane-merge) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
+  case "$1" in --tree|--db|--seq|--core|--plan|--cap-ok|--lane-merge|--round) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
   case "$1" in
+    --round) ROUND="$2"; shift 2 ;;
     --tree) TREE="$2"; shift 2 ;;
     --db)   DB="$2";   shift 2 ;;
     --seq)  SEQ="$2";  shift 2 ;;
@@ -76,10 +81,31 @@ NDEBT=$(grep -c '^- ' "$TMP/debts" || true)
 NOWN=$(grep -c "owner $TASK " "$TMP/debts" || true)
 if [ "$DRC" -ne 0 ]; then echo "FATAL: flow-route-debts RC=$DRC,输出:" >&2; cat "$TMP/debts" >&2; exit 2; fi
 
-RRC=""
+RRC=""; SECS=""; SECE=""
 if [ -n "$PLAN" ]; then
   flow-receipts "$PLAN" "$TASK" > "$TMP/rcpt" 2>&1; RRC=$?
+  # 任务节同源摘取:`## <任务号> ` 起到下一个 `## ` 前(与 flow-receipts 同一套定位);找不到只 WARN,接收位那段已带 RC
+  SECS=$(grep -n "^## $TASK " "$PLAN" | head -1 | cut -d: -f1)
+  [ -n "$SECS" ] || SECS=$(grep -n "^## $TASK" "$PLAN" | head -1 | cut -d: -f1)
+  if [ -n "$SECS" ]; then
+    SECE=$(awk -v s="$SECS" 'NR>s && /^## /{print NR-1; exit}' "$PLAN")
+    [ -n "$SECE" ] || SECE=$(wc -l < "$PLAN" | tr -d ' ')
+    sed -n "${SECS},${SECE}p" "$PLAN" > "$TMP/sec"
+  fi
 fi
+# 任务节 REQ 计数(与 flow-trace 同一格式:同一行既有 REQ-ID 又有 [状态])
+NOPEN=0; NDONE=0; NDEF=0
+if [ -s "$TMP/sec" ]; then
+  NOPEN=$(LC_ALL=C grep -cE 'REQ-[A-Z0-9]+-[0-9]+.*\[open' "$TMP/sec")
+  NDONE=$(LC_ALL=C grep -cE 'REQ-[A-Z0-9]+-[0-9]+.*\[done' "$TMP/sec")
+  NDEF=$(LC_ALL=C grep -cE 'REQ-[A-Z0-9]+-[0-9]+.*\[deferred' "$TMP/sec")
+fi
+# 轮次 / 模型行:--round 给了才查 FLOW_ROLE_MODELS(空格分隔的 轮名=模型)
+if [ -n "$ROUND" ]; then
+  MODEL=""; for kv in $FLOW_ROLE_MODELS; do case "$kv" in "$ROUND="*) MODEL="${kv#*=}" ;; esac; done
+  if [ -n "$MODEL" ]; then ROUNDLINE="- **轮次 / 模型**:$ROUND · model=$MODEL(config FLOW_ROLE_MODELS;Agent 调用带 model=$MODEL)"
+  else ROUNDLINE="- **轮次 / 模型**:$ROUND · 继承编排方(FLOW_ROLE_MODELS 未给 $ROUND)"; fi
+else ROUNDLINE="- **轮次 / 模型**:(未给 --round;Agent 调用 model 继承编排方)"; fi
 
 # 命令行的逐字重建(给复审按 review-template 逐字重跑;参数与上面那次执行同一数组,同源 by construction)
 CMD="flow-route-debts $TASK"
@@ -106,22 +132,52 @@ $HEAD
 - **库权限**:$DB(protocol §3:库是单点,dbreset 门任何时刻只许一个持有者)
 - **核心库写权限面**:$CORE
 - **裁决号段**:从 $SEQ 起
+$ROUNDLINE
 - **冻结**:开工在仓库根跑 \`flow-manifest baseline <流程目录>/.manifest-baseline-<轮名>.txt\`(基线放仓外;收工 verify 由编排方在活树跑,protocol §1)
   ⚠ **baseline 打在编排方停止编辑之后**(protocol §3:打早了会让写轮收到幻影 RED,并教会所有人对 RED 耸肩)
 - **扫描纪律**:全仓口径判据须 \`command grep\` 或显式含 $SPECS(protocol §4 范围轴);零命中先过非空转(protocol §4)
 - **假话门**:写轮收工跑 \`flow-fact-lint verify $FLOW_WS/$FLOW_FACT_LINT_BASELINE\` —— 新增 RED 零才许交付;基线存量归收尾轮
-- **移交件预算**:单件 ≤$FLOW_DOC_BUDGET_FILE 行(超限首部 \`budget-ok:<理由>\` 显式带过);命令全量输出落 <流程目录>/.evidence/,
+- **移交件预算**:单件 ≤$FLOW_DOC_BUDGET_FILE 行且 ≤$FLOW_DOC_BUDGET_BYTES 字节(超限首部 \`budget-ok:<理由>\` 显式带过);命令全量输出落 <流程目录>/.evidence/,
   件内只贴摘录+路径;引上游用指针(裁决号/文件+节号)不抄正文;收工编排方跑 \`flow-doc-budget\`(protocol §5)
+- **读取纪律**(一批里整读字节的 37% 是别的 agent 已读过的同一文件):上一轮回件先读首节「改动索引表」,按表只读文件区间;
+  整读一个文件要在回件里给一行理由;定位用 LSP(延迟加载工具,先 ToolSearch select:LSP;88 份会话零次调用就是没人加载过)/ \`grep -n\`,不用 cat 找;plan 只读本块的任务书节选,账本只读本块的必读段
+- **工具纪律**(每一步都重付整个上下文,实测每轮只带 1.12 个调用):互不依赖的调用放同一条消息并发;多步 shell 合成一个 Bash;
+  flow-* 命令与门的输出 \`> <流程目录>/.evidence/<名>.txt; rc=\$?\`,判读只贴末行读数 + RC(末行为此固定可 grep),全量不 cat 进上下文;自造扫描仍逐行判
+- **证据源封闭**:证据只来自树、上游 spec、本批流程目录;会话记录(~/.claude/projects/**/*.jsonl)与 tool-results 不是证据源,不读不引
   ⚠ **边做边落盘**:进程中途死于 API 断连时,**没落盘的一律全丢**;
   攒到最后一次性写 = 拿整轮的工作量赌连接不断。已得结论每隔一段就写进回件文件。
 - **闭环**:回件落文件即可,不必回信;转达走编排方(protocol §1);残留按 protocol §2 三级标级,不标按阻塞
 - 回件边写边落:每闭一条 finding 就追加落盘,不许攒到收工一次写
 - 三改轮:$FIX
+HDR
+
+if [ -n "$PLAN" ]; then
+  if [ -n "$SECS" ]; then
+    echo ""
+    echo "### 任务书节选(同源摘取:$PLAN L$SECS–$SECE;REQ open $NOPEN · done $NDONE · deferred $NDEF,open 上限 $FLOW_REQ_CAP;plan 其余不读,引上游用「文件 + 节号」指针)"
+    cat "$TMP/sec"
+    if [ "$NOPEN" -gt "$FLOW_REQ_CAP" ]; then
+      if [ -n "$CAPOK" ]; then
+        echo ""
+        echo "⚠ **任务节 open REQ $NOPEN 条 > 上限 $FLOW_REQ_CAP,--cap-ok 显式带过**。理由(进派单,由复审核):$CAPOK"
+      else
+        echo "" >&2
+        echo "RED: 任务节 open REQ $NOPEN 条 > 上限 $FLOW_REQ_CAP —— ①写是最长的会话,携带成本随轮数平方长;拆任务,确要整批做加 --cap-ok <理由> 重跑" >&2
+        exit 3
+      fi
+    fi
+  else
+    echo ""
+    echo "⚠ WARN: plan 里找不到节 \`## $TASK\` —— 节选缺失,agent 只能整读 plan;先把任务节落成 \`## $TASK …\` 再重跑"
+  fi
+fi
+
+cat <<DH
 
 ### 欠账必读(同源生成:下面的输出就是紧邻命令的实跑结果,RC=$DRC)
 命令:\`$CMD\`
 路由条数:**$NDEBT**(其中 owner 归 $TASK 的 **$NOWN** 条;owner 上限 $FLOW_DEBT_CAP,必读总量 >$FLOW_DEBT_WARN 仅提醒)
-HDR
+DH
 cat "$TMP/debts"
 
 if [ "$NDEBT" -gt "$FLOW_DEBT_WARN" ]; then
@@ -151,7 +207,7 @@ fi
 cat <<FT
 
 ### 编排方待填(生成器管不到的判断项)
-- 任务书正文 / 交付判据(变异实测是交付条件,①写轮)
+- 交付判据与任务书之外的裁决(任务书正文已在节选段,不再抄;变异实测是交付条件,①写轮)
 - 自报三处「最没把握」的要求(①写轮)
 - 本轮**必读清单**(移交件按件点名;目录其余 = 旁证按需读,protocol §5)
 - 若并行:H1/H2 隔离条件逐条核($SPECS 手工 cp / DB 单点 / 文件层不相交 / 号段)

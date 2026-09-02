@@ -17,6 +17,9 @@ flow_load_config
 #   ① 不用 bash 进程替换 `<(...)`:`sh` 跑时 syntax error,而 `set -u` 不含 `-e` ⟹ 报错**不中止**,末尾 verify OK 照打。
 #      已改用临时文件。(用 `[ -z "$BASH_VERSION" ]` 挡不住:macOS 的 `sh` 就是 bash 的 POSIX 模式,别再走这条路。)
 #   ② 不在 git 仓里跑时 `git status` 报 fatal 但脚本照跑,给出「git 0 + ignored 0 全绿」的**空集假绿**。已加仓库守卫。
+#   ③ kit 自有件过滤器曾用 `awk -v pats=<多行串>`:BSD awk 报 newline in string 后**吐空集**⟹ git 轴恒空恒绿
+#      (实测:申报 1 件、实改 15 件照 OK)。根因改在 lib(ENVIRON 传值);这里补 RC 同层捕获,枚举失败不许当空集。
+#      中文路径被 core.quotepath 转成八进制转义、申报行永远对不上,也一并在 lib 的 flow_changed_paths 里关掉。
 cd "$FLOW_REPO_DIR"
 git rev-parse --git-dir >/dev/null 2>&1 || flow_die "FLOW_REPO_DIR 不是 git 仓库(轴1 靠 git status 枚举实改集): $FLOW_REPO_DIR"
 
@@ -42,7 +45,7 @@ baseline)
     echo "# freeze-baseline $(date +%FT%T) @ $(git rev-parse --short HEAD 2>/dev/null || echo none) areas: $areas"
     # -uall:不带它 git 把未跟踪**目录**折成一行目录名,整目录的新文件从此不在基线里
     # (实测:未申报文件藏进未跟踪目录,verify 照绿)
-    git status --porcelain -uall | sed 's/^/git /'
+    git -c core.quotepath=false status --porcelain -uall | sed 's/^/git /'   # 关 quotepath:中文路径否则成八进制转义
     if [ "$FLOW_SPEC_UNTRACKED" = 1 ]; then sha_scan $areas | sed 's/^/sha /'; fi
   } > "$out"
   if [ "$FLOW_SPEC_UNTRACKED" = 1 ]; then
@@ -63,11 +66,10 @@ verify)
   [ -f "$base" ] || flow_die "基线不存在 $base"
   [ -f "$declared" ] || flow_die "申报清单不存在 $declared"
 
-  # 轴1 tracked:当前 git status(与基线时点的 status 无关,收工态即实改集)
-  # ⚠ ① `-uall`:不带它未跟踪目录折成一行目录名,**藏在里面的未申报文件 verify 照绿**,
-  #      而 verify 正是「实改集 ⊄ 申报」这条的唯一探测器,它自己有盲区就等于没有探测器。
-  #   ② 剥状态位改用固定 3 字符前缀 + 显式处理 rename 的 ` -> `;原 `awk '{print $NF}'` 对含空格的路径会截断。
-  tracked=$(git status --porcelain -uall | sed 's/^...//' | sed 's/.* -> //' | flow_filter_kit_owned)   # kit 自有件不算实改集(契约 8)
+  # 轴1 tracked:当前 git status(与基线时点的 status 无关,收工态即实改集)。枚举只经 flow_changed_paths
+  #   (-uall / 剥状态位 / quotepath / kit 自有件过滤(契约 8)都在 lib 里,三条命令同源;为什么见 lib 注释)。
+  #   RC 同层捕获(文件头 ③):枚举失败吐的是空集,而空集在这里就是绿 —— 不许静默。
+  tracked=$(flow_changed_paths) || flow_die "实改集枚举失败(flow_changed_paths RC≠0),拒绝给出红/绿结论"
 
   # 轴2 ignored 区:当前 shasum vs 基线 —— 新增/改动(基线里没有这行)与删除(现况里没有)分列
   # 基线与配置要同源:基线里有 sha 行而本次配置关了 shasum 轴 ⟹ 轴2 会被静默丢掉,拒绝给结论

@@ -18,7 +18,7 @@ TAB=$(printf '\t')
 
 git rev-parse -q --verify HEAD^ >/dev/null 2>&1 || exit 0   # 首个 commit 跳过
 C=$(git rev-parse --short HEAD)
-NS=$(git diff-tree --no-commit-id --name-status -r HEAD 2>/dev/null)
+NS=$(git -c core.quotepath=false diff-tree --no-commit-id --name-status -r HEAD 2>/dev/null)   # 关 quotepath:中文路径否则成八进制转义,触面/哨兵/地图三条规则全静默落空
 [ -n "$NS" ] || exit 0                                       # merge 等空 diff 静默
 TOUCHED=$(printf '%s\n' "$NS" | awk '{print $NF}')
 

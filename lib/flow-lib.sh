@@ -62,13 +62,18 @@ flow_load_config() {
   FLOW_INFRA_FAIL_RE='57P01|Connection terminated|does not exist in the current database'
   FLOW_INFRA_FAIL_GATES=""
   FLOW_DOC_BUDGET_FILE=400
+  FLOW_DOC_BUDGET_BYTES=32000
   FLOW_DOC_BUDGET_DIR=4000
   FLOW_DOC_BUDGET_RULEBOOK=250
   FLOW_DEBT_CAP=8
   FLOW_DEBT_WARN=16
   FLOW_FIX_BY_WRITER=1
   FLOW_FOLD_MAX=6
+  FLOW_REQ_CAP=8
+  FLOW_ROLE_MODELS=""
+  FLOW_TRANSCRIPTS_DIR="$HOME/.claude/projects"
   FLOW_MERGE_STRATEGY="--merge"
+  # FLOW_KEEP_PLUGINS / FLOW_KEEP_MCP 故意不给默认:留哪些插件与 MCP 是项目的事实,缺了 flow-settings 会 FATAL 并列候选
   # shellcheck disable=SC1090
   . "$cfg"
   [ -n "${FLOW_REPO:-}" ] || flow_die "flow.config.sh 缺 FLOW_REPO(仓路径,相对工作区;单仓写 .)"
@@ -88,8 +93,9 @@ flow_load_config() {
          FLOW_SPEC_DIRS FLOW_SPEC_UNTRACKED FLOW_FLOW_DIR FLOW_FLOW_DIR_PATH FLOW_MAIN_BRANCH FLOW_DEV_BRANCH \
          FLOW_MAP_DEBT FLOW_MAP_DEBT_PATH FLOW_LOCAL_DOC FLOW_LOCAL_DOC_PATH \
          FLOW_FACT_LINT_BASELINE FLOW_FACT_LINT_BASELINE_PATH FLOW_FACT_LINT_ROOTS FLOW_FACT_LINT_EXCLUDE \
-         FLOW_GATE_SUMMARY_RE FLOW_INFRA_FAIL_RE FLOW_INFRA_FAIL_GATES FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_DIR FLOW_DOC_BUDGET_RULEBOOK \
-         FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_FIX_BY_WRITER FLOW_FOLD_MAX FLOW_MERGE_STRATEGY
+         FLOW_GATE_SUMMARY_RE FLOW_INFRA_FAIL_RE FLOW_INFRA_FAIL_GATES FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_BYTES FLOW_DOC_BUDGET_DIR FLOW_DOC_BUDGET_RULEBOOK \
+         FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_FIX_BY_WRITER FLOW_FOLD_MAX FLOW_MERGE_STRATEGY FLOW_REQ_CAP FLOW_ROLE_MODELS FLOW_TRANSCRIPTS_DIR \
+         FLOW_KEEP_PLUGINS FLOW_KEEP_MCP
 }
 
 # —— kit 自己的记账件(队列 / 基线 / 流程目录 / 门缓存)落在仓内(单仓布局)时,不算任何一轮的实改集 ——
@@ -101,7 +107,20 @@ flow_kit_owned_rel() {   # 打印仓库相对路径;目录带尾斜杠
 flow_filter_kit_owned() {   # stdin 一行一路径 → 去掉 kit 自有件(精确匹配或目录前缀)
   pats=$(flow_kit_owned_rel)
   if [ -z "$pats" ]; then cat; return 0; fi
-  awk -v pats="$pats" 'BEGIN{n=split(pats,a,"\n")} { keep=1; for(i=1;i<=n;i++){ p=a[i]; if(p=="") continue; if(substr(p,length(p),1)=="/"){ if(index($0,p)==1) keep=0 } else if($0==p) keep=0 } if(keep) print }'
+  # ⚠ 模式多行(单仓布局下必然多行)只能走 ENVIRON 递给 awk:BSD awk 对 `-v 变量=<含换行串>` 报「newline in string」
+  #   RC=2 且一行不吐 ⟹ 三条命令的 git 轴恒空 ⟹ verify 恒绿(实测:申报 1 件、实改 15 件照 OK)。`-v` 还会对值做转义处理,ENVIRON 原样透传。
+  FLOW_KIT_OWNED="$pats" awk 'BEGIN{n=split(ENVIRON["FLOW_KIT_OWNED"],a,"\n")} { keep=1; for(i=1;i<=n;i++){ p=a[i]; if(p=="") continue; if(substr(p,length(p),1)=="/"){ if(index($0,p)==1) keep=0 } else if($0==p) keep=0 } if(keep) print }'
+}
+
+# —— 实改集 git 轴:manifest verify / close 非空转 / freeze 三处共用这一条枚举,别再各自手拼 ——
+#   -c core.quotepath=false:不带它 git 把非 ASCII 路径转成八进制转义并加引号(`"\344\270\255.md"`)
+#     ⟹ 申报行永远对不上(verify 假红)、`[ -f ]` 永远为假(freeze 静默漏出清单)。
+#   -uall:不带它未跟踪**目录**折成一行目录名,藏在里面的未申报文件 verify 照绿。
+#   剥状态位按固定 3 字符前缀 + 显式处理 rename 的 ` -> `;`awk '{print $NF}'` 对含空格的路径会截断。
+#   porcelain 路径恒相对仓根,故 -C 后与调用方 cwd 无关。RC = 末段过滤器的 RC(POSIX sh 无 pipefail):
+#   枚举失败吐的是空集,而空集在三个调用方那里都是绿 —— 调用方必须按 §J 同层捕获,RC≠0 不许当空集用。
+flow_changed_paths() {
+  git -C "$FLOW_REPO_DIR" -c core.quotepath=false status --porcelain -uall | sed 's/^...//' | sed 's/.* -> //' | flow_filter_kit_owned
 }
 
 # —— 门与哨兵:config 里以函数给出(sh 原生,免解析分隔符)。没定义就给空实现,调用方自判「零门」——

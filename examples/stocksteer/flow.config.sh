@@ -54,11 +54,22 @@ FLOW_FACT_LINT_BASELINE=".claude/fact-lint-baseline.tsv"            # 棘轮基�
 # 模式表:kit 自带默认(中文假话族);项目要加词就在这里覆盖同名变量(ERE,按字节匹配,禁用 CJK 字符类)
 # FLOW_FL_QCLAIM='…'  FLOW_FL_QWIDE='…'  FLOW_FL_PROV='…'  FLOW_FL_SELFNUM='…'
 
+# ── 会话瘦身(flow-settings 读)───────────────────────────────────────────────
+# 用户级启用的插件里,不在 FLOW_KEEP_PLUGINS 的一律 enabledPlugins:false;用户级 MCP 里,不在 FLOW_KEEP_MCP 的一律进 disabledMcpServers。
+# 落在工作区 .claude/settings.local.json(插件 id 与 MCP 名是这台机器的事,不进仓)。flow-kit 自己永远保留。
+# 两行都要写(留什么是项目的事实,不给默认;缺任一 flow-settings FATAL 并列出候选)。
+FLOW_KEEP_PLUGINS="vtsls claude-hud impeccable"   # 裸 name 或 name@marketplace,空格分隔;写空串 = 只留 flow-kit
+FLOW_KEEP_MCP="exa"                                               # 用户级 MCP 名;写空串 = 全关
+
 # ── 预算与阈值 ───────────────────────────────────────────────────────────────
 FLOW_DOC_BUDGET_FILE=400               # 单个流程件行数红线
+FLOW_DOC_BUDGET_BYTES=32000            # 单个流程件字节红线(token 按字节计;112 KB 的复验件靠长行躲过了行数线)
 FLOW_DOC_BUDGET_DIR=4000               # 流程目录热路径合计行数 WARN 线
 FLOW_DOC_BUDGET_RULEBOOK=250           # 规则书(flow-local.md)行数上限;棘轮:只许降
 FLOW_DEBT_CAP=8                        # owner 归本任务的欠账条数上限(超过 = 拆任务或 --cap-ok)
 FLOW_DEBT_WARN=16                      # 必读总条数只 WARN 的线
 FLOW_FIX_BY_WRITER=1                   # 1 = ③改轮 SendMessage 回①写轮本人;0 = 另起 agent
 FLOW_FOLD_MAX=6                        # 折轮条件:不阻塞条 ≤ 此数且全在③写权限面内 ⟹ 不起收尾轮
+FLOW_REQ_CAP=8                         # 任务节 open REQ 条数上限:①写是最长的会话,携带成本随轮数平方长,超了拆任务(或 --cap-ok)
+FLOW_ROLE_MODELS=""                    # 分角色模型,如 "②A=sonnet";空 = 继承编排方。换前同一产物两模型各审一次,flow-review-diff 原版独有为空才换
+FLOW_TRANSCRIPTS_DIR="$HOME/.claude/projects"   # flow-usage 读 transcripts 的根(收口时 flow-usage <流程目录> --write 自动填轮数账)

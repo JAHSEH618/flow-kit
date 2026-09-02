@@ -23,10 +23,9 @@ tf_git="$(flow_tmpdir)/.flow-freeze-git-$$"
 tf_specs="$(flow_tmpdir)/.flow-freeze-specs-$$"
 trap 'rm -f "$tf_git" "$tf_specs"' EXIT
 
-# 1) git 看得见的改动(已跟踪的改 + 未跟踪的新增)
-# ⚠ 不带 `-uall` 时 git 把未跟踪**目录**折成一行目录名,下面的 `[ -f ]` 对目录为假 ⟹ 整目录的新文件被静默丢出清单(实测漏过)。
-#   剥状态位按固定 3 字符前缀 + 显式处理 rename 的 ` -> `;`awk '{print $NF}'` 对含空格的路径会截断。
-git status --porcelain -uall | sed 's/^...//' | sed 's/.* -> //' | flow_filter_kit_owned | sort -u > "$tf_git" || true
+# 1) git 看得见的改动(已跟踪的改 + 未跟踪的新增)。枚举只经 flow_changed_paths(-uall / 剥状态位 / quotepath / kit 自有件过滤同源;为什么见 lib 注释)。
+#    不许 `|| true`:枚举失败吐的是空集,空集到下面 `[ -f ]` 那关就静默成空清单 —— 失败必须当场死。
+flow_changed_paths | sort -u > "$tf_git" || flow_die "实改集枚举失败(flow_changed_paths RC≠0),拒绝出清单"
 
 # 2) git 看不见的:规格目录整个无条件纳入(被 gitignore,但它是真值源)
 : > "$tf_specs"

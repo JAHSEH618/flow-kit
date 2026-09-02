@@ -2,15 +2,19 @@
 # flow-init —— 把 flow-kit 装进一个工作区(幂等:已有的不覆盖,逐项打印 已有/已写)。
 # 用法: flow-init [--ws <工作区根(绝对;默认 cwd)>] [--repo <仓路径,相对工作区;默认 .>]
 #                 [--ledger <账本路径,相对仓根;默认 specs/debts.md>] [--spec-dirs "<目录…>";默认 specs]
-#                 [--untracked 0|1;默认自动:规格目录被 gitignore 则 1] [--main <主干分支;默认 master>] [--dry-run]
+#                 [--untracked 0|1;默认自动:规格目录被 gitignore 则 1] [--main <主干分支;默认 master>]
+#                 [--keep-plugins "<插件…>"] [--keep-mcp "<MCP 名…>"] [--dry-run]
 # 做的事:.claude/flow.config.sh(模板填空)· .claude/flow-local.md · <流程目录>/ 与规则书棘轮起点 · 账本骨架(缺才建)
-#         · 仓的 .git/hooks/post-commit shim(已有别的 hook 就追加一行,不覆盖)· 末尾跑 flow-config --check。
+#         · 仓的 .git/hooks/post-commit shim(已有别的 hook 就追加一行,不覆盖)
+#         · --keep-plugins 与 --keep-mcp 都给了才写 FLOW_KEEP_* 并跑 flow-settings --write(会话瘦身);没给就留提示,不猜
+#         · 末尾跑 flow-config --check。
 # 门命令(flow_gates)不代填 —— 门是项目的事实,留给人填;没填之前 flow-gates 会 FATAL,这是故意的。
 set -u
 KIT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$KIT/lib/flow-lib.sh"
 
 WS="$(pwd)"; REPO="."; LEDGER="specs/debts.md"; SPEC_DIRS="specs"; UNTRACKED=""; MAIN="master"; DRY=0
+KEEP_PLUGINS=""; KEEP_MCP=""; KEEP_PLUGINS_SET=0; KEEP_MCP_SET=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --ws) WS="${2:?}"; shift ;;
@@ -19,6 +23,8 @@ while [ $# -gt 0 ]; do
     --spec-dirs) SPEC_DIRS="${2:?}"; shift ;;
     --untracked) UNTRACKED="${2:?}"; shift ;;
     --main) MAIN="${2:?}"; shift ;;
+    --keep-plugins) KEEP_PLUGINS="${2?}"; KEEP_PLUGINS_SET=1; shift ;;
+    --keep-mcp) KEEP_MCP="${2?}"; KEEP_MCP_SET=1; shift ;;
     --dry-run) DRY=1 ;;
     *) echo "用法见脚本头注" >&2; exit 2 ;;
   esac; shift
@@ -50,9 +56,15 @@ write_file() {  # $1 目标 $2 内容来源文件(已填空)
 TMP=$(mktemp "$(flow_tmpdir)/flow-init.XXXXXX") || exit 2
 trap 'rm -f "$TMP"' EXIT
 
-# 1. config
+# 1. config(FLOW_KEEP_* 只在两个 --keep-* 都给了才写成真实行;否则留注释占位,flow-settings 会 FATAL 并列候选)
+if [ "$KEEP_PLUGINS_SET" = 1 ] && [ "$KEEP_MCP_SET" = 1 ]; then
+  KP_LINE="FLOW_KEEP_PLUGINS=\"$KEEP_PLUGINS\""; KM_LINE="FLOW_KEEP_MCP=\"$KEEP_MCP\""
+else
+  KP_LINE='# FLOW_KEEP_PLUGINS=""                # 例:typescript-lsp claude-hud'; KM_LINE='# FLOW_KEEP_MCP=""                    # 例:exa'
+fi
 sed -e "s|@REPO@|$REPO|g" -e "s|@LEDGER@|$LEDGER|g" -e "s|@SPEC_DIRS@|$SPEC_DIRS|g" \
-    -e "s|@UNTRACKED@|$UNTRACKED|g" -e "s|@MAIN@|$MAIN|g" "$KIT/lib/templates/flow.config.sh" > "$TMP"
+    -e "s|@UNTRACKED@|$UNTRACKED|g" -e "s|@MAIN@|$MAIN|g" \
+    -e "s|@KEEP_PLUGINS_LINE@|$KP_LINE|" -e "s|@KEEP_MCP_LINE@|$KM_LINE|" "$KIT/lib/templates/flow.config.sh" > "$TMP"
 write_file "$WS/.claude/flow.config.sh" "$TMP"
 
 # 2. flow-local
@@ -104,6 +116,15 @@ if [ "$REPO" = "." ] && [ "$DRY" = 0 ] && [ -d "$REPO_DIR/.git" ]; then
   for pat in "$FLOWDIR/" '.claude/flow-gates/' '.claude/map-debt.md' '.claude/fact-lint-baseline.tsv'; do
     grep -qxF "$pat" "$EX" || { printf '%s\n' "$pat" >> "$EX"; say "已加  $EX ← $pat"; }
   done
+fi
+
+# 5c. 会话瘦身:两个 --keep-* 都给了才动 settings.local.json;config 已有(不覆盖)时以 config 里的 FLOW_KEEP_* 为准
+if [ "$KEEP_PLUGINS_SET" = 1 ] && [ "$KEEP_MCP_SET" = 1 ]; then
+  if [ "$DRY" = 1 ]; then say "将跑  flow-settings --write(关掉 FLOW_KEEP_* 之外的插件与 MCP)"; else
+    ( cd "$WS" && "$KIT/bin/flow-settings" --write ); rc=$?; [ "$rc" = 0 ] || flow_die "flow-settings --write RC=$rc"
+  fi
+else
+  say "未瘦身:没同时给 --keep-plugins 与 --keep-mcp;之后在 config 填 FLOW_KEEP_PLUGINS / FLOW_KEEP_MCP 再跑 flow-settings --write"
 fi
 
 # 6. 核对
