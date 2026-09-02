@@ -1,0 +1,95 @@
+#!/bin/sh
+# flow-post-commit —— git post-commit hook 逻辑(map-debt 检测器):确定性、零 LLM、毫秒级;只记账不改文件。
+# 装法:仓的 .git/hooks/post-commit 只留一行 shim `exec flow-post-commit`(flow-init 装);git 跑它时 cwd = 仓根,本脚本从那向上找 config。
+# 病根:结构变了地图不改、哨兵文件动了文档不动、改到开放欠账的触面账本没核 —— 三种漂移都在 commit 那一刻最便宜地能被检出,事后靠人记就漏。
+# 规则(宁漏勿噪):A) 目录级结构变化(新增/消失/改名)而地界的地图(与根文档同名的子目录文件)没同 commit 更新
+#               B) 哨兵文件动了(config 函数 flow_sentinels,每行 路径模式<TAB>该更新的文档段;模式按 sh case 语法)而根文档没同 commit 更新
+#               C) 触到开放欠账的触面(账本 FLOW_LEDGER_PATH 读工作树,不看 git;机器头 touches 按前缀匹配)
+# 队列 = FLOW_MAP_DEBT_PATH;行格式固定 `- [ ] 日期 | commit | 触发 | 该更新:目标`(flow-clear-map-debt 按它解析,改格式两边一起改)。
+# 找不到 config、或 cwd 不是 config 指的那个仓 → 静默 exit 0:hook 永不挡 commit。
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_find_ws >/dev/null 2>&1 || exit 0
+flow_load_config
+[ "$(pwd -P)" = "$(cd "$FLOW_REPO_DIR" && pwd -P)" ] || exit 0
+QUEUE="$FLOW_MAP_DEBT_PATH"
+MAP=$(basename "$FLOW_ROOT_DOC")
+TAB=$(printf '\t')
+
+git rev-parse -q --verify HEAD^ >/dev/null 2>&1 || exit 0   # 首个 commit 跳过
+C=$(git rev-parse --short HEAD)
+NS=$(git diff-tree --no-commit-id --name-status -r HEAD 2>/dev/null)
+[ -n "$NS" ] || exit 0                                       # merge 等空 diff 静默
+TOUCHED=$(printf '%s\n' "$NS" | awk '{print $NF}')
+
+found=0
+note() {
+  mkdir -p "$(dirname "$QUEUE")"
+  [ -f "$QUEUE" ] || printf '# 地图欠账队列(map-debt)\n\n' > "$QUEUE"
+  printf -- '- [ ] %s | %s | %s | 该更新:%s\n' "$(date +%F)" "$C" "$1" "$2" >> "$QUEUE"
+  found=1
+}
+in_commit() { printf '%s\n' "$TOUCHED" | grep -qx "$1"; }
+
+# ---- A) 目录级结构变化(取一二级目录粒度;新文件落在已有目录里不算) ----
+ADDED=$(printf '%s\n' "$NS" | awk '$1=="A"{print $2} $1~/^R/{print $3}' | cut -d/ -f1-2 | sort -u)
+GONE=$(printf  '%s\n' "$NS" | awk '$1=="D"{print $2} $1~/^R/{print $2}' | cut -d/ -f1-2 | sort -u)
+
+check_dir() {  # $1=目录 $2=描述
+  d="$1"
+  case "$d" in */*) ;; *) return ;; esac        # 根下散文件不算结构变化
+  # 地图候选:该目录自己的 / 父目录的 / 根的 —— 任一在本 commit 里即视为已更新
+  for m in "$d/$MAP" "$(dirname "$d")/$MAP" "$FLOW_ROOT_DOC"; do
+    in_commit "$m" && return
+  done
+  # 命名一个存在的地图作目标(fallback 根)
+  target="$FLOW_ROOT_DOC"
+  for m in "$d/$MAP" "$(dirname "$d")/$MAP"; do
+    if git cat-file -e "HEAD:$m" 2>/dev/null; then target="$m"; break; fi
+  done
+  note "$2 $d" "$target 地图段"
+}
+
+for d in $ADDED; do
+  git ls-tree -d HEAD^ -- "$d" 2>/dev/null | grep -q . || check_dir "$d" "新目录"
+done
+for d in $GONE; do
+  git ls-tree -d HEAD -- "$d" 2>/dev/null | grep -q . || check_dir "$d" "目录消失"
+done
+
+# ---- B) 哨兵文件 → 配套文档(表来自 config 函数 flow_sentinels) ----
+SENT=$(flow_sentinels)
+for f in $TOUCHED; do
+  doc=""
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    case "$s" in *"$TAB"*) ;; *) continue ;; esac
+    pat=${s%%"$TAB"*}; d=${s#*"$TAB"}
+    # shellcheck disable=SC2254
+    case "$f" in $pat) doc="$d"; break ;; esac
+  done <<SEOF
+$SENT
+SEOF
+  [ -n "$doc" ] || continue
+  in_commit "$FLOW_ROOT_DOC" && continue
+  note "哨兵 $f" "$doc"
+done
+
+# ---- C) 触到开放欠账的触面?(账本可能是 gitignore 的本地文件,读工作树) ----
+if [ -f "$FLOW_LEDGER_PATH" ]; then
+  while IFS= read -r L; do
+    [ -n "$L" ] || continue
+    mark=$(flow_head_field "$L" mark)
+    touches=$(flow_head_field "$L" touches)
+    hit=0
+    for t in $(printf '%s' "$touches" | tr ',' ' '); do
+      printf '%s\n' "$TOUCHED" | grep -q "^$t" && { hit=1; break; }
+    done
+    [ "$hit" = 1 ] && note "触欠账$mark 的触面" "$FLOW_LEDGER 该条(核对要不要更新/该不该还)"
+  done <<DEOF
+$(flow_open_heads)
+DEOF
+fi
+
+[ "$found" = 1 ] && echo "[map-debt] 本次 commit 触发地图/欠账记账 → $QUEUE"
+exit 0

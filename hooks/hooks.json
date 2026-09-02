@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/flow-freshness\"",
+            "timeout": 5,
+            "statusMessage": "flow-kit 新鲜度检查…"
+          }
+        ]
+      }
+    ]
+  }
+}

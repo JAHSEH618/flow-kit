@@ -1,0 +1,44 @@
+#!/bin/sh
+# flow-freshness —— SessionStart 新鲜度检查(hook 体):全绿静默,有事只打一行 `[flow-freshness] …;…`;永远 RC=0。
+# 病根:地图欠账没清、索引漂了、shim 掉了、规则书变长 —— 四种「上次没收干净」都在开工那一刻提醒最便宜;但提醒必须自限射程:
+#   从 cwd 向上找不到 .claude/flow.config.sh(不在 flow 工作区)就一个字不出,不走 flow_load_config 的 FATAL 路。
+# 四项:(1) FLOW_MAP_DEBT_PATH 里未勾行(`- [ ]`)数 >0
+#       (2) git shim 未装:仓 .git/hooks/post-commit 不存在或不含 flow-post-commit
+#       (3) 索引漂移:FLOW_ROOT_DOC_PATH 里 `<!-- debts-index hash:XXXXXXXX` ≠ 账本开放集 hash(与 flow-render-index 同一条流水线)
+#       (4) 规则书变长:FLOW_FLOW_DIR_PATH/.rulebook-lines 在,而 FLOW_LOCAL_DOC_PATH 现行数 > 它(棘轮只许降)
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_find_ws >/dev/null 2>&1 || exit 0
+
+check() {
+  flow_load_config
+  items=""
+  add() { items="${items:+$items;}$1"; }
+
+  if [ -f "$FLOW_MAP_DEBT_PATH" ]; then
+    n=$(grep -c '^- \[ \]' "$FLOW_MAP_DEBT_PATH")
+    [ "$n" -gt 0 ] && add "map-debt 未清 $n 条($FLOW_MAP_DEBT)"
+  fi
+
+  hook="$FLOW_REPO_DIR/.git/hooks/post-commit"
+  if [ -f "$hook" ] && grep -q flow-post-commit "$hook"; then :; else
+    add "git shim 未装($FLOW_REPO/.git/hooks/post-commit → flow-post-commit)"
+  fi
+
+  if [ -f "$FLOW_LEDGER_PATH" ] && [ -f "$FLOW_ROOT_DOC_PATH" ]; then
+    OPEN=$(flow_open_heads)
+    HASH=$(printf '%s\n' "$OPEN" | flow_sha256 | cut -c1-8)
+    doc=$(sed -n 's/^<!-- debts-index hash:\([0-9a-f]*\).*/\1/p' "$FLOW_ROOT_DOC_PATH" | sed -n 1p)
+    [ "$doc" = "$HASH" ] || add "欠账索引漂移(文档 ${doc:-无} ≠ 账本开放集 $HASH;重跑 flow-render-index --write)"
+  fi
+
+  rl="$FLOW_FLOW_DIR_PATH/.rulebook-lines"
+  if [ -f "$rl" ] && [ -f "$FLOW_LOCAL_DOC_PATH" ]; then
+    was=$(tr -dc '0-9' < "$rl"); now=$(wc -l < "$FLOW_LOCAL_DOC_PATH" | tr -d ' ')
+    if [ -n "$was" ] && [ "$now" -gt "$was" ]; then add "规则书变长($FLOW_LOCAL_DOC $now 行 > 棘轮 $was)"; fi
+  fi
+
+  [ -n "$items" ] && echo "[flow-freshness] $items"
+}
+( check )   # 子壳:config 坏了 flow_die 也只退子壳,hook 本身仍 RC=0
+exit 0

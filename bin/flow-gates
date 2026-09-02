@@ -1,0 +1,148 @@
+#!/bin/sh
+# flow-gates —— 全门一键 + 树哈希缓存。
+# 病根:一个批次里全门整跑近十次,多数跑在字节相同的树上,每次数分钟;且各轮各写一套跑法,读数格式不同源。
+#   本脚本把「跑法 + 读数 + 证据落盘」收成一份,并按树键缓存 PASS。
+# 用法: flow-gates [--reset] [--force] [--out <证据目录(绝对)>]
+#   --reset  连同 config 里名为 dbreset 的门一起跑(干净库,复审/收口口径)。⚠ 缓存只认 --reset 的 PASS:不重置的库状态不可复现,不缓存。
+#   --force  忽略缓存,整跑。
+#   --out    证据目录(默认 $FLOW_WS/.claude/flow-gates/<key>/);每门一个文件 + rc.txt 摘要。
+# 门表 = config 函数 flow_gates(有序;每行 name<TAB>command);零门 = FATAL。
+# 树键 = HEAD + `git diff HEAD` + 未跟踪件(遵守 .gitignore)内容 的 sha256 前 16 位;FLOW_SPEC_DIRS 不影响门,显式不入键;
+#   缓存家自己也不入键(单仓布局下它在仓内,否则自己的证据喂进自己的键,永不命中)。
+# 命中缓存时:其余门取缓存读数,FLOW_GATE_REBUILD 里列的门仍跑(默认 build;空 = 全取缓存。护 dist:变异复原不重建的残留会漏)。
+# 读数行 = FLOW_GATE_SUMMARY_RE 在每门输出里的命中行,抄进 rc.txt(不截断);
+# 传输层守卫 = FLOW_INFRA_FAIL_RE 在本次跑过的全部门输出里命中 >0 ⟹ FAIL 弃读数(连接掉了之后的「passed」不可信)。
+# 判 PASS:全门 RC 全 0 且守卫命中 0。末行固定 `FLOW-GATES PASS key=… out=…` / `FLOW-GATES FAIL …`;RC 同步(PASS 0 / FAIL 1)。
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_load_config
+HOME_DIR="$FLOW_WS/.claude/flow-gates"
+CACHE="$HOME_DIR/cache.tsv"
+REBUILD="${FLOW_GATE_REBUILD-build}"
+TAB=$(printf '\t')
+
+RESET=0; FORCE=0; OUT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --reset) RESET=1 ;;
+    --force) FORCE=1 ;;
+    --out) OUT="${2:?--out 需要目录}"; shift ;;
+    *) echo "用法: flow-gates [--reset] [--force] [--out <绝对目录>]" >&2; exit 2 ;;
+  esac; shift
+done
+case "$OUT" in ""|/*) ;; *) flow_die "--out 须绝对路径(文件参数纪律): $OUT" ;; esac
+
+# —— 门表:读一遍 config 函数并校验;门名只许 [A-Za-z0-9_](要进文件名)——
+GATES=$(flow_gates)
+[ -n "$GATES" ] || flow_die "config 未定义 flow_gates(每行 name<TAB>command)"
+NAMES=""
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  case "$line" in *"$TAB"*) ;; *) flow_die "flow_gates 行缺 TAB 分隔: $line" ;; esac
+  n=${line%%"$TAB"*}; c=${line#*"$TAB"}
+  printf '%s' "$n" | LC_ALL=C grep -qE '^[A-Za-z0-9_]+$' || flow_die "门名只许 [A-Za-z0-9_]: '$n'"
+  [ -n "$c" ] || flow_die "门 $n 没有命令"
+  NAMES="$NAMES $n"
+done <<GEOF
+$GATES
+GEOF
+RERUN=""
+for r in $REBUILD; do
+  case " $NAMES " in
+    *" $r "*) RERUN="$RERUN $r" ;;
+    *) flow_warn "FLOW_GATE_REBUILD 里的门 $r 不在 flow_gates,缓存命中时不重跑它" ;;
+  esac
+done
+gate_cmd() { printf '%s\n' "$GATES" | awk -F'\t' -v n="$1" '$1==n {print substr($0, length($1)+2); exit}'; }
+
+cd "$FLOW_REPO_DIR" || exit 2
+mkdir -p "$HOME_DIR"
+git rev-parse -q --verify HEAD >/dev/null 2>&1 || flow_die "仓无 HEAD(先有一个 commit): $FLOW_REPO_DIR"
+
+# —— 树键。未跟踪件走 -z 枚举:NUL 数 ≠ 换行数 ⟹ 有路径含换行,不支持(POSIX read 拆不开)——
+LST="$(flow_tmpdir)/flow-gates.untracked.$$"
+trap 'rm -f "$LST"' EXIT
+git ls-files --others --exclude-standard -z > "$LST" || flow_die "git ls-files 失败"
+nnul=$(tr -dc '\000' < "$LST" | wc -c | tr -d ' ')
+nnl=$(tr '\000' '\n' < "$LST" | wc -l | tr -d ' ')
+[ "$nnul" = "$nnl" ] || flow_die "未跟踪件里有路径含换行,树键算不了"
+# 不入键的目录:规格目录(不影响门)+ 本脚本自己的缓存家(单仓布局下它在仓内;自己的证据喂进自己的键 = 永不命中)
+NOKEY="$FLOW_SPEC_DIRS"
+case "$HOME_DIR" in "$FLOW_REPO_DIR"/*) NOKEY="$NOKEY ${HOME_DIR#"$FLOW_REPO_DIR"/}" ;; esac
+EXCL=""
+for d in $NOKEY; do EXCL="$EXCL :(exclude)$d"; done
+in_spec() {   # 用法: in_spec <路径>;RC 0 = 落在某个不入键目录下
+  for d in $NOKEY; do
+    case "$1" in "$d"/*|"$d") return 0 ;; esac
+  done
+  return 1
+}
+tree_blob() {   # HEAD + 工作树差异 + 未跟踪件路径与内容(NOKEY 目录除外)
+  git rev-parse HEAD
+  # shellcheck disable=SC2086
+  git diff HEAD -- . $EXCL
+  tr '\000' '\n' < "$LST" | while IFS= read -r f; do
+    in_spec "$f" && continue
+    printf '%s\n' "$f"; cat "$f"
+  done
+}
+key=$(tree_blob 2>/dev/null | flow_sha256 | cut -c1-16)
+recipe=$([ "$RESET" = 1 ] && echo reset || echo noreset)
+[ -n "$OUT" ] || OUT="$HOME_DIR/$key"
+mkdir -p "$OUT"
+echo "flow-gates: key=$key recipe=$recipe HEAD=$(git rev-parse --short HEAD) porcelain=$(git status --porcelain | wc -l | tr -d ' ') out=$OUT"
+
+# —— 缓存命中 ——
+hit=""
+if [ "$FORCE" = 0 ] && [ "$RESET" = 1 ] && [ -f "$CACHE" ]; then
+  hit=$(awk -F'\t' -v k="$key" '$1==k && $2=="reset" && $5=="PASS" {line=$0} END{print line}' "$CACHE")
+fi
+if [ -n "$hit" ]; then
+  t=$(printf '%s' "$hit" | cut -f3); o=$(printf '%s' "$hit" | cut -f4)
+  if [ -z "$RERUN" ]; then
+    echo "CACHED PASS(同树键 reset 口径 @$t,证据 $o)—— FLOW_GATE_REBUILD 为空,全取缓存"
+    echo "FLOW-GATES PASS key=$key out=$o (cached)"; exit 0
+  fi
+  echo "CACHED PASS(同树键 reset 口径 @$t,证据 $o)—— 本次只重跑$RERUN"
+  bad=0
+  for r in $RERUN; do
+    sh -c "$(gate_cmd "$r")" > "$OUT/$r.txt" 2>&1; rc=$?
+    echo "$r RC=$rc"
+    [ "$rc" = 0 ] || bad=1
+  done
+  [ "$bad" = 0 ] && { echo "FLOW-GATES PASS key=$key out=$o (cached; rerun$RERUN RC=0)"; exit 0; }
+  echo "FLOW-GATES FAIL key=$key (cached readings, but rerun$RERUN RC!=0)"; exit 1
+fi
+
+# —— 整跑:每门 RC 与命令同层捕获;读数行抄进 rc.txt ——
+: > "$OUT/rc.txt"
+verdict=PASS; RAN=""
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  n=${line%%"$TAB"*}; c=${line#*"$TAB"}
+  if [ "$n" = dbreset ] && [ "$RESET" = 0 ]; then
+    echo "dbreset skipped" >> "$OUT/rc.txt"; echo "dbreset skipped"; continue
+  fi
+  sh -c "$c" > "$OUT/$n.txt" 2>&1; rc=$?
+  echo "$n RC=$rc" >> "$OUT/rc.txt"; echo "$n RC=$rc"
+  [ "$rc" = 0 ] || verdict=FAIL
+  RAN="$RAN $n"
+  if [ -n "$FLOW_GATE_SUMMARY_RE" ]; then
+    LC_ALL=C grep -E "$FLOW_GATE_SUMMARY_RE" "$OUT/$n.txt" | tee -a "$OUT/rc.txt"
+  fi
+done <<GEOF
+$GATES
+GEOF
+
+guard=0
+for n in $RAN; do
+  h=$(LC_ALL=C grep -cE "$FLOW_INFRA_FAIL_RE" "$OUT/$n.txt")
+  [ -n "$h" ] || flow_die "FLOW_INFRA_FAIL_RE 编译不过: $FLOW_INFRA_FAIL_RE"
+  guard=$((guard + h))
+done
+echo "infra-guard hits=$guard" | tee -a "$OUT/rc.txt"
+[ "$guard" = 0 ] || verdict=FAIL
+
+if [ "$RESET" = 1 ]; then printf '%s\t%s\t%s\t%s\t%s\n' "$key" "$recipe" "$(date +%FT%T)" "$OUT" "$verdict" >> "$CACHE"; fi
+echo "FLOW-GATES $verdict key=$key out=$OUT"
+[ "$verdict" = PASS ] && exit 0 || exit 1

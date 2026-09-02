@@ -1,0 +1,6 @@
+#!/bin/sh
+# flow-kit shim(flow-init 生成,幂等):逻辑在 plugin 的 bin/flow-post-commit;plugin 升级即生效。
+if command -v flow-post-commit >/dev/null 2>&1; then exec flow-post-commit "$@"; fi
+[ -x "@ABS@" ] && exec "@ABS@" "$@"
+echo "[flow-kit] flow-post-commit 不在 PATH 且 @ABS@ 失效 —— 重跑 flow-init(本次提交不受影响)" >&2
+exit 0

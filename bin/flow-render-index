@@ -1,0 +1,65 @@
+#!/bin/sh
+# flow-render-index —— 欠账索引渲染(漏路由闭合·第一层)。lockfile 心智模型:账本是源,索引是构建产物,勿手改。
+# 用法: flow-render-index                      → 索引块打到 stdout
+#       flow-render-index --write [文件]       → 原地替换该文件里两 marker 之间的块;无块则追加末尾;文件默认 = 仓根 FLOW_ROOT_DOC
+#       --touches                              → 索引行带触面列(默认不带:触面只给 flow-route-debts 用,人不看,常驻上下文省一半)
+# 还账流程:账本机器头 status 改 closed → 重跑 --write → 该行自动掉出索引。
+# flow-freshness 用同一条 hash 流水线核「索引 = 账本开放集」,漂了会响。
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_load_config
+DEBTS="$FLOW_LEDGER_PATH"
+[ -f "$DEBTS" ] || flow_die "账本不存在: $DEBTS"
+
+WRITE=0; TARGET=""; TOUCHES=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --write) WRITE=1; case "${2:-}" in ""|--*) ;; *) TARGET="$2"; shift ;; esac ;;
+    --touches) TOUCHES=1 ;;
+    *) echo "用法: flow-render-index [--write [文件]] [--touches]" >&2; exit 2 ;;
+  esac
+  shift
+done
+[ -n "$TARGET" ] || TARGET="$FLOW_ROOT_DOC_PATH"
+
+OPEN=$(flow_open_heads)
+HASH=$(printf '%s\n' "$OPEN" | flow_sha256 | cut -c1-8)
+
+emit_block() {
+  printf '<!-- debts-index hash:%s source:%s 生成物勿手改;重跑 flow-render-index --write -->\n' "$HASH" "$FLOW_LEDGER"
+  printf '## 欠账索引(开放条目;正文按需读 %s,派单路由用 flow-route-debts)\n\n' "$FLOW_LEDGER"
+  printf '%s\n' "$OPEN" | while IFS= read -r L; do
+    [ -n "$L" ] || continue
+    mark=$(flow_head_field "$L" mark)
+    owner=$(flow_head_field "$L" owner)
+    due=$(flow_head_field "$L" due)
+    title=$(flow_head_field "$L" title)
+    if [ "$TOUCHES" = 1 ]; then
+      touches=$(flow_head_field "$L" touches)
+      printf -- '- %s %s — owner %s · 期限 %s · 触面 %s\n' "$mark" "$title" "$owner" "$due" "$touches"
+    else
+      printf -- '- %s %s — owner %s · 期限 %s\n' "$mark" "$title" "$owner" "$due"
+    fi
+  done
+  printf '\n<!-- /debts-index -->\n'
+}
+
+if [ "$WRITE" = 1 ]; then
+  [ -f "$TARGET" ] || flow_die "目标不存在: $TARGET"
+  tmpb="$TARGET.debts-index.block.$$"; tmpf="$TARGET.debts-index.new.$$"
+  trap 'rm -f "$tmpb" "$tmpf"' EXIT
+  emit_block > "$tmpb"
+  if grep -q '<!-- debts-index ' "$TARGET"; then
+    awk -v bf="$tmpb" '
+      /<!-- debts-index /  { skip=1; while ((getline l < bf) > 0) print l; next }
+      /<!-- \/debts-index -->/ { skip=0; next }
+      !skip { print }
+    ' "$TARGET" > "$tmpf" && mv "$tmpf" "$TARGET"
+    echo "已替换 $TARGET 内的索引块 (hash:$HASH)"
+  else
+    { cat "$TARGET"; printf '\n'; cat "$tmpb"; } > "$tmpf" && mv "$tmpf" "$TARGET"
+    echo "已追加索引块到 $TARGET 末尾 (hash:$HASH)"
+  fi
+else
+  emit_block
+fi

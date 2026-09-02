@@ -1,0 +1,57 @@
+#!/bin/sh
+# flow-doc-budget —— 中间文档防膨胀档。
+# 病根:移交件把命令全量输出与上游正文直接抄进热路径 ⟹ 后续每一轮都为它付读取时间与 token(一个失控批次的流程目录能到正常批的 3 倍行数)。
+# 三条结构规矩(§D)由本脚本机械执行其可数的那部分:
+#   · 单件 > FLOW_DOC_BUDGET_FILE 行且首 5 行无 `budget-ok:<理由>` 标记 ⟹ RED(RC=1)
+#   · 目录热路径合计 > FLOW_DOC_BUDGET_DIR 行 ⟹ WARN(件数问题多半是轮次问题,先看 §B-severity)
+#   · `.evidence/` 子目录 = 旁证区,不设限不计入 —— 命令全量输出落这里,移交件贴摘录+路径。
+#     (与 §J 硬规矩 1「探测器输出不许截断」是配套:全量都在,判读看旁证件,热路径不背它。)
+# 另报两份规则书自身的体积(退役纪律的仪表盘):FLOW_LOCAL_DOC > FLOW_DOC_BUDGET_RULEBOOK 行 ⟹ WARN;FLOW_ROOT_DOC 只报 info。
+# 空目录守卫(§J0):目录里零个 md ⟹ FATAL RC=2 —— 「没超预算」与「没扫到东西」不许长一个样。
+#
+# 用法: flow-doc-budget <流程目录>...        每件逐行给判定(贴 N 件 / 判 N 件),RC: 0 绿 / 1 有 RED / 2 FATAL
+# 读的配置:FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_DIR FLOW_DOC_BUDGET_RULEBOOK FLOW_LOCAL_DOC_PATH FLOW_ROOT_DOC_PATH
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_load_config
+
+[ $# -ge 1 ] || { echo "用法: flow-doc-budget <流程目录>..." >&2; exit 2; }
+
+red=0
+for d in "$@"; do
+  [ -d "$d" ] || { echo "FATAL: 目录不存在: $d" >&2; exit 2; }
+  n=0; total=0
+  for f in "$d"/*.md; do          # 只扫顶层 md;.evidence/ 等子目录天然不进热路径
+    [ -f "$f" ] || continue
+    n=$((n+1))
+    lines=$(wc -l < "$f" | tr -d ' ')
+    total=$((total+lines))
+    if [ "$lines" -gt "$FLOW_DOC_BUDGET_FILE" ]; then
+      if head -5 "$f" | grep -q 'budget-ok:'; then
+        echo "WARN $lines 行 $f(budget-ok 显式带过:$(head -5 "$f" | sed -n 's/.*budget-ok:\(.*\)/\1/p' | head -1))"
+      else
+        echo "RED  $lines 行 $f(> $FLOW_DOC_BUDGET_FILE;全量输出移 .evidence/ 贴摘录+路径,或首部加 budget-ok:<理由>)"
+        red=1
+      fi
+    else
+      echo "ok   $lines 行 $f"
+    fi
+  done
+  [ "$n" -gt 0 ] || { echo "FATAL: $d 里零个 md —— 「没超预算」与「没扫到」不许同型(§J0)" >&2; exit 2; }
+  if [ "$total" -gt "$FLOW_DOC_BUDGET_DIR" ]; then
+    echo "WARN 目录热路径合计 $total 行 > $FLOW_DOC_BUDGET_DIR:$d(件数多半是轮次问题 —— 先看 §B-severity 分级有没有执行)"
+  fi
+  echo "—— $d:$n 件 / $total 行(贴 $n 件 / 判 $n 件;.evidence/ 旁证区不计)"
+done
+
+for rb in "$FLOW_LOCAL_DOC_PATH" "$FLOW_ROOT_DOC_PATH"; do
+  [ -f "$rb" ] || continue
+  rl=$(wc -l < "$rb" | tr -d ' ')
+  if [ "$rb" = "$FLOW_LOCAL_DOC_PATH" ] && [ "$rl" -gt "$FLOW_DOC_BUDGET_RULEBOOK" ]; then
+    echo "WARN 规则书 $rl 行 > $FLOW_DOC_BUDGET_RULEBOOK:$rb —— 退役纪律该干活了(散文做成工具后降一行指针)"
+  else
+    echo "info 规则书 $rl 行:$rb"
+  fi
+done
+
+exit $red

@@ -1,0 +1,14 @@
+{
+  "name": "flow-kit-local",
+  "owner": {
+    "name": "okonma"
+  },
+  "plugins": [
+    {
+      "name": "flow-kit",
+      "source": "./",
+      "description": "四轮制多 agent 工作流的编排协议、脚本与 hook"
+    }
+  ],
+  "description": "本机 flow-kit 的 marketplace(单 plugin)"
+}

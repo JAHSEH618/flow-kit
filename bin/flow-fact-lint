@@ -1,0 +1,178 @@
+#!/bin/sh
+# flow-fact-lint —— 注释假话族的写轮门(棘轮式,同 eslint-seatbelt / Betterer 的思路)。
+# 病根:注释里的全称断言(「本仓从没…」「只有两个写口」)与出处句(「②实测」)写下时为真,下一轮就漂成假话,人眼扫不出来。
+#
+# 射程(正面写明;**门绿 ≠ 族清**,射程外的归收尾轮按类扫):
+#   QUANT   claim 形全称句(RED,进门):对仓/树/历史的全称断言(本仓从没…/只有一个构造者/树里没有…)。
+#   QUANTW  宽泛量词头(WARN,只列不挡):全部/所有/一律/永不/唯一… 注释里大量用它写规格镜像句(有测试背书的行为规则),
+#           做 RED 会持续假红(假红让人学会耸肩)⟹ 显式分档为 WARN,归收尾轮按类人扫。这不是静默砍射程,是显式分档。
+#   PROV    出处句(欠账/轮次标记 + 实测/复跑/第一手)(RED):「谁在哪棵树上测的」会漂。标记两种都认(圈码与 #N,取 flow_mark_re)。
+#   SELFNUM 结构指针/自指数(「下面三条」类)(RED):需要去下面数的数天然会漂。
+# 射程外:措辞轴 · 宽泛「都」 · md 指令式量词 · 真伪判定本身。
+# 模式表:kit 自带默认;config 可覆盖同名变量 FLOW_FL_QCLAIM / FLOW_FL_QWIDE / FLOW_FL_PROV / FLOW_FL_SELFNUM(ERE,按字节匹配,禁用 CJK 字符类)。
+#
+# 非空转 by construction:每次跑先过内嵌阳性+阴性(另造,非任何一轮的实例清单),任一类打不响 / 阴性误响 = FATAL RC=2,不给结论。
+# 范围轴 by construction:枚举用 find,不吃 .gitignore ⟹ git 外的规格目录天然在射程内;
+#   FLOW_FACT_LINT_EXCLUDE 列的账本/史册除外(它们的出处句是内容不是假话)。
+#
+# 用法:
+#   flow-fact-lint scan     [路径(仓相对)...]                 # 全量列命中;有 RED 命中 RC=1
+#   flow-fact-lint baseline [<基线文件(绝对)>] [路径...]        # 写基线 TSV(RED 类存量容忍,收尾轮烧减后重跑收紧)
+#   flow-fact-lint verify   [<基线文件(绝对)>] [路径...]        # 新增 RED 命中(不在基线)= RED,RC=1;修掉的报 FIXED
+# 基线省略 = FLOW_FACT_LINT_BASELINE_PATH;路径省略 = FLOW_FACT_LINT_ROOTS 全扫(空 = FATAL,要配)。
+# 行内豁免:该行含 fact-ok(写的人当场自分类 —— 枚举在前分类在后,挪到了写作时刻)。
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_load_config
+
+MODE="${1:-}"
+case "$MODE" in scan|baseline|verify) shift ;; *) echo "用法: flow-fact-lint scan|baseline|verify [基线文件(绝对)] [路径(仓相对)...]" >&2; exit 2 ;; esac
+BASE=""
+if [ "$MODE" != scan ]; then
+  case "${1:-}" in /*) BASE="$1"; shift ;; *) BASE="$FLOW_FACT_LINT_BASELINE_PATH" ;; esac
+fi
+for a in "$@"; do case "$a" in /*) flow_die "路径参数须仓相对,不许绝对路径: $a" ;; esac; done
+
+# —— 类模式(CJK 按字节做字面量交替,禁用 CJK 字符类:BSD awk 按字节匹配)——
+QCLAIM="${FLOW_FL_QCLAIM:-本仓从|本仓没|本仓无|全仓|整个仓|树里没有|树上没有|从没跑过|从没有人|从来没有|从未有|只有一个|只在一处|没有任何|没有别的|无一例外|永远不会|绝不会|不存在第二|只有两个|只有三个|只有两处|只有两条|只有三处|只有三条|没有第二|没有第三|不存在第三}"
+QWIDE="${FLOW_FL_QWIDE:-全部|所有|每条|任何|一律|从不|从没|从未|永不|绝不|唯一}"
+PROV="${FLOW_FL_PROV:-第一手|独立复跑|$(flow_mark_re)[a-z]? *(实测|复跑|验证)|(写轮|改轮|复审) *(实测|复跑|验证)}"
+SELFNUM="${FLOW_FL_SELFNUM:-(下面|以下|上文|下文|本段|本文件|全段|共计|共) *([0-9]+|(一|二|三|四|五|六|七|八|九|十)+) *(条|处|个|项|件)}"
+
+MATCH_AWK='
+{
+  line=$0
+  if (mode=="code") {
+    if (ctype=="hash") { if (line !~ /^[[:space:]]*#/ && line !~ /[[:space:]]#/) next }
+    else if (ctype=="dash") { if (line !~ /--/) next }
+    else { if (line !~ /^[[:space:]]*(\/\/|\*|\/\*)/ && line !~ /[[:space:]]\/\//) next }
+  }
+  t=line; sub(/^[[:space:]]+/,"",t); sub(/[[:space:]]+$/,"",t); gsub(/\t/," ",t)
+  ok = (t ~ /fact-ok/) ? "OKD" : "HIT"
+  q=t; gsub(/所有权/,"",q)
+  qc=q; gsub(/没有任何红/,"",qc)   # 静默性申报(「…没有任何红」)不是全树断言,摘出 QCLAIM;仍由 QWIDE 的「任何」落 WARN
+  c=""
+  if (qc ~ QCLAIM) c="QUANT"
+  if (c=="" && t ~ PROV) c="PROV"
+  if (c=="" && t ~ SELFNUM) c="SELFNUM"
+  if (c=="" && mode=="code" && q ~ QWIDE) c="QUANTW"
+  if (c!="") printf "%s\t%s\t%s\t%d\t%s\n", ok, c, fn, FNR, t
+}'
+
+# 对单文件跑匹配器;输出 5 列 TSV: OKD|HIT \t 类 \t 相对路径 \t 行号 \t 修剪行
+match_file() {
+  f="$1"; rel="$2"
+  ext="${f##*.}"; mode=code; ctype=slash
+  case "$ext" in
+    md) mode=md; ctype=none ;;
+    sh|yml|yaml) ctype=hash ;;
+    sql) ctype=dash ;;
+    ts|tsx|js|jsx|mjs|cjs|mts|cts|prisma) ctype=slash ;;
+    *) return 0 ;;
+  esac
+  LC_ALL=C awk -v mode="$mode" -v ctype="$ctype" -v fn="$rel" \
+    -v QCLAIM="$QCLAIM" -v QWIDE="$QWIDE" -v PROV="$PROV" -v SELFNUM="$SELFNUM" \
+    "$MATCH_AWK" "$f"
+}
+
+# —— 阳性/阴性自证(每次必跑;样本另造,不取任何一轮的实例清单;PROV 样本圈码与 #N 各一)——
+SELF=$(mktemp -d "$(flow_tmpdir)/flow-fact-lint.XXXXXX") || exit 2
+trap 'rm -rf "$SELF"' EXIT
+cat > "$SELF/pos.ts" <<'EOF'
+// 本仓从没跑过这条命令
+// 这张表只有两个写口,没有第三个
+// ③z 实测 + ④z 独立复跑通过
+// 下面三条依次生效:
+const x = 1 // 空值一律走默认分支
+EOF
+cat > "$SELF/neg.ts" <<'EOF'
+// 参数按配置读取,超时后重试
+// 所有权字段见 schema.prisma
+const y = 2 // 常规缓存失效路径
+EOF
+cat > "$SELF/pos.md" <<'EOF'
+全仓零命中该模式。
+③e 实测:输出如下。
+#12b 复跑:读数同上。
+下面三条各造一个样本。
+EOF
+cat > "$SELF/neg.md" <<'EOF'
+触面参数一律写仓相对全路径。
+所有脚本在 bin/ 下。
+而破的那天没有任何红。
+EOF
+match_file "$SELF/pos.ts" pos.ts > "$SELF/o1"; match_file "$SELF/neg.ts" neg.ts > "$SELF/o2"
+match_file "$SELF/pos.md" pos.md > "$SELF/o3"; match_file "$SELF/neg.md" neg.md > "$SELF/o4"
+wq=$(cut -f2 "$SELF/o1" "$SELF/o3" | grep -c '^QUANT$'); ww=$(cut -f2 "$SELF/o1" | grep -c '^QUANTW$')
+wp=$(cut -f2 "$SELF/o1" "$SELF/o3" | grep -c '^PROV$'); ws=$(cut -f2 "$SELF/o1" "$SELF/o3" | grep -c '^SELFNUM$')
+wn=$(cat "$SELF/o2" "$SELF/o4" | grep -c .)
+if [ "$wq" -lt 3 ] || [ "$ww" -lt 1 ] || [ "$wp" -lt 3 ] || [ "$ws" -lt 2 ] || [ "$wn" -ne 0 ]; then
+  echo "FATAL: 非空转自证失败(QUANT=$wq/3 QUANTW=$ww/1 PROV=$wp/3 SELFNUM=$ws/2 阴性误响=$wn/0)—— 模式坏了,拒绝给结论" >&2
+  exit 2
+fi
+echo "witness: QUANT✓(code+md) QUANTW✓ PROV✓(code+md;圈码+#N) SELFNUM✓(code+md) 阴性✓(阳性另造,非实例清单)"
+
+# —— 枚举(find,不吃 .gitignore)——
+cd "$FLOW_REPO_DIR" || exit 2
+if [ $# -ge 1 ]; then
+  ROOTS=""; for a in "$@"; do a="${a#./}"; a="${a%/}"; ROOTS="$ROOTS $a"; done
+else
+  [ -n "$FLOW_FACT_LINT_ROOTS" ] || flow_die "config 未定义 FLOW_FACT_LINT_ROOTS(扫描根,仓相对,空格分隔)"
+  ROOTS=""; for d in $FLOW_FACT_LINT_ROOTS; do [ -d "$d" ] && ROOTS="$ROOTS $d"; done
+  [ -n "$ROOTS" ] || flow_die "FLOW_FACT_LINT_ROOTS 里没有一个目录存在: $FLOW_FACT_LINT_ROOTS"
+fi
+set --
+for x in $FLOW_FACT_LINT_EXCLUDE; do
+  x="${x#./}"
+  case "$x" in */*) set -- "$@" -not -path "$x" ;; *) set -- "$@" -not -name "$x" ;; esac
+done
+HITS="$SELF/hits"; : > "$HITS"
+# shellcheck disable=SC2086
+find $ROOTS -type f \
+  \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' -o -name '*.mjs' -o -name '*.cjs' \
+     -o -name '*.mts' -o -name '*.cts' -o -name '*.sql' -o -name '*.prisma' -o -name '*.sh' \
+     -o -name '*.md' -o -name '*.yml' -o -name '*.yaml' \) \
+  -not -path '*/node_modules/*' -not -path '*/dist/*' -not -path '*/.git/*' \
+  -not -path '*/coverage/*' -not -path '*/build/*' -not -path '*/.next/*' \
+  "$@" \
+  -print | sort | while IFS= read -r f; do
+    match_file "$f" "${f#./}" >> "$HITS"
+  done
+
+total=$(grep -c . "$HITS" || true)
+okd=$(cut -f1 "$HITS" | grep -c OKD || true)
+nred=$(awk -F'\t' '$1=="HIT" && $2!="QUANTW"' "$HITS" | grep -c . || true)
+nwarn=$(awk -F'\t' '$1=="HIT" && $2=="QUANTW"' "$HITS" | grep -c . || true)
+
+footer() {
+  echo "—— 射程注记:QUANTW 是 WARN(收尾轮按类人扫,不挡门);措辞轴/「都」/md 指令式量词在门外;门绿 ≠ 族清。"
+}
+
+case "$MODE" in
+scan)
+  awk -F'\t' '{lv=($1=="OKD")?"ok  ":(($2=="QUANTW")?"WARN":"RED ");printf "%s %s %s:%s: %s\n",lv,$2,$3,$4,$5}' "$HITS"
+  echo "hits: 共 $total(RED $nred · WARN $nwarn · fact-ok $okd)—— 贴 $total 行 / 判 $total 行"
+  footer
+  [ "$nred" -gt 0 ] && exit 1; exit 0 ;;
+baseline)
+  mkdir -p "$(dirname "$BASE")"
+  awk -F'\t' '$1=="HIT" && $2!="QUANTW" {printf "%s\t%s\t%s\n",$2,$3,$5}' "$HITS" | sort -u > "$BASE"
+  n=$(grep -c . "$BASE" || true)
+  echo "baseline 写入 $BASE:$n 条 RED 存量(容忍但只准降;WARN $nwarn 条不入基线,归收尾轮)"
+  footer; exit 0 ;;
+verify)
+  [ -f "$BASE" ] || { echo "FATAL: 基线不存在: $BASE(先跑 baseline)" >&2; exit 2; }
+  cur="$SELF/cur"; awk -F'\t' '$1=="HIT" && $2!="QUANTW" {printf "%s\t%s\t%s\n",$2,$3,$5}' "$HITS" | sort -u > "$cur"
+  sort -u "$BASE" > "$SELF/baseu"
+  comm -13 "$SELF/baseu" "$cur" > "$SELF/new"
+  comm -23 "$SELF/baseu" "$cur" > "$SELF/fixed"
+  nnew=$(grep -c . "$SELF/new" || true); nfix=$(grep -c . "$SELF/fixed" || true)
+  if [ "$nnew" -gt 0 ]; then
+    awk -F'\t' 'NR==FNR{k[$0]=1;next} $1=="HIT" && k[$2"\t"$3"\t"$5]{printf "RED NEW %s %s:%s: %s\n",$2,$3,$4,$5}' \
+      "$SELF/new" "$HITS"
+  fi
+  echo "verify: 新增 $nnew · 已修 $nfix · 基线 $(grep -c . "$SELF/baseu" || true) · 现存 $(grep -c . "$cur" || true) · WARN $nwarn(门外)"
+  footer
+  [ "$nnew" -gt 0 ] && { echo "RED: 新增假话句 $nnew 条 —— 当场改或 fact-ok 自分类,不许进树"; exit 1; }
+  echo "verify OK(棘轮:零新增)"; exit 0 ;;
+esac

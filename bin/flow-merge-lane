@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# flow-merge-lane —— 并行支(worktree)合回主树的三方合并器,自带**空比对守卫**。
+#
+# 存在理由:支 agent 一律**零 git 写**(派单硬约束)⟹ 支分支停在基线 commit,
+# `git merge-tree <主> <支>` 比的是**两个相同的东西**,输出「干净合并」是**空预演**。
+# 真正要合的东西在**工作树**里,不在分支上。⟹ 必须拿三侧的**工作树/基线文件**手工三方合并,
+# 并且**先证哈希互不相同**,否则「合并成功」这句话没有内容。
+#
+# 主树仓根取自 FLOW_REPO_DIR(脚本自己 cd,不依赖调用方 cwd);清单里的路径一律仓相对。
+# 用法:
+#   flow-merge-lane plan  <基线commit> <支树根(绝对路径)> <路径清单文件(绝对路径)>   # 只报告,一个字节不写
+#   flow-merge-lane apply <基线commit> <支树根(绝对路径)> <路径清单文件(绝对路径)>   # 真写主树工作树
+# 路径清单:**一行一路径**(混进散文会被拒;本脚本对含空白的行 FATAL)。
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_load_config
+
+[ $# -ge 4 ] || { echo "用法: flow-merge-lane plan|apply <基线commit> <支树根(绝对路径)> <路径清单(绝对路径)>" >&2; exit 2; }
+mode="$1"; base="$2"; lane="$3"; list="$4"
+
+case "$mode" in plan|apply) ;; *) flow_die "mode 只能是 plan|apply" ;; esac
+case "$lane" in /*) ;; *) flow_die "支树根必须绝对路径: $lane" ;; esac
+case "$list" in /*) ;; *) flow_die "路径清单必须绝对路径(脚本会 cd 到主树仓根): $list" ;; esac
+[ -d "$lane" ] || flow_die "支树根不存在: $lane"
+[ -f "$list" ] || flow_die "路径清单不存在: $list"
+
+cd "$FLOW_REPO_DIR"
+git rev-parse --verify "$base^{commit}" >/dev/null 2>&1 || flow_die "基线 commit 解析不了: $base"
+
+tmp="$(mktemp -d "$(flow_tmpdir)/flow-merge-lane.XXXXXX")"; trap 'rm -rf "$tmp"' EXIT
+h() { [ -f "$1" ] && flow_sha256 "$1" | cut -c1-12 || echo "------------"; }
+
+n_ff=0; n_3way=0; n_conflict=0; n_fatal=0; n=0; n_raw=0
+
+while IFS= read -r p || [ -n "$p" ]; do
+  case "$p" in ''|'#'*) continue;; esac
+  n_raw=$((n_raw+1))
+  # 一行一路径守卫:剥行尾注释后仍含空白 ⟹ 格式错,拒绝给结论(与 flow-manifest 同规矩)
+  p="${p%%[[:space:]]#*}"          # 剥行尾 ` # 说明`
+  p="${p%"${p##*[![:space:]]}"}"   # 再剥尾随空白(`路径␣␣# 说明` 剥完注释还剩空格,不该因此被拒)
+  case "$p" in *[[:space:]]*) echo "FATAL 清单行含空白(必须一行一路径): [$p]" >&2; n_fatal=$((n_fatal+1)); continue;; esac
+  n=$((n+1))
+
+  ours="$p"; theirs="$lane/$p"; b="$tmp/base"
+  if ! git show "$base:$p" > "$b" 2>/dev/null; then
+    : > "$b"   # 基线里没有 ⟹ 双方都是新增
+  fi
+  [ -f "$theirs" ] || { echo "FATAL $p —— 支树里没有这个文件" >&2; n_fatal=$((n_fatal+1)); continue; }
+  [ -f "$ours" ]   || { echo "FATAL $p —— 主树里没有这个文件" >&2; n_fatal=$((n_fatal+1)); continue; }
+
+  hb="$(h "$b")"; ho="$(h "$ours")"; ht="$(h "$theirs")"
+
+  # ⚠ 空比对守卫(本脚本的存在理由)
+  if [ "$hb" = "$ht" ]; then
+    echo "FATAL $p —— 支树与基线**逐字节相同**(base=$hb theirs=$ht):支树根本没改它,它不该在合并清单里"
+    n_fatal=$((n_fatal+1)); continue
+  fi
+  if [ "$ho" = "$ht" ]; then
+    echo "SKIP  $p —— 主树与支树已相同(ours=$ht):该条落点**已经在主树里**,无需合并"
+    continue
+  fi
+
+  if [ "$hb" = "$ho" ]; then
+    # 主树相对基线没动过 ⟹ 直接取支树版本(仍打印三个哈希,证明不是空比对)
+    echo "FF    $p   base=$hb ours=$ho theirs=$ht   (主树未动,直取支树版)"
+    [ "$mode" = apply ] && cp "$theirs" "$ours"
+    n_ff=$((n_ff+1)); continue
+  fi
+
+  # 真三方
+  cp "$ours" "$tmp/merged"
+  git merge-file -L ours -L base -L lane "$tmp/merged" "$b" "$theirs"
+  rc=$?
+  hm="$(h "$tmp/merged")"
+  if [ "$rc" -eq 0 ]; then
+    echo "MERGE $p   base=$hb ours=$ho theirs=$ht -> $hm   (无冲突)"
+    [ "$mode" = apply ] && cp "$tmp/merged" "$ours"
+    n_3way=$((n_3way+1))
+  else
+    echo "CONFLICT $p   base=$hb ours=$ho theirs=$ht   (git merge-file RC=$rc,冲突段数≈$rc) —— **要人**"
+    [ "$mode" = apply ] && cp "$tmp/merged" "$ours"
+    n_conflict=$((n_conflict+1))
+  fi
+done < "$list"
+
+echo "---"
+echo "mode=$mode  清单非空行=$n_raw  其中合法路径=$n  FF=$n_ff  三方合并=$n_3way  冲突=$n_conflict  FATAL=$n_fatal"
+[ "$n" -eq 0 ] && { echo "FATAL: 清单里一条有效路径都没有 —— 这是空跑,不是绿。" >&2; exit 2; }
+[ "$n_raw" -ne "$n" ] && echo "⚠ 有 $((n_raw-n)) 行被格式守卫拒掉(见上面的 FATAL 行)——**不是漏读,是拒绝给结论**"
+[ "$n_fatal" -gt 0 ] && exit 2
+[ "$n_conflict" -gt 0 ] && exit 1
+exit 0

@@ -1,0 +1,41 @@
+#!/bin/sh
+# flow-config —— 打印解析后的全部 FLOW_* 变量(NAME=value 一行一个)与 flow_gates / flow_sentinels 两张表。
+# 用法: flow-config            → 只打印
+#       flow-config --check    → 另核:账本在、根文档在、每个规格目录在、git shim 已装(仓 .git/hooks/post-commit 可执行且含 flow-post-commit);
+#                                缺项逐行 RED,RC=1;全在 OK,RC=0。flow-init 收尾用它,人怀疑「脚本读的是哪份文件」时也用它。
+# 病根:路径全从 config 派生之后,脚本实际落到哪个文件不再肉眼可见;默认值悄悄顶上去是静默错的来源,所以把解析结果整张摊开。
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_load_config
+CHECK=0
+case "${1:-}" in "") ;; --check) CHECK=1 ;; *) echo "用法: flow-config [--check]" >&2; exit 2 ;; esac
+
+for n in $(set | sed -n 's/^\(FLOW_[A-Za-z0-9_]*\)=.*/\1/p' | sort -u); do
+  eval "v=\$$n"
+  printf '%s=%s\n' "$n" "$v"
+done
+echo "[flow_gates]"
+g=$(flow_gates)
+if [ -n "$g" ]; then printf '%s\n' "$g"; else echo "(未定义)"; fi
+echo "[flow_sentinels]"
+s=$(flow_sentinels)
+if [ -n "$s" ]; then printf '%s\n' "$s"; else echo "(未定义)"; fi
+
+[ "$CHECK" = 1 ] || exit 0
+red=0
+miss() { echo "RED: $*"; red=1; }
+[ -f "$FLOW_LEDGER_PATH" ] || miss "账本不存在: $FLOW_LEDGER_PATH"
+[ -f "$FLOW_ROOT_DOC_PATH" ] || miss "根文档不存在: $FLOW_ROOT_DOC_PATH"
+for d in $FLOW_SPEC_DIRS; do
+  [ -d "$FLOW_REPO_DIR/$d" ] || miss "规格目录不存在: $FLOW_REPO_DIR/$d"
+done
+hook="$FLOW_REPO_DIR/.git/hooks/post-commit"
+if [ -f "$hook" ]; then
+  grep -q flow-post-commit "$hook" || miss "git shim 不含 flow-post-commit: $hook"
+  [ -x "$hook" ] || miss "git shim 不可执行(git 会静默跳过): $hook"
+else
+  miss "git shim 未装: $hook"
+fi
+[ "$red" = 0 ] || { echo "RED: config 自检未过"; exit 1; }
+echo "OK: config 自检全过(账本 / 根文档 / 规格目录 / git shim)"
+exit 0

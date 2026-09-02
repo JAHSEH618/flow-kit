@@ -1,0 +1,62 @@
+#!/bin/sh
+# flow-pr-merge —— 「CI 绿即合」的机械执行。
+# 事故:`gh pr checks --watch` 在 CI 尚未注册任何 check 时立即 RC=1,而 merge 用 `;` 接在后面 ⟹ 合并没被 CI 门住。
+#   §J 硬规矩 3 的动作版:判据与动作之间只许 `&&`,且判据要先等到「有 check 可判」。
+# 用法: flow-pr-merge <PR号> [--subject <合并标题>] [--wait-register <秒,默认 300>] [--background]
+#       flow-pr-merge --help
+# 步骤:① 轮询到 PR 至少注册了一个 check(否则「没有 check」与「全绿」在 --watch 的退出码上分不开)
+#       ② gh pr checks --watch --fail-fast  ③ 逐条核 conclusion 全为 SUCCESS(SKIPPED 不算)  ④ 才 merge(策略 = FLOW_MERGE_STRATEGY,不删分支)
+# 任一步不满足 ⟹ 不合并,RC=1,末行 `PR-MERGE BLOCKED …`。合并成功末行 `PR-MERGE DONE …`。
+# --background:整个等待+合并循环 nohup 脱管跑,日志落 FLOW_FLOW_DIR/.pr-merge-<PR>.log,当场打印日志路径并 RC=0,
+#   让编排方把等 CI 与收工核对重叠起来;结论看日志末行(grep 'PR-MERGE \(DONE\|BLOCKED\)')。
+# 读的配置:FLOW_REPO_DIR FLOW_MAIN_BRANCH FLOW_MERGE_STRATEGY FLOW_FLOW_DIR_PATH
+set -u
+usage() { echo "用法: flow-pr-merge <PR号> [--subject <标题>] [--wait-register <秒>] [--background] | --help"; }
+case "${1:-}" in -h|--help) usage; exit 0 ;; esac
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+flow_load_config
+[ $# -ge 1 ] || { usage >&2; exit 2; }
+N="$1"; shift
+SUBJ=""; WAIT=300; BG=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --subject) [ $# -ge 2 ] || flow_die "--subject 缺值"; SUBJ="$2"; shift ;;
+    --wait-register) [ $# -ge 2 ] || flow_die "--wait-register 缺值"; WAIT="$2"; shift ;;
+    --background) BG=1 ;;
+    *) usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+if [ "$BG" = 1 ]; then
+  mkdir -p "$FLOW_FLOW_DIR_PATH"
+  LOG="$FLOW_FLOW_DIR_PATH/.pr-merge-$N.log"
+  set -- "$N"
+  [ -n "$SUBJ" ] && set -- "$@" --subject "$SUBJ"
+  set -- "$@" --wait-register "$WAIT"
+  nohup "$SELF" "$@" > "$LOG" 2>&1 &
+  echo "PR-MERGE BACKGROUND: PR #$N 脱管等 CI(pid $!),日志 $LOG —— 结论看末行 PR-MERGE DONE|BLOCKED"
+  exit 0
+fi
+
+cd "$FLOW_REPO_DIR" || exit 2
+t=0
+while :; do
+  n=$(gh pr view "$N" --json statusCheckRollup --jq '.statusCheckRollup | length' 2>/dev/null || echo 0)
+  [ "${n:-0}" -ge 1 ] && break
+  [ "$t" -ge "$WAIT" ] && { echo "PR-MERGE BLOCKED: ${WAIT}s 内 PR #$N 没有注册任何 check(CI 没起来 ≠ CI 绿)"; exit 1; }
+  sleep 10; t=$((t+10))
+done
+echo "checks registered: $n(等待 ${t}s)"
+gh pr checks "$N" --watch --fail-fast > /dev/null 2>&1; wrc=$?
+echo "watch RC=$wrc"
+concl=$(gh pr view "$N" --json statusCheckRollup --jq '.statusCheckRollup[] | "\(.name)=\(.conclusion)"')
+printf '%s\n' "$concl"
+bad=$(printf '%s\n' "$concl" | grep -vc '=SUCCESS$')
+if [ "$wrc" != 0 ] || [ "$bad" != 0 ]; then echo "PR-MERGE BLOCKED: 有 check 未 SUCCESS(watch RC=$wrc,非 SUCCESS 条数 $bad)—— 停在 PR,不合并"; exit 1; fi
+# FLOW_MERGE_STRATEGY 故意不加引号:它是 gh pr merge 的策略参数(--merge / --squash / --rebase),要按词拆
+if [ -n "$SUBJ" ]; then gh pr merge "$N" $FLOW_MERGE_STRATEGY --subject "$SUBJ" > /dev/null 2>&1; mrc=$?; else gh pr merge "$N" $FLOW_MERGE_STRATEGY > /dev/null 2>&1; mrc=$?; fi
+[ "$mrc" = 0 ] || { echo "PR-MERGE BLOCKED: gh pr merge RC=$mrc"; exit 1; }
+git fetch origin --quiet
+echo "PR-MERGE DONE: PR #$N → $FLOW_MAIN_BRANCH $(git rev-parse --short "origin/$FLOW_MAIN_BRANCH")"

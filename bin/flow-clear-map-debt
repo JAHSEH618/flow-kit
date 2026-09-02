@@ -1,0 +1,78 @@
+#!/bin/sh
+# flow-clear-map-debt —— 收口后清 map-debt 队列。
+# 病根:post-commit 检测器对每条被触面命中的开放欠账都追加一行「- [ ] … 触欠账X」,而收口时账本追写已在 commit **之前**落了
+#   ⟹ 这些行多数是重复记账;人手勾会漏也会猜。本脚本只做机械可判的那一半,其余**留给人**(不猜)。
+# 用法: flow-clear-map-debt <commit短哈希> [--dry-run]
+#         同日追写模式(默认):账本里 X 的条目块内含「> **<今天>」开头的追写(= 本日已处置)⟹ 勾掉并写指针;否则留给人。
+#       flow-clear-map-debt --verdicts <三态表文件(绝对)> <commit短哈希> [--dry-run]
+#         三态表模式:表行 `| <标记> | <判定> | <证据> | <落点> |`,判定 ∈ {还, 追写, 不动};该 commit 的队列行凡标记在表里的
+#         勾掉并改写为「… | ④三态表:<判定> —— <证据>」;标记不在表里的留给人;判定不在三态集 = FATAL。
+# 标记两种都认(圈码 ①–㊿ 与 #N)。路径:队列 = FLOW_MAP_DEBT_PATH,账本 = FLOW_LEDGER_PATH。
+# 只认 flow-post-commit 写的行格式 `- [ ] 日期 | commit | 触欠账X 的触面 | 该更新:…`。
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_load_config
+usage() { echo "用法: flow-clear-map-debt <commit短哈希> [--dry-run] | --verdicts <三态表(绝对)> <commit短哈希> [--dry-run]" >&2; exit 2; }
+
+MODE=writeup; TABLE=""; C=""; DRY=""
+if [ "${1:-}" = "--verdicts" ]; then
+  MODE=verdicts; TABLE="${2:-}"; C="${3:-}"; DRY="${4:-}"
+  [ -n "$TABLE" ] && [ -n "$C" ] || usage
+  case "$TABLE" in /*) ;; *) flow_die "三态表须绝对路径(文件参数纪律): $TABLE" ;; esac
+  [ -f "$TABLE" ] || flow_die "三态表不存在: $TABLE"
+else
+  C="${1:-}"; DRY="${2:-}"
+  [ -n "$C" ] || usage
+  [ -f "$FLOW_LEDGER_PATH" ] || flow_die "账本不存在: $FLOW_LEDGER_PATH"
+fi
+case "$DRY" in ""|--dry-run) ;; *) usage ;; esac
+[ -f "$FLOW_MAP_DEBT_PATH" ] || flow_die "map-debt 队列不存在: $FLOW_MAP_DEBT_PATH"
+
+python3 - "$MODE" "$C" "$DRY" "$FLOW_MAP_DEBT_PATH" "$FLOW_LEDGER_PATH" "$FLOW_LEDGER" "$TABLE" <<'PY'
+import sys,re,datetime
+mode,c,dry,q,d,dname,table=sys.argv[1:8]
+MARK=r'(?:[①-⑳㉑-㉟㊱-㊿]|#\d+)'      # 与 flow_mark_re 同集:圈码 1–50 与 #N
+today=datetime.date.today().isoformat()
+row_re=re.compile(r'^- \[ \] (\S+) \| '+re.escape(c)+r' \| 触欠账('+MARK+r') 的触面 \| 该更新:(.*)$')
+def fatal(msg):
+    print('FATAL: '+msg,file=sys.stderr); sys.exit(2)
+
+if mode=='writeup':
+    # 条目块:从机器头到下一个机器头
+    blocks={};cur=None
+    for l in open(d,encoding='utf-8').read().split('\n'):
+        m=re.match(r'^<!-- debt:\d+ mark:(\S+) ',l)
+        if m: cur=m.group(1); blocks[cur]=[]
+        elif cur: blocks[cur].append(l)
+    def decide(mark):
+        b=blocks.get(mark,[])
+        if any(l.startswith(f'> **{today}') or l.startswith(f'> ⚠ **{today}') for l in b):
+            return f'{today} 收口清账:账本该条同日追写已落(commit 前),见 {dname} {mark} 的「{today}」段;hook 记账重复,勾掉'
+        return None
+else:
+    verdicts={}
+    trow=re.compile(r'^\|\s*('+MARK+r')\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*$')
+    for l in open(table,encoding='utf-8').read().split('\n'):
+        m=trow.match(l)
+        if not m: continue
+        mark,verdict,evidence,_=m.groups()
+        if verdict not in ('还','追写','不动'):
+            fatal(f'三态表 {mark} 的判定「{verdict}」不在 {{还, 追写, 不动}}')
+        verdicts[mark]=(verdict,evidence)
+    if not verdicts: fatal('三态表里没有一行合法的 `| <标记> | <判定> | <证据> | <落点> |`')
+    def decide(mark):
+        v=verdicts.get(mark)
+        return None if v is None else f'④三态表:{v[0]} —— {v[1]}'
+
+out=[];n=0;left=[]
+for l in open(q,encoding='utf-8').read().split('\n'):
+    m=row_re.match(l)
+    if m:
+        mark=m.group(2); note=decide(mark)
+        if note is not None:
+            l=f'- [x] {m.group(1)} | {c} | 触欠账{mark} 的触面 | {note}'; n+=1
+        else: left.append(mark)
+    out.append(l)
+if dry!='--dry-run': open(q,'w',encoding='utf-8').write('\n'.join(out))
+print(f'{"[dry-run] " if dry=="--dry-run" else ""}勾掉 {n} 条;留给人判的 {len(left)} 条:{" ".join(left) if left else "无"}')
+PY

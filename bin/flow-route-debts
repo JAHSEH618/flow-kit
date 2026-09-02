@@ -1,0 +1,73 @@
+#!/bin/sh
+# flow-route-debts —— 欠账机械路由(漏路由闭合·第二层)。
+# 用法: flow-route-debts <任务号或触面路径(仓库相对)>...    例: flow-route-debts P2-T9 tools/track-a/
+#       flow-route-debts --lint                                 自检:每条目必须带机器头;状态只许 open/closed
+# 派单时:编排方用本任务号 + 触面路径跑一遍,输出照抄进必读(由 flow-dispatch 代跑,同源 by construction)。
+# 复审时:按收工实改集复跑,diff 派单必读 —— 漏路由当场红。
+# 标记:圈码 ①–㊿ 与纯数字 #N 两种都认(新号一律 #N)。
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_load_config
+DEBTS="$FLOW_LEDGER_PATH"
+[ -f "$DEBTS" ] || flow_die "账本不存在: $DEBTS(FLOW_LEDGER=$FLOW_LEDGER)"
+
+if [ "${1:-}" = "--lint" ]; then
+  # 双向机械核对,locale 钉死 C(按字节),不吃外部环境:
+  #   向1 条目行计数:行首「> 」+ 合法标记;向2 每个机器头的 mark 必须有对应条目行(定长字面比较)。
+  #   向3 状态集只许 open / closed —— 第三种状态对路由与索引都不可见,是静默盲区。
+  marks=$(sed -n 's/^<!-- debt:.* mark:\([^ ]*\) .*/\1/p' "$DEBTS")
+  heads=$(printf '%s\n' "$marks" | grep -c .)
+  entries=$(LC_ALL=C grep -cE "$(flow_entry_re)" "$DEBTS")
+  red=0
+  if [ "$heads" -ne "$entries" ]; then
+    echo "LINT RED: 机器头 $heads ≠ 条目 $entries(有条目缺机器头 = 路由盲区)" >&2
+    red=1
+  fi
+  for m in $marks; do
+    flow_is_mark "$m" || { echo "LINT RED: 机器头 mark:$m 不是合法标记(圈码或 #N)" >&2; red=1; }
+    LC_ALL=C grep -q "^> $m" "$DEBTS" || { echo "LINT RED: 机器头 mark:$m 无对应条目行" >&2; red=1; }
+  done
+  bad=$(grep '^<!-- debt:' "$DEBTS" | grep -vE ' status:(open|closed) ' || true)
+  if [ -n "$bad" ]; then
+    printf '%s\n' "$bad" | while IFS= read -r L; do
+      echo "LINT RED: 状态不在 open/closed 集合内(对路由与索引不可见): $(flow_head_field "$L" mark) $(flow_head_field "$L" status)" >&2
+    done
+    red=1
+  fi
+  [ "$red" = 1 ] && exit 1
+  echo "lint OK: $entries 条目全部带机器头(双向核对;状态集 open/closed)"
+  exit 0
+fi
+
+[ $# -ge 1 ] || { echo "用法: flow-route-debts <任务号或触面路径>... | --lint" >&2; exit 2; }
+for a in "$@"; do
+  case "$a" in /*) flow_die "触面参数必须仓库相对,不许绝对路径(绝对路径让路径轴整条静默失效): $a" ;; esac
+done
+
+found=0
+while IFS= read -r L; do
+  [ -n "$L" ] || continue
+  mark=$(flow_head_field "$L" mark)
+  owner=$(flow_head_field "$L" owner)
+  due=$(flow_head_field "$L" due)
+  touches=$(flow_head_field "$L" touches)
+  title=$(flow_head_field "$L" title)
+  hit=0
+  for a in "$@"; do
+    [ "$a" = "$owner" ] && hit=1
+    [ "$a" = "$due" ] && hit=1
+    for t in $(printf '%s' "$touches" | tr ',' ' '); do
+      case "$a" in "$t"*) hit=1 ;; esac
+      case "$t" in "$a"*) hit=1 ;; esac
+    done
+  done
+  if [ "$hit" = 1 ]; then
+    printf -- '- %s %s — owner %s · 期限 %s · 触面 %s\n' "$mark" "$title" "$owner" "$due" "$touches"
+    found=1
+  fi
+done <<DEOF
+$(flow_open_heads)
+DEOF
+
+[ "$found" = 0 ] && echo "(无匹配的开放欠账)"
+exit 0

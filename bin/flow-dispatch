@@ -1,0 +1,159 @@
+#!/bin/sh
+# flow-dispatch —— 派单必带块装配器。
+# 病根:派单里引的命令、引的数、引的模式与实跑不同源,全是编排方手工装配时抄错 —— 每次修法都是再加一条给人记的散文。
+#   本脚本把「欠账必读段 = 紧邻命令的实跑输出」做成结构性事实:输出块里的命令行与其下的输出出自同一次执行,想抄错都没有入口。
+# 两条机械上限(两轴分开,别混算):
+#   · owner 归本任务的欠账 > FLOW_DEBT_CAP ⟹ RC=3(还账义务过载 —— 拆任务/专开还账批次,或 --cap-ok <理由> 显式带过,理由进派单;过大 CL 的处置同理:拆)。
+#   · 必读总条数 > FLOW_DEBT_WARN ⟹ 只 WARN(触面宽前缀的欠账天然到处命中,那是账本刻意的;总数按门设会让 --cap-ok 变成仪式)。
+#
+# 用法:
+#   flow-dispatch <任务号> --tree <快照|活树-独占|禁入> --db <独占|只读|禁用> --seq <N> \
+#       [--core <core写权限面>] [--plan <plan文件绝对路径>] [--cap-ok <理由>] <触面路径(仓库相对)...>
+#   flow-dispatch <任务号> --tree … --db … --seq … --lane-merge <路径清单文件(绝对)> [触面路径...]
+#       合并批模式:触面从清单文件读(一行一路径;# 注释与空行略过);命令行再给的触面必须都在清单里,否则 FATAL;拒绝 --plan。
+# 输出:整块 markdown 到 stdout,照贴进派单;「(待填)」标记的行由编排方补,其余勿手改 —— 要改就重跑。
+# 读的配置:FLOW_REPO_DIR FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_FIX_BY_WRITER FLOW_DOC_BUDGET_FILE FLOW_SPEC_DIRS FLOW_WS/FLOW_FACT_LINT_BASELINE;
+#   子命令 flow-route-debts / flow-receipts 按名调用(PATH),输出原样嵌入。
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_load_config
+
+TASK="${1:-}"; [ -n "$TASK" ] || flow_die "缺任务号"
+shift
+TREE=""; DB=""; SEQ=""; CORE="(待填:两档之一 —— 「只许改 shell,核心库一个字节不许动」或「核心库限 <文件/性质>」,protocol §1)"
+PLAN=""; CAPOK=""; LANE=""
+while [ $# -gt 0 ]; do
+  case "$1" in --tree|--db|--seq|--core|--plan|--cap-ok|--lane-merge) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
+  case "$1" in
+    --tree) TREE="$2"; shift 2 ;;
+    --db)   DB="$2";   shift 2 ;;
+    --seq)  SEQ="$2";  shift 2 ;;
+    --core) CORE="$2"; shift 2 ;;
+    --plan) PLAN="$2"; shift 2 ;;
+    --cap-ok) CAPOK="$2"; shift 2 ;;
+    --lane-merge) LANE="$2"; shift 2 ;;
+    --*) flow_die "未知参数 $1" ;;
+    *) break ;;
+  esac
+done
+if [ -n "$LANE" ]; then
+  [ -z "$PLAN" ] || flow_die "--lane-merge 与 --plan 互斥:合并批不带功能触面,没有接收位可覆盖"
+  case "$LANE" in /*) ;; *) flow_die "--lane-merge 须绝对路径(文件参数一律绝对路径): $LANE" ;; esac
+  [ -f "$LANE" ] || flow_die "--lane-merge 清单不存在: $LANE"
+else
+  [ $# -ge 1 ] || flow_die "缺触面路径(仓库相对)"
+fi
+case "$TREE" in 快照*|活树-独占|禁入) ;; *) flow_die "--tree 须为 快照|活树-独占|禁入(protocol §3),得到:「$TREE」" ;; esac
+case "$DB" in 独占|只读|禁用) ;; *) flow_die "--db 须为 独占|只读|禁用(protocol §3),得到:「$DB」" ;; esac
+[ -n "$SEQ" ] || flow_die "缺 --seq 裁决起号(protocol §3)"
+if [ -n "$PLAN" ]; then case "$PLAN" in /*) ;; *) flow_die "--plan 须绝对路径(文件参数一律绝对路径)" ;; esac; fi
+
+TMP=$(mktemp -d "$(flow_tmpdir)/flow-dispatch.XXXXXX") || exit 2
+trap 'rm -rf "$TMP"' EXIT
+
+# 合并批:触面 = 清单文件;命令行触面只许是清单的子集(合并批不带功能触面)
+if [ -n "$LANE" ]; then
+  sed -e 's/[[:space:]]*#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$LANE" | grep . > "$TMP/lane"
+  [ -s "$TMP/lane" ] || flow_die "--lane-merge 清单里零条路径(空集不是合并批): $LANE"
+  for p in "$@"; do
+    grep -qxF -- "$p" "$TMP/lane" || flow_die "触面 $p 不在合并批清单里(合并批只做支合并 + 跨检,不带功能触面): $LANE"
+  done
+  set --
+  while IFS= read -r l; do set -- "$@" "$l"; done < "$TMP/lane"
+fi
+
+# 触面纪律:仓库相对,绝对路径当场 FATAL;不存在的路径 WARN(计划中的新文件合法)
+for p in "$@"; do
+  case "$p" in
+    /*) flow_die "触面参数必须仓库相对,不许绝对路径(绝对路径让路径轴整条静默失效): $p" ;;
+  esac
+  [ -e "$FLOW_REPO_DIR/$p" ] || flow_warn "触面在树里不存在(允许:计划中的新文件): $p"
+done
+
+# 同层捕获(protocol §4 硬规矩 2:不隔管道取 RC)
+flow-route-debts "$TASK" "$@" > "$TMP/debts" 2>&1; DRC=$?
+NDEBT=$(grep -c '^- ' "$TMP/debts" || true)
+NOWN=$(grep -c "owner $TASK " "$TMP/debts" || true)
+if [ "$DRC" -ne 0 ]; then echo "FATAL: flow-route-debts RC=$DRC,输出:" >&2; cat "$TMP/debts" >&2; exit 2; fi
+
+RRC=""
+if [ -n "$PLAN" ]; then
+  flow-receipts "$PLAN" "$TASK" > "$TMP/rcpt" 2>&1; RRC=$?
+fi
+
+# 命令行的逐字重建(给复审按 review-template 逐字重跑;参数与上面那次执行同一数组,同源 by construction)
+CMD="flow-route-debts $TASK"
+for p in "$@"; do CMD="$CMD $p"; done
+
+# 渲染期算出的两个字段:三改轮去向(config 定)与规格目录清单(扫描纪律用)
+if [ "$FLOW_FIX_BY_WRITER" = 1 ]; then
+  FIX="SendMessage 回①写轮本人(断连才起新 agent);审查方结论优先,反证必须带命令"
+else
+  FIX="另起 agent"
+fi
+SPECS=""; for d in $FLOW_SPEC_DIRS; do SPECS="$SPECS $d/"; done; SPECS="${SPECS# }"
+
+if [ -n "$LANE" ]; then
+  HEAD="## 派单必带块 —— $TASK · 合并批:只做支合并 + 跨检,不带功能触面(flow-dispatch 生成 $(date +%F);触面清单 $LANE;生成段勿手改,要改重跑)"
+else
+  HEAD="## 派单必带块 —— $TASK(flow-dispatch 生成 $(date +%F);生成段勿手改,要改重跑)"
+fi
+
+cat <<HDR
+$HEAD
+
+- **树权限**:$TREE(protocol §3:只读 agent 一律快照;活树是变异轴独占资源)
+- **库权限**:$DB(protocol §3:库是单点,dbreset 门任何时刻只许一个持有者)
+- **核心库写权限面**:$CORE
+- **裁决号段**:从 $SEQ 起
+- **冻结**:开工在仓库根跑 \`flow-manifest baseline <流程目录>/.manifest-baseline-<轮名>.txt\`(基线放仓外;收工 verify 由编排方在活树跑,protocol §1)
+  ⚠ **baseline 打在编排方停止编辑之后**(protocol §3:打早了会让写轮收到幻影 RED,并教会所有人对 RED 耸肩)
+- **扫描纪律**:全仓口径判据须 \`command grep\` 或显式含 $SPECS(protocol §4 范围轴);零命中先过非空转(protocol §4)
+- **假话门**:写轮收工跑 \`flow-fact-lint verify $FLOW_WS/$FLOW_FACT_LINT_BASELINE\` —— 新增 RED 零才许交付;基线存量归收尾轮
+- **移交件预算**:单件 ≤$FLOW_DOC_BUDGET_FILE 行(超限首部 \`budget-ok:<理由>\` 显式带过);命令全量输出落 <流程目录>/.evidence/,
+  件内只贴摘录+路径;引上游用指针(裁决号/文件+节号)不抄正文;收工编排方跑 \`flow-doc-budget\`(protocol §5)
+  ⚠ **边做边落盘**:进程中途死于 API 断连时,**没落盘的一律全丢**;
+  攒到最后一次性写 = 拿整轮的工作量赌连接不断。已得结论每隔一段就写进回件文件。
+- **闭环**:回件落文件即可,不必回信;转达走编排方(protocol §1);残留按 protocol §2 三级标级,不标按阻塞
+- 回件边写边落:每闭一条 finding 就追加落盘,不许攒到收工一次写
+- 三改轮:$FIX
+
+### 欠账必读(同源生成:下面的输出就是紧邻命令的实跑结果,RC=$DRC)
+命令:\`$CMD\`
+路由条数:**$NDEBT**(其中 owner 归 $TASK 的 **$NOWN** 条;owner 上限 $FLOW_DEBT_CAP,必读总量 >$FLOW_DEBT_WARN 仅提醒)
+HDR
+cat "$TMP/debts"
+
+if [ "$NDEBT" -gt "$FLOW_DEBT_WARN" ]; then
+  echo ""
+  echo "⚠ WARN: 必读 $NDEBT 条偏重(阅读/复审 diff 负担)—— 考虑收窄触面参数,或核对是否该拆任务。"
+fi
+if [ "$NOWN" -gt "$FLOW_DEBT_CAP" ]; then
+  if [ -n "$CAPOK" ]; then
+    echo ""
+    echo "⚠ **owner 归 $TASK 的欠账 $NOWN 条 > 上限 $FLOW_DEBT_CAP,--cap-ok 显式带过**。理由(进派单,由复审核):$CAPOK"
+  else
+    echo "" >&2
+    echo "RED: owner 归 $TASK 的欠账 $NOWN 条 > 上限 $FLOW_DEBT_CAP —— 拆任务或专开还账批次;确要整批背,加 --cap-ok <理由> 重跑(理由会印进派单)" >&2
+    exit 3
+  fi
+fi
+
+if [ -n "$PLAN" ]; then
+  cat <<RH
+
+### 接收位覆盖(同源生成,RC=$RRC)
+命令:\`flow-receipts $PLAN $TASK\`
+RH
+  cat "$TMP/rcpt"
+fi
+
+cat <<FT
+
+### 编排方待填(生成器管不到的判断项)
+- 任务书正文 / 交付判据(变异实测是交付条件,①写轮)
+- 自报三处「最没把握」的要求(①写轮)
+- 本轮**必读清单**(移交件按件点名;目录其余 = 旁证按需读,protocol §5)
+- 若并行:H1/H2 隔离条件逐条核($SPECS 手工 cp / DB 单点 / 文件层不相交 / 号段)
+FT
+exit 0

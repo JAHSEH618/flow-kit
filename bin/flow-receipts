@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# flow-receipts —— 接收位覆盖枚举(「任务书声称已覆盖接收位」的探测器)。
+# 任务书声称「已覆盖接收位」之前 / 复审核对之时,用本命令机械枚举后 diff 任务书 —— 漏一条当场可见。
+# 两条轴(= spec 复核两轴的同款结构):
+#   轴1 节内:该任务小节里的 接收位/强制条款/开口项 标记行
+#   轴2 节外:整份 plan 里点名该任务的行 —— 别的节落给它的账(曾漏掉的那条正是归在别节的)
+# 用法: flow-receipts <plan文件(仓相对或绝对)> <任务号>
+#   例: flow-receipts specs/plan/p2-engine.md P2-T7
+# 仓根取自 FLOW_REPO_DIR(脚本自己 cd;plan 的相对路径以仓根为锚,不依赖调用方 cwd)。
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_load_config
+
+[ $# -ge 2 ] || { echo "用法: flow-receipts <plan文件> <任务号,如 P2-T7>" >&2; exit 2; }
+f="$1"; t="$2"
+cd "$FLOW_REPO_DIR"
+[ -f "$f" ] || flow_die "文件不存在 $f"
+
+sec_start=$(grep -n "^## $t " "$f" | head -1 | cut -d: -f1)
+[ -n "$sec_start" ] || sec_start=$(grep -n "^## $t" "$f" | head -1 | cut -d: -f1)
+[ -n "$sec_start" ] || flow_die "找不到节 ## $t"
+sec_end=$(awk -v s="$sec_start" 'NR>s && /^## /{print NR-1; exit}' "$f")
+[ -n "$sec_end" ] || sec_end=$(wc -l < "$f" | tr -d ' ')
+
+echo "## 轴1 · $t 节内标记行(L$sec_start–$sec_end)"
+awk -v s="$sec_start" -v e="$sec_end" -v F="$f" \
+  'NR>=s && NR<=e && /接收位|强制条款|开口项/ {printf "%s:%d: %s\n", F, NR, substr($0,1,160)}' "$f"
+
+echo ""
+echo "## 轴2 · 节外点名 $t 的行(别的节落给它的账)"
+awk -v s="$sec_start" -v e="$sec_end" -v t="$t" -v F="$f" \
+  '(NR<s || NR>e) && index($0,t) {printf "%s:%d: %s\n", F, NR, substr($0,1,160)}' "$f"

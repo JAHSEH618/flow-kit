@@ -1,0 +1,112 @@
+#!/bin/sh
+# flow-init —— 把 flow-kit 装进一个工作区(幂等:已有的不覆盖,逐项打印 已有/已写)。
+# 用法: flow-init [--ws <工作区根(绝对;默认 cwd)>] [--repo <仓路径,相对工作区;默认 .>]
+#                 [--ledger <账本路径,相对仓根;默认 specs/debts.md>] [--spec-dirs "<目录…>";默认 specs]
+#                 [--untracked 0|1;默认自动:规格目录被 gitignore 则 1] [--main <主干分支;默认 master>] [--dry-run]
+# 做的事:.claude/flow.config.sh(模板填空)· .claude/flow-local.md · <流程目录>/ 与规则书棘轮起点 · 账本骨架(缺才建)
+#         · 仓的 .git/hooks/post-commit shim(已有别的 hook 就追加一行,不覆盖)· 末尾跑 flow-config --check。
+# 门命令(flow_gates)不代填 —— 门是项目的事实,留给人填;没填之前 flow-gates 会 FATAL,这是故意的。
+set -u
+KIT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$KIT/lib/flow-lib.sh"
+
+WS="$(pwd)"; REPO="."; LEDGER="specs/debts.md"; SPEC_DIRS="specs"; UNTRACKED=""; MAIN="master"; DRY=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --ws) WS="${2:?}"; shift ;;
+    --repo) REPO="${2:?}"; shift ;;
+    --ledger) LEDGER="${2:?}"; shift ;;
+    --spec-dirs) SPEC_DIRS="${2:?}"; shift ;;
+    --untracked) UNTRACKED="${2:?}"; shift ;;
+    --main) MAIN="${2:?}"; shift ;;
+    --dry-run) DRY=1 ;;
+    *) echo "用法见脚本头注" >&2; exit 2 ;;
+  esac; shift
+done
+case "$WS" in /*) ;; *) flow_die "--ws 须绝对路径: $WS" ;; esac
+case "$REPO" in /*) flow_die "--repo 须相对工作区,不许绝对路径: $REPO" ;; esac
+[ -d "$WS" ] || flow_die "工作区不存在: $WS"
+case "$REPO" in .) REPO_DIR="$WS" ;; *) REPO_DIR="$WS/$REPO" ;; esac
+[ -d "$REPO_DIR/.git" ] || [ -f "$REPO_DIR/.git" ] || flow_die "不是 git 仓: $REPO_DIR"
+
+# 自动判断规格目录是否被 gitignore(第一个存在的目录为准)
+if [ -z "$UNTRACKED" ]; then
+  UNTRACKED=0
+  for d in $SPEC_DIRS; do
+    if [ -d "$REPO_DIR/$d" ]; then
+      if git -C "$REPO_DIR" check-ignore -q "$d" 2>/dev/null; then UNTRACKED=1; fi
+      break
+    fi
+  done
+fi
+
+say() { printf '%s\n' "$*"; }
+write_file() {  # $1 目标 $2 内容来源文件(已填空)
+  if [ -f "$1" ]; then say "已有  $1(不覆盖)"; return 0; fi
+  [ "$DRY" = 1 ] && { say "将写  $1"; return 0; }
+  mkdir -p "$(dirname "$1")" && cp "$2" "$1" && say "已写  $1"
+}
+
+TMP=$(mktemp "$(flow_tmpdir)/flow-init.XXXXXX") || exit 2
+trap 'rm -f "$TMP"' EXIT
+
+# 1. config
+sed -e "s|@REPO@|$REPO|g" -e "s|@LEDGER@|$LEDGER|g" -e "s|@SPEC_DIRS@|$SPEC_DIRS|g" \
+    -e "s|@UNTRACKED@|$UNTRACKED|g" -e "s|@MAIN@|$MAIN|g" "$KIT/lib/templates/flow.config.sh" > "$TMP"
+write_file "$WS/.claude/flow.config.sh" "$TMP"
+
+# 2. flow-local
+write_file "$WS/.claude/flow-local.md" "$KIT/lib/templates/flow-local.md"
+
+# 3. 流程目录 + 规则书棘轮起点(已有就不动)
+if [ "$DRY" = 0 ]; then
+  mkdir -p "$WS/.flow"
+  if [ ! -f "$WS/.flow/.rulebook-lines" ] && [ -f "$WS/.claude/flow-local.md" ]; then
+    wc -l < "$WS/.claude/flow-local.md" | tr -d ' ' > "$WS/.flow/.rulebook-lines"
+    say "已写  $WS/.flow/.rulebook-lines(规则书棘轮起点 = $(cat "$WS/.flow/.rulebook-lines") 行)"
+  else
+    say "已有  $WS/.flow/"
+  fi
+fi
+
+# 4. 账本骨架
+write_file "$REPO_DIR/$LEDGER" "$KIT/lib/templates/debts.md"
+
+# 5. git shim
+HOOK="$REPO_DIR/.git/hooks/post-commit"
+ABS="$KIT/bin/flow-post-commit"
+if [ -f "$HOOK" ]; then
+  if grep -q 'flow-post-commit' "$HOOK"; then
+    say "已有  $HOOK(已含 flow-post-commit)"
+  else
+    if [ "$DRY" = 1 ]; then say "将追加 flow-post-commit 一行到已有 hook: $HOOK"; else
+      printf '\n# flow-kit(flow-init 追加,不覆盖原 hook)\nif command -v flow-post-commit >/dev/null 2>&1; then flow-post-commit "$@"; elif [ -x "%s" ]; then "%s" "$@"; fi\n' "$ABS" "$ABS" >> "$HOOK"
+      say "已追加 $HOOK(原 hook 保留;若原 hook 提前 exit,追加行不会执行 —— 自己看一眼)"
+    fi
+  fi
+else
+  sed -e "s|@ABS@|$ABS|g" "$KIT/lib/templates/post-commit.shim" > "$TMP"
+  if [ "$DRY" = 1 ]; then say "将写  $HOOK"; else
+    mkdir -p "$(dirname "$HOOK")" && cp "$TMP" "$HOOK" && chmod +x "$HOOK" && say "已写  $HOOK(shim)"
+  fi
+fi
+
+# 5b. 单仓布局:流程目录与门缓存落在仓内,用 .git/info/exclude(本地,不入库)挡掉,免得 post-commit 把它们记成新目录
+if [ "$REPO" = "." ] && [ "$DRY" = 0 ] && [ -d "$REPO_DIR/.git" ]; then
+  EX="$REPO_DIR/.git/info/exclude"; mkdir -p "$(dirname "$EX")"; touch "$EX"
+  for pat in '.flow/' '.claude/flow-gates/'; do
+    grep -qxF "$pat" "$EX" || { printf '%s\n' "$pat" >> "$EX"; say "已加  $EX ← $pat"; }
+  done
+fi
+
+# 6. 核对
+if [ "$DRY" = 0 ] && command -v flow-config >/dev/null 2>&1; then
+  say "—— flow-config --check ——"
+  ( cd "$WS" && flow-config --check ); rc=$?
+  say "flow-config --check RC=$rc"
+elif [ "$DRY" = 0 ] && [ -x "$KIT/bin/flow-config" ]; then
+  say "—— flow-config --check ——"
+  ( cd "$WS" && "$KIT/bin/flow-config" --check ); rc=$?
+  say "flow-config --check RC=$rc"
+fi
+say "下一步:在 $WS/.claude/flow.config.sh 填 flow_gates(门命令)与 FLOW_FACT_LINT_ROOTS;派单前读 /flow-kit:protocol。"
