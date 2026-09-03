@@ -30,9 +30,11 @@ description: 四轮制(写 / 双轴审 / 改 / 复审)多 agent 工作流的编�
 - **④A 静态审**(快照,零变异,库禁用):逐条验收 findings、逐欠账三态表、事实句三层、「做不到」型断言找反例、分级。**④B 变异审**(活树 + 库独占):复跑关键变异 + **对③新写的代码自设变异**(按③索引表的新增 / 改行段;改轮自造的盲区最易漏)+ build 与集成。两轴并行、零共享推理,后写的不读先写的;分级取并集;阻塞项各自 SendMessage 回③(**由编排方转达**:③→④送不到)。为什么拆:④中位 77 轮、末轮 263k,携带成本随轮数平方长,拆两段二次项减半,并行时长取 max。
 - **折轮**:不阻塞条 ≤ `FLOW_FOLD_MAX` 且全在③写权限面内 ⟹ ③同轮清、④一并验,不起收尾轮。
 - **回件边写边落**:每闭一条 finding 追加落盘。agent 死在第 39 分钟就是一整轮。
+- **调用批量是模型属性,不是纪律**:派单里那条「互不依赖的调用放同一条消息」对不同模型效果差 3 倍以上(实测 1.00–1.30 vs 3.00–4.89 调用/轮),而携带 ∝ 轮数 × 上下文。所以它写进派单归写进派单,**账要记在模型上**:轮数账的「调用/轮」列低于 1.5 时,处置是换模型或拆任务,不是再加一条纪律。
 - **后续轮按改动索引表跳读**:②③④ 开工先读上一轮回件首节的表,只读表里的文件区间;整读一个文件要在回件里给一行理由。一批里整读字节的 37% 是别的 agent 已读过的同一文件。
 - **编排方只读〇节 + 丙栏**:收任何一轮只读回件的正面结论与必闭栏(④A 另加三态表),甲乙丁戊栏归下一轮 agent 读。整读回件的编排方到批末携带 200k+,每次派单都为它重付。
-- **换模型先对照**:`FLOW_ROLE_MODELS` 给某轴换模型前,同一份产物两个模型各审一次(影子回件 `<轮>.<model>.md`),`flow-review-diff <原版> <影子>` 按文件锚分组比丙栏;原版独有为空才许换,对照批的账由 `flow-usage` 记。审查轮是唯一的探测器,便宜要用差集证明。
+- **换模型先对照,两个方向都要**:`FLOW_ROLE_MODELS` 改任何一轴之前,同一份产物两个模型各审一次(影子回件 `<轮>.<model>.md`),`flow-review-diff <原版> <影子>` 按文件锚分组比丙栏。换便宜的:原版独有为空才许换。**留贵的也要证**:实测同一批里 ④ 两轴(opus)与 ②(fable)工具调用数几乎相同(69 vs 56),轮数 3.5 倍、携带 2.4 倍,差价全在「一轮发几个调用」上 —— 没有差集证明就是白付。对照批的账由 `flow-usage` 记。
+- **轮间交接口一键**:`flow-close --between <流程目录> <基线> <申报> <after-hashes> [--task] [--plan]` = 交付态哈希 + 冻结 verify + 非空转 + 树读数 + 路由复跑 + REQ 对账 + 预算。手拼这套每批 4 次、≈28 min,且正是 §4 硬规矩最常破的地方。
 - **闭环转达要交代库的归属**:④B 发回③时写明④B 是否已停;复验归提出那条的轴,④B 的等③收工后在干净窗口跑(先重置库),别把上一轮的假红继承进复验。
 - 「做不到 / 不可达」型断言:复审必须主动找反例并列出找过的路径,推不出反例才判成立,并写明射程。两次被构造法证伪的都不是结论错,是前提的射程写宽了。
 
@@ -76,9 +78,11 @@ description: 四轮制(写 / 双轴审 / 改 / 复审)多 agent 工作流的编�
 ## 5 · 收口(照抄 `references/close-block.md`)
 
 - 顺序固定十步,`flow-close` 一键做核对,`flow-pr-merge --background` 让 CI 等待与 memory / 轮数账重叠。
-- **账本**:①的追写草稿 + ④A 的三态表 ⟹ 编排方只做 diff 审;`flow-clear-map-debt --verdicts` 吃三态表。三规矩:已还条目正文里的开口项单开新条;owner 不锚已收工任务;新条落接收位。
+- **账本**:①的追写草稿 + ④A 的三态表 ⟹ 编排方只做 diff 审;落笔一律走 `flow-ledger`(`apply <三态表>` 先 dry-run 再 `--write`;`append` 追写;`add` 立新条),`flow-clear-map-debt --verdicts` 吃同一张表。手写 python 补丁改账本按输出价 5× 计一次、此后每轮重付 —— 一批 21 次。三规矩:已还条目正文里的开口项单开新条;owner 不锚已收工任务;新条落接收位。
+- **收口另起会话**:收口前把状态档写完,新开一个会话做收口。编排方末轮上下文实测 429k、中位 334k,而收口占它一半轮次;在中位处切,后半段携带 20.4M → 6.1M。状态档第一节本来就是为「换个会话接着干」写的。
 - **轮数账每批照填**:轮次行由 `flow-usage <流程目录> --write` 从 transcripts 生成(轮数 / 携带 / 输出 / 当量 / 调用每轮 / 模型,编排方单独一行),固定开销行手填;token 当量批间只比不涨。
-- **检验判据**:编排固定开销 ≤ 1 h、门整跑 ≤ 3 次、不起独立收尾轮。不达标只许退役规矩或修工具,不许加规矩。
+- **检验判据**:编排固定开销 ≤ 1 h、**轮内门整跑每轮 ≤ 1 次 + 收口 1 次**、不起独立收尾轮。不达标只许退役规矩或修工具,不许加规矩。
+  「门整跑 ≤3」曾是判据,但结构下限就是 4(①1 + 变异轴各 1 + 收口 1):判据本身错了就改判据,别让它每批红一次教人耸肩。
 - **规矩棘轮反向**:`flow-local.md` 行数只许降(`flow-close` 量,变长即 RED);每批退役 ≥ 1 条散文规矩成脚本或门,轮数账记「本批退役数」。规则书 7 天从 5 条长到 600 行时,同体量批次时长翻了一倍。退役件逐字归档到工作区 `.claude/flow-local-archive.md`,原位留一行指针。
 
 ## 6 · 中断、恢复、影子时间
@@ -96,23 +100,26 @@ description: 四轮制(写 / 双轴审 / 改 / 复审)多 agent 工作流的编�
 
 ## 8 · 工具速查
 
-| 命令 | 用途 | 何时 |
+用法签名照抄即可跑,别再 `cat` 脚本头注取参数(实测编排方每批为此花 15–25 KB)。`<>` 内的文件参数一律绝对路径。
+
+| 命令 | 用法 | 何时 |
 |---|---|---|
-| `flow-dispatch` | 派单必带块装配(欠账段同源;上限;`--lane-merge`) | 派单时 |
-| `flow-route-debts` | 欠账机械路由;`--lint` 账本自检 | 派单 / 复审 diff / 改账本后 |
-| `flow-receipts` | 接收位两轴枚举 | 任务书覆盖声明前;复审 diff |
-| `flow-freeze` | 生成冻结哈希清单(git 轴 + 可选规格轴) | 每轮开工 / 收工 |
-| `flow-manifest` | `baseline` / `verify` 申报清单 vs 实改集(抓得到被删文件) | 轮开工 / 收工 |
-| `flow-gates` | 门一键 + 树哈希缓存(`--reset` 口径才缓存) | 每轮收工 / 复审 / 收口;同一棵树别跑第二遍 |
-| `flow-fact-lint` | 注释假话族的门(`scan` / `baseline` / `verify`) | 写轮收工 verify;收尾后 baseline 收紧 |
-| `flow-doc-budget` | 流程件防膨胀(行 + 字节红线)+ 规则书体积 | 每轮收工 |
-| `flow-close` | 编排方收工核对一键(冻结 + 非空转 + 交付态 + 账本 lint + 预算 + 规则书棘轮) | 编排方每轮收工 |
-| `flow-usage` | 轮数账自动填:transcripts 按轮次汇总轮数 / token / 时长(`--write` 落 `.usage.md`) | 收口 |
-| `flow-review-diff` | 双模型对照:两份复审回件的丙栏按文件锚分组对齐 | 换模型前 |
-| `flow-trace` | REQ ↔ 测试对账(任务节 REQ-ID vs 测试标题 `[REQ-ID]`) | 任务书覆盖声明前;复审 |
-| `flow-render-index` | 欠账索引生成物 | 改账本后 `--write` |
-| `flow-clear-map-debt` | 收口后清地图欠账队列(`--verdicts` 吃三态表) | 收口 commit 后 |
-| `flow-pr-merge` | CI 绿即合(`--background` 后台) | 收口 push 后 |
-| `flow-merge-lane` | 并行支三方合并器(`plan` / `apply`) | 支合并批 |
+| `flow-dispatch` | `flow-dispatch <任务号> --tree <快照\|活树-独占\|禁入> --db <独占\|只读\|禁用> --seq <N> [--round <轮名>] [--core <面>] [--plan <plan>] [--cap-ok <理由>] <触面…> > <轮号>-dispatch.md` | 派单时 |
+| `flow-route-debts` | `flow-route-debts <任务号或触面…>` · `--lint` | 派单 / 复审 diff / 改账本后 |
+| `flow-receipts` | `flow-receipts <plan> <任务号>`(体例走 `FLOW_RECEIPT_MODE=section\|table`) | 任务书覆盖声明前;复审 diff |
+| `flow-freeze` | `flow-freeze <.after-<轮名>-hashes.txt>` | 每轮开工 / 收工 |
+| `flow-manifest` | `flow-manifest baseline <基线>` · `verify <基线> <申报清单>` | 轮开工 / 收工 |
+| `flow-gates` | `flow-gates [--reset]`(`--reset` 口径才缓存) | 每轮收工 / 复审 / 收口;同一棵树别跑第二遍 |
+| `flow-fact-lint` | `flow-fact-lint scan <根…>` · `baseline` · `verify [基线]` | 写轮收工 verify;收尾后 baseline 收紧 |
+| `flow-doc-budget` | `flow-doc-budget <流程目录…>`(超 90% 先 WARN) | 每轮收工 |
+| `flow-close` | `flow-close <流程目录> <基线> <申报> [after-hashes]` · `--between …  [--task <号>] [--plan <plan>]` | 收工 / 轮间交接口 |
+| `flow-ledger` | `flow-ledger apply <三态表> [--write]` · `close <标记> [--note]` · `append <标记> <行>` · `add --owner --due --touches --title` · `verdicts <三态表>` | 收口改账本;三态表的唯一解析器 |
+| `flow-usage` | `flow-usage <流程目录> [--write]`(编排方按本批时间窗切) | 收口 |
+| `flow-review-diff` | `flow-review-diff <原版回件> <影子回件>` | 改任一轴的模型前 |
+| `flow-trace` | `flow-trace <plan> <任务号>`(任务号可带连字符) | 任务书覆盖声明前;复审 |
+| `flow-render-index` | `flow-render-index [--write [文件]] [--touches]` | 改账本后 |
+| `flow-clear-map-debt` | `flow-clear-map-debt <commit> [--dry-run]` · `--verdicts <三态表> <commit>` | 收口提交后 |
+| `flow-pr-merge` | `flow-pr-merge <PR号> [--background]` | 收口 push 后 |
+| `flow-merge-lane` | `flow-merge-lane plan\|apply <基线commit> <支树根> <路径清单>` | 支合并批 |
 | `flow-post-commit` | git 钩子逻辑:目录结构变化 / 哨兵文件 / 触到开放欠账 ⟹ 记队列 | 由 shim 自动调 |
 | `flow-init` / `flow-config` / `flow-freshness` | 装进工作区 / 打印解析后的配置 / 会话开始的新鲜度检查 | 安装 · 排障 · 自动 |

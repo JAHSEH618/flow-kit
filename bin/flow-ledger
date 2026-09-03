@@ -1,0 +1,192 @@
+#!/bin/sh
+# flow-ledger —— 账本(FLOW_LEDGER)按机器头体例的增删改,与 ④A 三态表的唯一解析器。
+# 病根:收口时账本编辑一直是编排方手写 python 内联补丁(实测一批 21 次 `python3` heredoc)。
+#   heredoc 双重计价:按输出价 5× 计一次,而后此会话每一轮再为它重付一次携带 —— 收口 45 min 的大头。
+#   本脚本把「还 / 追写 / 立新条」做成命令,编排方只发一行。
+# 用法:
+#   flow-ledger verdicts <三态表(绝对)>              → TSV「标记<TAB>判定<TAB>证据」;判定归一化(去 ** ` 与空白)
+#   flow-ledger close <标记> [--note <一句>]          → 机器头 status:open→closed,正文尾追一行「**已还 <日期>**:<note>」
+#   flow-ledger append <标记> <一行文字>              → 正文尾追一行(追写;原文一字不改)
+#   flow-ledger add --owner <任务号> --due <任务号或日期> --touches <a,b> --title <一句> [--body <正文>] [--mark #N]
+#   flow-ledger apply <三态表(绝对)> [--write]        → 吃三态表:判定「还」的逐条 close(默认 dry-run);
+#                                                       「追写」列给人(正文是人写的散文,机器不许代笔)、「不动」零动作
+# 体例(protocol §7):一行机器头 `<!-- debt:N mark:#N status:open|closed owner:… due:… touches:… title:… -->`
+#   + 下一行起的正文 `> #N …`(续行 `>   …`)。条目块 = 本机器头到下一个机器头之前。
+# 判定只有三种:还 / 追写 / 不动 —— 三态表里判定格不在这三个里的行**跳过并 WARN**,不 FATAL:
+#   同一份回件里别的四列表(证据表)首格也可能长得像标记,一 FATAL 整条命令就废(实测 ④A 回件里就有两行)。
+# 每次落盘后自动跑 flow-route-debts --lint(改坏账本当场可见)。
+# 末行固定:写路径 `LEDGER OK: 已落盘;lint 已过`;只读路径 `VERDICTS OK: …` / `LEDGER DRY: …`。
+#   行首 `RED` 且 RC=1(lint 红);FATAL RC=2(参数错 / 标记不存在 / 三态表零合法行)。
+# 读的配置:FLOW_LEDGER_PATH FLOW_LEDGER;子命令 flow-route-debts 按名调用(PATH)。
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_load_config
+usage() {
+  cat >&2 <<'U'
+用法:
+  flow-ledger verdicts <三态表(绝对)>
+  flow-ledger close <标记> [--note <一句>]
+  flow-ledger append <标记> <一行文字>
+  flow-ledger add --owner <任务号> --due <任务号或日期> --touches <a,b> --title <一句> [--body <正文>] [--mark #N]
+  flow-ledger apply <三态表(绝对)> [--write]
+U
+  exit 2
+}
+CMD="${1:-}"; [ -n "$CMD" ] || usage
+shift
+case "$CMD" in verdicts|close|append|add|apply) ;; *) usage ;; esac
+[ -f "$FLOW_LEDGER_PATH" ] || flow_die "账本不存在: $FLOW_LEDGER_PATH(FLOW_LEDGER=$FLOW_LEDGER)"
+
+# 参数按位置/开关分拣(POSIX sh:不许数组,逐个透传给 python)
+A1=""; NOTE=""; OWNER=""; DUE=""; TOUCHES=""; TITLE=""; BODY=""; MARK=""; WRITE=""
+case "$CMD" in
+  verdicts|apply)
+    A1="${1:-}"; [ -n "$A1" ] || usage; shift
+    case "$A1" in /*) ;; *) flow_die "三态表须绝对路径(文件参数纪律): $A1" ;; esac
+    [ -f "$A1" ] || flow_die "三态表不存在: $A1"
+    case "${1:-}" in "") ;; --write) WRITE=--write; shift ;; *) usage ;; esac
+    ;;
+  close)
+    A1="${1:-}"; [ -n "$A1" ] || usage; shift
+    case "${1:-}" in "") ;; --note) [ $# -ge 2 ] || flow_die "--note 缺值"; NOTE="$2"; shift 2 ;; *) usage ;; esac
+    ;;
+  append)
+    A1="${1:-}"; NOTE="${2:-}"; { [ -n "$A1" ] && [ -n "$NOTE" ]; } || usage; shift 2 ;;
+  add)
+    while [ $# -gt 0 ]; do
+      case "$1" in --owner|--due|--touches|--title|--body|--mark) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
+      case "$1" in
+        --owner) OWNER="$2"; shift 2 ;;
+        --due) DUE="$2"; shift 2 ;;
+        --touches) TOUCHES="$2"; shift 2 ;;
+        --title) TITLE="$2"; shift 2 ;;
+        --body) BODY="$2"; shift 2 ;;
+        --mark) MARK="$2"; shift 2 ;;
+        *) usage ;;
+      esac
+    done
+    { [ -n "$OWNER" ] && [ -n "$DUE" ] && [ -n "$TOUCHES" ] && [ -n "$TITLE" ]; } || flow_die "add 必填:--owner --due --touches --title"
+    case "$TOUCHES" in /*|*",/"*) flow_die "touches 必须仓库相对,不许绝对路径: $TOUCHES" ;; esac
+    [ -z "$MARK" ] || flow_is_mark "$MARK" || flow_die "--mark 不是合法标记(圈码或 #N): $MARK"
+    ;;
+esac
+[ $# -eq 0 ] || usage
+
+FLOW_LEDGER_PATH="$FLOW_LEDGER_PATH" python3 - "$CMD" "$A1" "$NOTE" "$OWNER" "$DUE" "$TOUCHES" "$TITLE" "$BODY" "$MARK" "$WRITE" <<'PY'
+import sys, os, re, datetime
+cmd, a1, note, owner, due, touches, title, body, mark, write = sys.argv[1:11]
+LP = os.environ['FLOW_LEDGER_PATH']
+MARK = r'(?:[①-⑳㉑-㉟㊱-㊿]|#\d+)'
+VERDICTS = ('还', '追写', '不动')
+today = datetime.date.today().isoformat()
+
+def fatal(m): print('FATAL: ' + m, file=sys.stderr); sys.exit(2)
+def red(m):   print('RED  ' + m); return 1
+
+src = open(LP, encoding='utf-8').read().split('\n')
+HEAD = re.compile(r'^<!-- debt:(\d+) mark:(\S+) status:(open|closed) ')
+
+def blocks():
+    """[(mark, head_idx, end_idx_exclusive)] —— 条目块 = 机器头到下一个机器头之前"""
+    idx = [(i, m) for i, l in enumerate(src) for m in [HEAD.match(l)] if m]
+    out = []
+    for n, (i, m) in enumerate(idx):
+        end = idx[n + 1][0] if n + 1 < len(idx) else len(src)
+        out.append((m.group(2), i, end, int(m.group(1))))
+    return out
+
+def find(mk):
+    for b in blocks():
+        if b[0] == mk: return b
+    fatal(f'账本里没有标记 {mk} 的条目(标记两种都认:圈码与 #N)')
+
+def body_tail(head_i, end):
+    """正文最后一行的下标(块内最后一个非空行);没有正文就返回机器头本行"""
+    last = head_i
+    for i in range(head_i + 1, end):
+        if src[i].strip(): last = i
+    return last
+
+def save():
+    tmp = LP + '.flow-ledger.new'
+    open(tmp, 'w', encoding='utf-8').write('\n'.join(src))
+    os.replace(tmp, LP)
+
+def parse_verdicts(path):
+    row = re.compile(r'^\|\s*(' + MARK + r')\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|')
+    got, skipped = [], []
+    for l in open(path, encoding='utf-8').read().split('\n'):
+        m = row.match(l.replace('\\|', '\x00'))
+        if not m: continue
+        mk = m.group(1)
+        v = re.sub(r'[*`\s]', '', m.group(2))      # 去 markdown 强调与空白:实测三态表写的是 **还**
+        ev = m.group(3).replace('\x00', '|').strip()
+        if v in VERDICTS: got.append((mk, v, ev))
+        else: skipped.append((mk, m.group(2)[:24]))
+    return got, skipped
+
+if cmd == 'verdicts':
+    got, skipped = parse_verdicts(a1)
+    for mk, v, ev in got: print(f'{mk}\t{v}\t{ev}')
+    for mk, raw in skipped: print(f'WARN 跳过 {mk}:判定格「{raw}」不在 {{还, 追写, 不动}}(多半是别的四列表)', file=sys.stderr)
+    if not got: fatal(f'三态表里零行合法判定 —— 「全不动」与「没扫到」不许同型: {a1}')
+    c = {v: sum(1 for _, x, _ in got if x == v) for v in VERDICTS}
+    print(f"VERDICTS OK: 还 {c['还']} · 追写 {c['追写']} · 不动 {c['不动']}(贴 {len(got)} 行 / 判 {len(got)} 行;跳 {len(skipped)})")
+    sys.exit(3)
+
+def do_close(mk, n):
+    mkk, hi, end, _ = find(mk)
+    if ' status:closed ' in src[hi]:
+        print(f'skip {mk} 已是 closed(未改动)'); return 0
+    src[hi] = src[hi].replace(' status:open ', ' status:closed ', 1)
+    t = body_tail(hi, end)
+    src.insert(t + 1, f'>   **已还 {today}**{("" if not n else ":" + n)}')
+    print(f'ok   {mk} status:open → closed;正文尾追一行「**已还 {today}**」')
+    return 1
+
+if cmd == 'close':
+    do_close(a1, note); save()
+elif cmd == 'append':
+    mkk, hi, end, _ = find(a1)
+    t = body_tail(hi, end)
+    src.insert(t + 1, f'>   {note}')
+    print(f'ok   {a1} 正文尾追一行(追写;原文未动)'); save()
+elif cmd == 'add':
+    bs = blocks()
+    nxt = max([b[3] for b in bs] + [int(m[1:]) for b in bs for m in [b[0]] if m.startswith('#')] + [0]) + 1
+    mk = mark or f'#{nxt}'
+    if any(b[0] == mk for b in bs): fatal(f'标记 {mk} 已存在,拒绝重号')
+    if '\n' in title: fatal('title 不许换行(机器头是一行)')
+    while src and not src[-1].strip(): src.pop()
+    src.append('')
+    src.append(f'<!-- debt:{nxt} mark:{mk} status:open owner:{owner} due:{due} touches:{touches} title:{title} -->')
+    src.append(f'> {mk} {body or title}')
+    print(f'ok   立新条 {mk}(debt:{nxt})owner {owner} · 期限 {due} · 触面 {touches}')
+    save()
+elif cmd == 'apply':
+    got, skipped = parse_verdicts(a1)
+    if not got: fatal(f'三态表里零行合法判定: {a1}')
+    for mk, raw in skipped: print(f'WARN 跳过 {mk}:判定格「{raw}」不在三态集', file=sys.stderr)
+    for mk, v, ev in got:
+        if v == '还':
+            find(mk)   # 不存在当场 FATAL,别静默跳过
+            if write == '--write': do_close(mk, (ev[:100] + '…') if len(ev) > 100 else ev)
+            else: print(f'[dry-run] close {mk}(证据:{ev[:60]}…)')
+        elif v == '追写':
+            print(f'留给人 {mk} 追写 —— 正文是人写的散文:flow-ledger append {mk} "<一行>"(证据:{ev[:60]}…)')
+        else:
+            print(f'不动   {mk}')
+    if write == '--write': save()
+    else: print('LEDGER DRY: 未落盘;确认后加 --write'); sys.exit(3)
+sys.exit(0)
+PY
+prc=$?
+# RC=3 = verdicts / dry-run 两条只读路径(它们自己的末行就是末行,不跑 lint 也不重读账本)
+[ "$prc" -eq 3 ] && exit 0
+[ "$prc" -eq 0 ] || exit "$prc"
+# 落盘后自检:改坏账本当场可见(同层捕获 RC,不进 && 链)
+flow-route-debts --lint > "$(flow_tmpdir)/flow-ledger-lint.$$" 2>&1; lrc=$?
+cat "$(flow_tmpdir)/flow-ledger-lint.$$"; rm -f "$(flow_tmpdir)/flow-ledger-lint.$$"
+if [ "$lrc" -ne 0 ]; then echo "RED  账本 lint 未过(RC=$lrc)—— 上面的改动已落盘,按输出修"; exit 1; fi
+echo "LEDGER OK: 已落盘;lint 已过"
+exit 0

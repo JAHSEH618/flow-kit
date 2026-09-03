@@ -5,7 +5,7 @@
 ## 地图
 
 - `bin/` —— 全部命令,前缀 `flow-`,plugin 启用后进 Bash PATH,按名调用不写路径。每个脚本头注 = 它的说明书。
-- `lib/flow-lib.sh` —— 唯一共享库:找配置(从 cwd 向上找 `.claude/flow.config.sh`,找不到 FATAL)、可移植 sha256、实改集 git 轴枚举(`flow_changed_paths`)、欠账标记模式、机器头字段提取。
+- `lib/flow-lib.sh` —— 唯一共享库:找配置(从 cwd 向上找 `.claude/flow.config.sh`,找不到 FATAL)、可移植 sha256、实改集 git 轴枚举(`flow_changed_paths`)、欠账标记与 REQ-ID 模式(`flow_mark_re` / `flow_req_re`)、机器头字段提取、kit 自身根目录 `FLOW_KIT_DIR`(回件模板绝对路径由脚本自算,prompt 里不许手打带版本号的插件缓存路径)。
 - `skills/protocol/` —— 编排协议(≤250 行,只留规矩 + 一句为什么 + 最短反例);`references/` 里是照抄用的模板(派单块 + 三行 prompt / 写改回件 / 复审回件 / 收口块 / 三态表 / 轮数账)。
 - `skills/init/` —— 把 kit 装进一个工作区:写 config、装 git shim、建流程目录、建账本骨架、按 FLOW_KEEP_* 收窄会话(`flow-settings` 写 `.claude/settings.local.json`:关掉本项目不用的插件与用户级 MCP;实测开局 44k token 里 CLAUDE.md 只占 10k,其余是插件 skill 清单与工具表,sub-agent 每轮重付)。
 - `hooks/hooks.json` —— SessionStart 新鲜度检查(`flow-freshness`,全绿静默)。
@@ -25,4 +25,4 @@
 
 ## 命令对照(StockSteer-Mono `.claude/scripts/` 旧名 → 新名)
 
-route-debts → `flow-route-debts` · render-debts-index → `flow-render-index` · render-dispatch → `flow-dispatch` · route-receipts → `flow-receipts` · tree-freeze → `flow-freeze` · freeze-manifest → `flow-manifest` · round-close → `flow-close` · six-gates → `flow-gates` · doc-budget → `flow-doc-budget` · fact-lint → `flow-fact-lint` · clear-map-debt → `flow-clear-map-debt` · merge-lane → `flow-merge-lane` · pr-merge-when-green → `flow-pr-merge` · post-commit hook 逻辑 → `flow-post-commit` · 新增 `flow-init` / `flow-config` / `flow-freshness` / `flow-settings` / `flow-trace` / `flow-usage` / `flow-review-diff`。
+route-debts → `flow-route-debts` · render-debts-index → `flow-render-index` · render-dispatch → `flow-dispatch` · route-receipts → `flow-receipts` · tree-freeze → `flow-freeze` · freeze-manifest → `flow-manifest` · round-close → `flow-close` · six-gates → `flow-gates` · doc-budget → `flow-doc-budget` · fact-lint → `flow-fact-lint` · clear-map-debt → `flow-clear-map-debt` · merge-lane → `flow-merge-lane` · pr-merge-when-green → `flow-pr-merge` · post-commit hook 逻辑 → `flow-post-commit` · 新增 `flow-init` / `flow-config` / `flow-freshness` / `flow-settings` / `flow-trace` / `flow-usage` / `flow-review-diff` / `flow-ledger`(账本增删改,并且是 ④A 三态表的唯一解析器 —— 判定格实际写作 `**还**`,谁再写一份正则谁就 FATAL)。

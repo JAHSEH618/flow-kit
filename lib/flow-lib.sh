@@ -1,6 +1,6 @@
 #!/bin/sh
 # flow-lib.sh —— flow-kit 所有 bin/ 脚本共用的库(POSIX sh;被 source,不直接执行)。
-# 职责只有四件:找并加载工作区配置 · 可移植的 sha256 · 统一的 die/warn · 欠账标记的模式。
+# 职责:找并加载工作区配置 · 可移植 sha256 · 统一 die/warn · 实改集 git 轴 · 标记与 REQ 模式 · 机器头字段(自指的数按 §J 三禁不写)。
 # 用法(每个 bin 脚本头部):
 #   . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
 #   flow_load_config            # 之后 FLOW_WS / FLOW_REPO_DIR / FLOW_LEDGER_PATH … 可用
@@ -11,6 +11,8 @@ _flow_kit_dir=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)
 if [ -n "$_flow_kit_dir" ] && [ -d "$_flow_kit_dir/bin" ]; then
   case ":$PATH:" in *":$_flow_kit_dir/bin:"*) ;; *) PATH="$_flow_kit_dir/bin:$PATH"; export PATH ;; esac
 fi
+# kit 自身根目录:模板路径由脚本自己算,不许任何 prompt 手打插件缓存路径(带版本号,升级即断)
+FLOW_KIT_DIR="$_flow_kit_dir"; export FLOW_KIT_DIR
 
 flow_die()  { printf 'FATAL: %s\n' "$*" >&2; exit 2; }
 flow_warn() { printf 'WARN: %s\n' "$*" >&2; }
@@ -62,7 +64,7 @@ flow_load_config() {
   FLOW_INFRA_FAIL_RE='57P01|Connection terminated|does not exist in the current database'
   FLOW_INFRA_FAIL_GATES=""
   FLOW_DOC_BUDGET_FILE=400
-  FLOW_DOC_BUDGET_BYTES=32000
+  FLOW_DOC_BUDGET_BYTES=40000
   FLOW_DOC_BUDGET_DIR=4000
   FLOW_DOC_BUDGET_RULEBOOK=250
   FLOW_DEBT_CAP=8
@@ -129,6 +131,8 @@ command -v flow_sentinels >/dev/null 2>&1 || flow_sentinels() { :; }   # 每行:
 
 # —— 欠账标记:圈码 ①–㊿(UTF-8 前两字节 E2 91 / E3 89 / E3 8A)与纯数字 #N 两种都认;调用方一律 LC_ALL=C grep -E ——
 flow_mark_re() { printf '(\342\221.|\343\211.|\343\212.|#[0-9]+)'; }
+# REQ-ID:REQ-<任务号(可含连字符)>-<序号>。ERE 最左最长 ⟹ REQ-P4-T2-01 整条命中,REQ-P4T2-01 也命中。
+flow_req_re() { printf 'REQ-[A-Z0-9]+(-[A-Z0-9]+)*-[0-9]+'; }
 flow_entry_re() { printf '^> %s' "$(flow_mark_re)"; }          # 账本条目行
 flow_is_mark() {                                                # 用法: flow_is_mark <串> ;RC 0 = 是合法标记
   printf '%s' "$1" | LC_ALL=C grep -qE "^$(flow_mark_re)$"

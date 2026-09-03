@@ -1,93 +1,168 @@
 #!/bin/sh
-# flow-close —— 编排方每轮收工核对一键。把 §B5 冻结核对 + 非空转 + 交付态哈希 + 账本 lint + 文档预算 + 规则书棘轮收成一条命令,
-#   免得每轮手拼六条命令再犯 §J 的「输出截断 / RC 隔管道」(病根:手拼时 RC 隔着管道取,假绿看不出)。
+# flow-close —— 编排方的两种核对一键。
+#   默认(轮收工):§B5 冻结核对 + 非空转 + 交付态哈希 + 账本 lint + 文档预算 + 规则书棘轮。
+#   --between(轮间交接口):交付态哈希 + 冻结核对 + 非空转 + 树读数 + 路由复跑 + REQ 对账 + 文档预算。
+# 病根:轮间那套一直是手拼 5–7 条命令、每批 4 次(实测 ≈28 min/批,占编排固定开销的三分之一),
+#   而手拼时 RC 隔着管道取、判据进 && 链 —— 正是 §J 那两条硬规矩最常破的地方。
 # 用法: flow-close <流程目录(绝对)> <基线文件(绝对)> <申报清单(绝对)> [after-hashes(绝对)]
-# 逐项打印 RC;任一红 ⟹ 末行 `ROUND-CLOSE RED` 且 RC=1;全绿 ⟹ `ROUND-CLOSE OK`。flow-doc-budget 的 WARN 不算红(它是仪表盘)。
-# 第 2 步非空转:抽的行必须真在实改集里(先 tracked 轴,空则 ignored 轴与基线比 sha);抽不在实改集里的行永远不红 —— 那不是非空转,是空转。
-# 第 6 步规则书棘轮:FLOW_LOCAL_DOC 行数记在 FLOW_FLOW_DIR/.rulebook-lines,只许降(变长 = RED);超 FLOW_DOC_BUDGET_RULEBOOK 也 RED。
-# 读的配置:FLOW_REPO_DIR FLOW_LOCAL_DOC_PATH FLOW_FLOW_DIR_PATH FLOW_DOC_BUDGET_RULEBOOK;子命令 flow-manifest / flow-route-debts / flow-doc-budget 按名调用(PATH)。
+#       flow-close --between <流程目录(绝对)> <基线(绝对)> <申报清单(绝对)> <after-hashes(绝对)> [--task <任务号>] [--plan <plan绝对>]
+#         --task 给了才跑路由复跑(按申报清单里的路径),--task + --plan 都给了才跑 flow-trace。
+# 逐项打印 RC;任一红 ⟹ 末行 `ROUND-CLOSE RED` / `BETWEEN RED` 且 RC=1;全绿 ⟹ `ROUND-CLOSE OK` / `BETWEEN OK`。
+#   flow-doc-budget 的 WARN 不算红(它是仪表盘)。
+# 非空转:抽的行必须真在实改集里(先 tracked 轴,空则 ignored 轴与基线比 sha);抽不在实改集里的行永远不红 —— 那不是非空转,是空转。
+# 规则书棘轮:FLOW_LOCAL_DOC 行数记在 FLOW_FLOW_DIR/.rulebook-lines,只许降(变长 = RED);超 FLOW_DOC_BUDGET_RULEBOOK 也 RED。
+# 读的配置:FLOW_REPO_DIR FLOW_LOCAL_DOC_PATH FLOW_FLOW_DIR_PATH FLOW_DOC_BUDGET_RULEBOOK;
+#   子命令 flow-manifest / flow-route-debts / flow-doc-budget / flow-trace 按名调用(PATH)。
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
 flow_load_config
-[ $# -ge 3 ] || flow_die "用法: flow-close <流程目录(绝对)> <基线文件(绝对)> <申报清单(绝对)> [after-hashes(绝对)]"
-DIR="$1"; BASE="$2"; DECL="$3"; AFTER="${4:-}"
-for p in "$DIR" "$BASE" "$DECL" ${AFTER:+"$AFTER"}; do case "$p" in /*) ;; *) flow_die "文件参数须绝对路径: $p" ;; esac; done
+
+MODE=close
+if [ "${1:-}" = "--between" ]; then MODE=between; shift; fi
+if [ "$MODE" = between ]; then
+  [ $# -ge 4 ] || flow_die "用法: flow-close --between <流程目录> <基线> <申报清单> <after-hashes> [--task <任务号>] [--plan <plan绝对>]"
+else
+  [ $# -ge 3 ] || flow_die "用法: flow-close <流程目录(绝对)> <基线文件(绝对)> <申报清单(绝对)> [after-hashes(绝对)]"
+fi
+DIR="$1"; BASE="$2"; DECL="$3"; shift 3
+AFTER=""
+case "${1:-}" in ""|--*) ;; *) AFTER="$1"; shift ;; esac
+TASK=""; PLAN=""
+while [ $# -gt 0 ]; do
+  case "$1" in --task|--plan) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
+  case "$1" in
+    --task) TASK="$2"; shift 2 ;;
+    --plan) PLAN="$2"; shift 2 ;;
+    *) flow_die "未知参数 $1" ;;
+  esac
+done
+for p in "$DIR" "$BASE" "$DECL" ${AFTER:+"$AFTER"} ${PLAN:+"$PLAN"}; do
+  case "$p" in /*) ;; *) flow_die "文件参数须绝对路径: $p" ;; esac
+done
+[ "$MODE" = between ] && [ -z "$AFTER" ] && flow_die "--between 必须给 after-hashes(轮间核对的第一判据就是上一轮交付态)"
+
 TMP=$(mktemp -d "$(flow_tmpdir)/flow-close.XXXXXX") || exit 2
 trap 'rm -rf "$TMP"' EXIT
 red=0
 cd "$FLOW_REPO_DIR" || exit 2
+step=0
+hdr() { step=$((step+1)); echo "== $step. $1 =="; }
 
-echo "== 1. flow-manifest verify =="
-# 同层捕获:命令一次跑进文件,RC 紧跟其后;判读只读那个文件
-flow-manifest verify "$BASE" "$DECL" > "$TMP/verify" 2>&1; rc=$?
-grep -E 'RED|OK|FATAL|WARN' "$TMP/verify"; echo "RC=$rc"
-grep -qE 'verify OK' "$TMP/verify" || red=1
-
-echo "== 2. 非空转(抽掉一条<ins>确在实改集里</ins>的申报行,应 RED 且点名它)=="
-# 抽的行必须真在实改集里:先取 tracked 轴(git status),空则取 ignored 轴(与基线比 sha)。抽不在实改集里的行永远不红 —— 那不是非空转,是空转。
+# 申报清单 → 纯路径集(剥哈希前缀 / git 状态位 / rename 箭头 / 行尾注释)
 declp=$(sed -e 's/^[0-9a-f]\{40,\}  //' -e 's/^git \(..\) //' -e 's/^git //' "$DECL" | sed 's/.* -> //' | sed 's/^[[:space:]]*//' | grep -v '^#' | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' | grep . | sort -u)
-victim=""
-changed=$(flow_changed_paths) || { echo "  ⚠ 实改集枚举失败(flow_changed_paths RC≠0)—— 非空转无对象可抽"; red=1; changed=""; }
-for p in $changed; do printf '%s\n' "$declp" | grep -qxF -- "$p" && { victim="$p"; break; }; done
-if [ -z "$victim" ]; then
-  # 扫描区与 flow-manifest verify 同源:优先基线头行 areas:,旧格式基线才回退到路径首段
-  areas=$(sed -n '1s/^# freeze-baseline .* areas: //p' "$BASE")
-  [ -n "$areas" ] || areas=$(sed -n 's|^sha [0-9a-f]*  ||p' "$BASE" | cut -d/ -f1 | sort -u)
-  sed -n 's/^sha //p' "$BASE" | sort > "$TMP/base-sha"
-  for a in $areas; do [ -d "$a" ] && find "$a" -type f | while IFS= read -r f; do flow_sha256 "$f"; done; done | sort > "$TMP/cur-sha"
-  for p in $(comm -13 "$TMP/base-sha" "$TMP/cur-sha" | sed 's/^[0-9a-f]*  //'); do printf '%s\n' "$declp" | grep -qxF -- "$p" && { victim="$p"; break; }; done
-fi
-if [ -z "$victim" ]; then
-  echo "  实改集为空(或与申报零交集),非空转无对象 —— 不判红,但此时 verify OK 只证明「没改」,不证明探测器活着"
-else
-  printf '%s\n' "$declp" | grep -vxF -- "$victim" > "$TMP/decl-minus"
-  flow-manifest verify "$BASE" "$TMP/decl-minus" > "$TMP/verify2" 2>&1; rc2=$?
-  grep -E 'RED|OK|FATAL' "$TMP/verify2"; echo "RC=$rc2(抽掉 $victim)"
-  if [ "$rc2" = 1 ] && grep -qF "RED 漏申报: $victim" "$TMP/verify2"; then
-    :
-  else
-    echo "  ⚠ 非空转失败:抽掉实改集里的一行后没有点名它的 RED —— verify 本身不可信"; red=1
-  fi
-fi
 
-if [ -n "$AFTER" ]; then
-  echo "== 3. 交付态哈希 sha256 -c $(basename "$AFTER") =="
+step_after() {
+  [ -n "$AFTER" ] || return 0
+  hdr "交付态哈希 sha256 -c $(basename "$AFTER")"
   flow_sha256_check "$AFTER" > "$TMP/after" 2>/dev/null
   ok=$(grep -c ': OK$' "$TMP/after"); bad=$(grep -vc ': OK$' "$TMP/after")
   echo "OK=$ok FAILED=$bad"
   [ $((ok+bad)) -gt 0 ] || { echo "  ⚠ 零条结果(清单为空或校验工具没跑起来)—— 空集不算绿(§J0)"; red=1; }
   [ "$bad" = 0 ] || { grep -v ': OK$' "$TMP/after"; echo "  (FAILED 若全在编排方并行编辑面则不算红 —— 由编排方自判,本脚本按红报)"; red=1; }
-fi
+}
 
-echo "== 4. flow-route-debts --lint =="
-flow-route-debts --lint; rc4=$?; [ "$rc4" = 0 ] || red=1
+step_manifest() {
+  hdr "flow-manifest verify"
+  # 同层捕获:命令一次跑进文件,RC 紧跟其后;判读只读那个文件
+  flow-manifest verify "$BASE" "$DECL" > "$TMP/verify" 2>&1; rc=$?
+  grep -E 'RED|OK|FATAL|WARN' "$TMP/verify"; echo "RC=$rc"
+  grep -qE 'verify OK' "$TMP/verify" || red=1
+}
 
-echo "== 5. flow-doc-budget =="
-flow-doc-budget "$DIR" > "$TMP/budget" 2>&1; rc5=$?
-grep -E '^RED|^FATAL|^WARN|^——|^info' "$TMP/budget"; echo "RC=$rc5"
-[ "$rc5" = 0 ] || red=1
-
-echo "== 6. 规则书棘轮 $FLOW_LOCAL_DOC(上限 $FLOW_DOC_BUDGET_RULEBOOK 行;只许降)=="
-if [ -f "$FLOW_LOCAL_DOC_PATH" ]; then
-  cur=$(wc -l < "$FLOW_LOCAL_DOC_PATH" | tr -d ' ')
-  rl="$FLOW_FLOW_DIR_PATH/.rulebook-lines"
-  if [ -f "$rl" ]; then
-    stored=$(tr -d ' \n' < "$rl")
-    case "$stored" in ''|*[!0-9]*) flow_die "棘轮记录不是数字,拒绝比对: $rl 内容「$stored」" ;; esac
-    if [ "$cur" -gt "$stored" ]; then
-      echo "RED 规则书变长: $stored → $cur(棘轮只许降;退役规矩后重跑)"; red=1
+step_hollow() {
+  hdr "非空转(抽掉一条确在实改集里的申报行,应 RED 且点名它)"
+  victim=""
+  changed=$(flow_changed_paths) || { echo "  ⚠ 实改集枚举失败(flow_changed_paths RC≠0)—— 非空转无对象可抽"; red=1; changed=""; }
+  for p in $changed; do printf '%s\n' "$declp" | grep -qxF -- "$p" && { victim="$p"; break; }; done
+  if [ -z "$victim" ]; then
+    # 扫描区与 flow-manifest verify 同源:优先基线头行 areas:,旧格式基线才回退到路径首段
+    areas=$(sed -n '1s/^# freeze-baseline .* areas: //p' "$BASE")
+    [ -n "$areas" ] || areas=$(sed -n 's|^sha [0-9a-f]*  ||p' "$BASE" | cut -d/ -f1 | sort -u)
+    sed -n 's/^sha //p' "$BASE" | sort > "$TMP/base-sha"
+    for a in $areas; do [ -d "$a" ] && find "$a" -type f | while IFS= read -r f; do flow_sha256 "$f"; done; done | sort > "$TMP/cur-sha"
+    for p in $(comm -13 "$TMP/base-sha" "$TMP/cur-sha" | sed 's/^[0-9a-f]*  //'); do printf '%s\n' "$declp" | grep -qxF -- "$p" && { victim="$p"; break; }; done
+  fi
+  if [ -z "$victim" ]; then
+    echo "  实改集为空(或与申报零交集),非空转无对象 —— 不判红,但此时 verify OK 只证明「没改」,不证明探测器活着"
+  else
+    printf '%s\n' "$declp" | grep -vxF -- "$victim" > "$TMP/decl-minus"
+    flow-manifest verify "$BASE" "$TMP/decl-minus" > "$TMP/verify2" 2>&1; rc2=$?
+    grep -E 'RED|OK|FATAL' "$TMP/verify2"; echo "RC=$rc2(抽掉 $victim)"
+    if [ "$rc2" = 1 ] && grep -qF "RED 漏申报: $victim" "$TMP/verify2"; then
+      :
     else
-      printf '%s\n' "$cur" > "$rl"; echo "OK 规则书棘轮: $stored → $cur"
+      echo "  ⚠ 非空转失败:抽掉实改集里的一行后没有点名它的 RED —— verify 本身不可信"; red=1
+    fi
+  fi
+}
+
+step_tree() {
+  hdr "树读数(HEAD + porcelain;读数不判红,交接口的对账靠它)"
+  echo "HEAD=$(git -C "$FLOW_REPO_DIR" rev-parse --short HEAD)"
+  git -C "$FLOW_REPO_DIR" -c core.quotepath=false status --porcelain -uall > "$TMP/porc"; prc=$?
+  echo "porcelain=$(LC_ALL=C grep -c . "$TMP/porc") RC=$prc"
+  [ "$prc" = 0 ] || { echo "  ⚠ porcelain 枚举失败 —— 空集不算绿"; red=1; }
+}
+
+step_route() {
+  [ -n "$TASK" ] || { echo "== (路由复跑跳过:未给 --task)=="; return 0; }
+  hdr "路由复跑(按申报清单的实改路径;diff 派单必读,漏路由当场红)"
+  # 多行路径不进 -v / 不靠 zsh 分词:逐行读进位置参数
+  set --
+  for p in $declp; do set -- "$@" "$p"; done
+  flow-route-debts "$TASK" "$@" > "$TMP/route" 2>&1; rrc=$?
+  cat "$TMP/route"; echo "RC=$rrc 条数=$(grep -c '^- ' "$TMP/route" || true)"
+  [ "$rrc" = 0 ] || red=1
+}
+
+step_trace() {
+  { [ -n "$TASK" ] && [ -n "$PLAN" ]; } || { echo "== (REQ 对账跳过:需 --task 与 --plan)=="; return 0; }
+  hdr "flow-trace REQ ↔ 测试对账"
+  flow-trace "$PLAN" "$TASK" > "$TMP/trace" 2>&1; trc=$?
+  tail -1 "$TMP/trace"; echo "RC=$trc"
+  [ "$trc" = 0 ] || red=1
+}
+
+step_lint() {
+  hdr "flow-route-debts --lint"
+  flow-route-debts --lint; rc4=$?; [ "$rc4" = 0 ] || red=1
+}
+
+step_budget() {
+  hdr "flow-doc-budget"
+  flow-doc-budget "$DIR" > "$TMP/budget" 2>&1; rc5=$?
+  grep -E '^RED|^FATAL|^WARN|^——|^info' "$TMP/budget"; echo "RC=$rc5"
+  [ "$rc5" = 0 ] || red=1
+}
+
+step_rulebook() {
+  hdr "规则书棘轮 $FLOW_LOCAL_DOC(上限 $FLOW_DOC_BUDGET_RULEBOOK 行;只许降)"
+  if [ -f "$FLOW_LOCAL_DOC_PATH" ]; then
+    cur=$(wc -l < "$FLOW_LOCAL_DOC_PATH" | tr -d ' ')
+    rl="$FLOW_FLOW_DIR_PATH/.rulebook-lines"
+    if [ -f "$rl" ]; then
+      stored=$(tr -d ' \n' < "$rl")
+      case "$stored" in ''|*[!0-9]*) flow_die "棘轮记录不是数字,拒绝比对: $rl 内容「$stored」" ;; esac
+      if [ "$cur" -gt "$stored" ]; then
+        echo "RED 规则书变长: $stored → $cur(棘轮只许降;退役规矩后重跑)"; red=1
+      else
+        printf '%s\n' "$cur" > "$rl"; echo "OK 规则书棘轮: $stored → $cur"
+      fi
+    else
+      mkdir -p "$FLOW_FLOW_DIR_PATH"; printf '%s\n' "$cur" > "$rl"
+      echo "OK 规则书棘轮首次记账: $cur 行 → $rl"
+    fi
+    if [ "$cur" -gt "$FLOW_DOC_BUDGET_RULEBOOK" ]; then
+      echo "RED 规则书 $cur 行 > 上限 $FLOW_DOC_BUDGET_RULEBOOK:$FLOW_LOCAL_DOC_PATH"; red=1
     fi
   else
-    mkdir -p "$FLOW_FLOW_DIR_PATH"; printf '%s\n' "$cur" > "$rl"
-    echo "OK 规则书棘轮首次记账: $cur 行 → $rl"
+    echo "  规则书不存在,跳过: $FLOW_LOCAL_DOC_PATH"
   fi
-  if [ "$cur" -gt "$FLOW_DOC_BUDGET_RULEBOOK" ]; then
-    echo "RED 规则书 $cur 行 > 上限 $FLOW_DOC_BUDGET_RULEBOOK:$FLOW_LOCAL_DOC_PATH"; red=1
-  fi
-else
-  echo "  规则书不存在,跳过: $FLOW_LOCAL_DOC_PATH"
-fi
+}
 
+if [ "$MODE" = between ]; then
+  step_after; step_manifest; step_hollow; step_tree; step_route; step_trace; step_budget
+  if [ "$red" = 0 ]; then echo "BETWEEN OK"; exit 0; else echo "BETWEEN RED"; exit 1; fi
+fi
+step_manifest; step_hollow; step_after; step_lint; step_budget; step_rulebook
 if [ "$red" = 0 ]; then echo "ROUND-CLOSE OK"; exit 0; else echo "ROUND-CLOSE RED"; exit 1; fi

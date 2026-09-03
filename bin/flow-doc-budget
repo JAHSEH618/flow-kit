@@ -3,6 +3,7 @@
 # 病根:移交件把命令全量输出与上游正文直接抄进热路径 ⟹ 后续每一轮都为它付读取时间与 token(一个失控批次的流程目录能到正常批的 3 倍行数)。
 # 三条结构规矩(§D)由本脚本机械执行其可数的那部分:
 #   · 单件 > FLOW_DOC_BUDGET_FILE 行 **或** > FLOW_DOC_BUDGET_BYTES 字节,且首 5 行无 `budget-ok:<理由>` 标记 ⟹ RED(RC=1)
+#     字节数 > 红线的 90% ⟹ WARN(近线预警:实测两份 ④ 回件卡在 99%,作者是在压内容,不是在挪全量)
 #     (字节线是主判据:token 按字节计,一份 112 KB 的复验件靠长行躲过了 400 行线;行数线只挡「行多」这一种胀法)
 #   · 目录热路径合计 > FLOW_DOC_BUDGET_DIR 行 ⟹ WARN(件数问题多半是轮次问题,先看 §B-severity)
 #   · `.evidence/` 子目录 = 旁证区,不设限不计入 —— 命令全量输出落这里,移交件贴摘录+路径。
@@ -38,6 +39,8 @@ for d in "$@"; do
         echo "RED  $lines 行 $bytes 字节 $f($over;全量输出移 .evidence/ 贴摘录+路径,或首部加 budget-ok:<理由>)"
         red=1
       fi
+    elif [ $((bytes * 10)) -gt $((FLOW_DOC_BUDGET_BYTES * 9)) ]; then
+      echo "WARN $lines 行 $bytes 字节 $f(> 字节线的 90%:贴线时作者会去压内容而不是把全量挪进 .evidence/ —— 先挪再写)"
     else
       echo "ok   $lines 行 $bytes 字节 $f"
     fi

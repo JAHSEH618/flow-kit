@@ -63,7 +63,8 @@ FLOW_KEEP_MCP="exa"                                               # 用户级 MC
 
 # ── 预算与阈值 ───────────────────────────────────────────────────────────────
 FLOW_DOC_BUDGET_FILE=400               # 单个流程件行数红线
-FLOW_DOC_BUDGET_BYTES=32000            # 单个流程件字节红线(token 按字节计;112 KB 的复验件靠长行躲过了行数线)
+FLOW_DOC_BUDGET_BYTES=40000            # 单个流程件字节红线(token 按字节计;112 KB 的复验件靠长行躲过了行数线)
+#                                        实测两份 ④ 回件卡在旧线 32000 的 99% ⟹ 红线在塑造内容;超 90% 会先 WARN
 FLOW_DOC_BUDGET_DIR=4000               # 流程目录热路径合计行数 WARN 线
 FLOW_DOC_BUDGET_RULEBOOK=250           # 规则书(flow-local.md)行数上限;棘轮:只许降
 FLOW_DEBT_CAP=8                        # owner 归本任务的欠账条数上限(超过 = 拆任务或 --cap-ok)
@@ -71,5 +72,7 @@ FLOW_DEBT_WARN=16                      # 必读总条数只 WARN 的线
 FLOW_FIX_BY_WRITER=1                   # 1 = ③改轮 SendMessage 回①写轮本人;0 = 另起 agent
 FLOW_FOLD_MAX=6                        # 折轮条件:不阻塞条 ≤ 此数且全在③写权限面内 ⟹ 不起收尾轮
 FLOW_REQ_CAP=8                         # 任务节 open REQ 条数上限:①写是最长的会话,携带成本随轮数平方长,超了拆任务(或 --cap-ok)
+FLOW_RECEIPT_MODE="section"            # plan 体例:section = 任务是 `## <任务号>` 小节;table = 任务是表行
+#                                        体例不对时 flow-receipts 恒 FATAL,接收位就退回人眼核 —— 这是装第二个项目才暴露的
 FLOW_ROLE_MODELS=""                    # 分角色模型,如 "②A=sonnet";空 = 继承编排方。换前同一产物两模型各审一次,flow-review-diff 原版独有为空才换
 FLOW_TRANSCRIPTS_DIR="$HOME/.claude/projects"   # flow-usage 读 transcripts 的根(收口时 flow-usage <流程目录> --write 自动填轮数账)

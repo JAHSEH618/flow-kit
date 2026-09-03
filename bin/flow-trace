@@ -5,7 +5,8 @@
 #
 # 用法: flow-trace <plan文件(仓相对或绝对)> <任务号>
 #   例: flow-trace specs/plan/p4-api-spa.md P4-T2
-# 读的是:任务节 `## <任务号>` 内每一行 `REQ-<任务>-NN [open|done|deferred …]`(格式见协议 §账本与 spec)。
+# 读的是:任务节 `## <任务号>` 内每一行 `REQ-<任务号>-NN [open|done|deferred …]`(格式见协议 §账本与 spec)。
+#   任务号可含连字符(`REQ-P4-T2-01` 与 `REQ-P4T2-01` 都认;模式单源 lib 的 flow_req_re)。
 # 测试文件 = git 看得见的 *.test.ts(x) / *.spec.ts(x),含未跟踪(测试先行:新测试在提交前就该算数)。
 # 判定:
 #   · open / done 的 REQ 零测试 ⟹ RED(RC=1)
@@ -36,15 +37,16 @@ sec_end=$(awk -v s="$sec_start" 'NR>s && /^## /{print NR-1; exit}' "$f")
 sed -n "${sec_start},${sec_end}p" "$f" > "$tmp/sec"
 
 # 定义行 = 同一行既有 REQ-ID 又有 [状态];只提到 ID 没有状态的行单独记,后面判 RED
-LC_ALL=C grep -E 'REQ-[A-Z0-9]+-[0-9]+' "$tmp/sec" > "$tmp/mentions"
+REQ_RE=$(flow_req_re)
+LC_ALL=C grep -E "$REQ_RE" "$tmp/sec" > "$tmp/mentions"
 : > "$tmp/defs"
 while IFS= read -r L; do
-  id=$(printf '%s' "$L" | LC_ALL=C grep -oE 'REQ-[A-Z0-9]+-[0-9]+' | head -1)
+  id=$(printf '%s' "$L" | LC_ALL=C grep -oE "$REQ_RE" | head -1)
   st=$(printf '%s' "$L" | LC_ALL=C grep -oE '\[(open|done|deferred[^]]*)\]' | head -1 | tr -d '[]')
   [ -n "$st" ] && printf '%s\t%s\n' "$id" "$st" >> "$tmp/defs"
 done < "$tmp/mentions"
 sort -u -o "$tmp/defs" "$tmp/defs"
-LC_ALL=C grep -oE 'REQ-[A-Z0-9]+-[0-9]+' "$tmp/mentions" | sort -u > "$tmp/allids"
+LC_ALL=C grep -oE "$REQ_RE" "$tmp/mentions" | sort -u > "$tmp/allids"
 nreq=$(LC_ALL=C grep -c . "$tmp/allids")
 if [ "$nreq" -eq 0 ]; then
   echo "FATAL: 节 ## $t 里零条 REQ 行 —— 「全覆盖」与「没扫到」不许同型;先把验收写成 REQ-ID [open] 一句一行" >&2
@@ -87,7 +89,7 @@ if [ -n "$nostatus" ]; then
 fi
 
 # 孤儿:测试引了、任何 spec md 都没有的 REQ
-tr '\n' '\0' < "$tmp/tests" | LC_ALL=C xargs -0 grep -ohE '\[REQ-[A-Z0-9]+-[0-9]+\]' 2>/dev/null | tr -d '[]' | sort -u > "$tmp/cited"
+tr '\n' '\0' < "$tmp/tests" | LC_ALL=C xargs -0 grep -ohE "\[$REQ_RE\]" 2>/dev/null | tr -d '[]' | sort -u > "$tmp/cited"
 orphans=0
 while IFS= read -r id; do
   [ -n "$id" ] || continue

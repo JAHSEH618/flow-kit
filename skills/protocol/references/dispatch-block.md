@@ -22,7 +22,8 @@
 - 读取纪律:上一轮回件首节「改动索引表」→ 按表只读文件区间;整读一个文件要给一行理由;plan 只读节选,账本只读必读段
 - 工具纪律:互不依赖的调用放同一条消息并发;多步 shell 合一个 Bash;flow-* 与门的输出落 .evidence/,判读贴末行读数 + RC
 - 证据源封闭:树 · 上游 spec · 本批流程目录;会话记录与 tool-results 不是证据源
-- 收工件:.after-<轮名>-hashes.txt · .declared-<轮名>.txt(一行一路径,不许散文) · <N>-<轮名>-handoff.md(照 references/handoff-template.md,首节改动索引表)
+- 回件模板:(flow-dispatch 按 --round 印出绝对路径;prompt 里不许手打插件缓存路径 —— 它带版本号,升级即断)
+- 收工件:.after-<轮名>-hashes.txt · .declared-<轮名>.txt(一行一路径,不许散文) · <N>-<轮名>-handoff.md(首节改动索引表)
     自跑 flow-manifest verify(文件参数绝对)拿 RC + 非空转;必须读到 `verify OK` 或 `RED` 字样,FATAL 与没跑一律当红
 - 本地规矩:读工作区 .claude/flow-local.md(项目自己的门命令、单点资源、实录)
 ```
@@ -72,6 +73,6 @@ flow-fact-lint verify 新增 RED 零。自报三处最没把握。
 ```
 你是 <批次> 的 <轮名> agent。派单:<流程目录绝对路径>/<轮号>-dispatch.md —— 先整读它,再读工作区 .claude/flow-local.md,然后开工。
 (Agent 调用的 model 参数照派单块「轮次 / 模型」行;第一行的批次 + 轮名 + 派单路径是 flow-usage 认会话的依据,别改写)
-回件:<流程目录绝对路径>/<N>-<轮名>-handoff.md,照 flow-kit protocol skill 的 references/handoff-template.md(复审轮用 review-template.md),边写边落。
+回件:<流程目录绝对路径>/<N>-<轮名>-handoff.md,模板照派单块「回件模板」行给的绝对路径(别自己拼插件缓存路径),边写边落。
 收工读数(flow-manifest verify 末行 + RC)写在回件末尾;不必回信,编排方读文件。
 ```

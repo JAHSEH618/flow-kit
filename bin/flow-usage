@@ -2,10 +2,15 @@
 # flow-usage —— 轮数账自动填:从 Claude Code transcripts 按轮次汇总 轮数 / 携带 token / 输出 token / 调用每轮 / 时长 / 模型。
 # 病根:轮数账的 token 列从来没填过,§5「只比不涨」的检验判据一直是空的;真数据一直躺在 transcripts 里(每条 assistant 行带 message.usage)。
 # 会话归属:sub-agent 的第一条 user 消息里含流程目录绝对路径(三行 prompt 的第一行就是它)⟹ 归本批;
-#   轮名取该消息里最先出现的 ①写 / ②A / ②B / ③改 / ④A / ④B(旧派单只有 ④ 的记成「④(旧单段)」);③改回①本人时并入①写行(同一会话)。
+#   轮名先按「的 <轮名> agent」这个模式取(三行 prompt 首行的固定写法);取不到才退到「按 ROLES 顺序找第一个命中」。
+#     ⚠ 别按「最早出现的位置」取:批次名里带圈码时(「P4 批次②」)全部 agent 会被归成②,实测五轮全归一行,轮数账只能手填。
+#   ③改回①本人时并入①写行(同一会话)。
 #   含这些 sub-agent 的父会话 = 编排方,单独一行(它若跨批,数字含别批的活,备注标「跨批」由人判)。
 # 计数:轮 = 去重 message.id 的 assistant 消息数(流式分片同 id);携带 = Σ(input + cache_creation + cache_read);调用 = tool_use 块数(按 id 去重);
 #   当量 = input×1 + cache_creation×1.25 + cache_read×0.1 + output×5(以 input 单价为 1,供批间只比不涨;不是账单)。
+#   编排方按**本批时间窗**切:窗 = 父会话里提到本批流程目录路径的首末时间戳 ∪ 本批 sub-agent 的时段。
+#     前半段是关键:开工清账与派单装配发生在第一个 agent 起来**之前**,只按 sub-agent 时段切会把它整段丢掉。
+#     父会话一次都没提到流程目录 ⟹ 不切窗(备注写明),跨批时数字偏大 —— 但「切了却切错」比「没切」更坏。
 # 用法: flow-usage <流程目录(绝对)> [--write]      --write 另写 <流程目录>/.usage.md(dotfile,不进 doc-budget 热路径)
 # 末行固定:`USAGE OK: N 会话 / M 轮`;零会话命中 ⟹ FATAL RC=2(空集不算绿:「没花 token」与「没扫到」不许同型)。
 # 读的配置:FLOW_TRANSCRIPTS_DIR(默认 ~/.claude/projects;结构 <项目>/<会话>/subagents/agent-*.jsonl)
@@ -20,7 +25,7 @@ case "$WRITE" in ""|--write) ;; *) flow_die "未知参数 $WRITE" ;; esac
 [ -d "$FLOW_TRANSCRIPTS_DIR" ] || flow_die "transcripts 根不存在: $FLOW_TRANSCRIPTS_DIR(FLOW_TRANSCRIPTS_DIR)"
 
 python3 - "$DIR" "$FLOW_TRANSCRIPTS_DIR" "$WRITE" <<'PY'
-import sys, os, json, glob, collections, datetime
+import sys, os, re, json, glob, collections, datetime
 flowdir, tdir, write = sys.argv[1:4]
 flowdir = flowdir.rstrip('/')
 ROLES = ['④A', '④B', '②A', '②B', '①写', '③改', '④复审', '④', '②', '①', '③']
@@ -40,21 +45,27 @@ def first_user_text(path):
     return ''
 
 def role_of(txt):
-    best = None
+    # 轴1:三行 prompt 首行的固定写法「你是 <批次> 的 <轮名> agent」——批次名里的圈码不参与
+    m = re.search(r'的\s*(④A|④B|②A|②B|①写|③改|④复审|④|②|①|③)[^\n]{0,12}?agent', txt)
+    if m: return LABEL.get(m.group(1), m.group(1))
+    # 轴2:退化路径按 ROLES 顺序(长串在前)找第一个命中,不按出现位置
     for r in ROLES:
-        i = txt.find(r)
-        if i >= 0 and (best is None or i < best[0]): best = (i, r)
-    return LABEL.get(best[1], best[1]) if best else '未识别'
+        if r in txt: return LABEL.get(r, r)
+    return '未识别'
 
 def ts(s):
     return datetime.datetime.fromisoformat(s.replace('Z', '+00:00'))
 
-def stats(path):
+def stats(path, win=None):
     seen = {}; tools = set(); stamps = []; models = collections.Counter()
     with open(path, encoding='utf-8', errors='replace') as fh:
         for line in fh:
             try: o = json.loads(line)
             except Exception: continue
+            if win and o.get('timestamp'):
+                try:
+                    if not (win[0] <= ts(o['timestamp']) <= win[1]): continue
+                except Exception: pass
             if o.get('timestamp'): stamps.append(o['timestamp'])
             if o.get('type') != 'assistant': continue
             m = o.get('message') or {}; u = m.get('usage') or {}; mid = m.get('id')
@@ -82,13 +93,46 @@ def add(role, st):
     r = rows[role]
     for k in ('turns', 'inp', 'cw', 'cr', 'out', 'carried', 'eq', 'tools', 'dur', 'n'): r[k] += st[k]
     r['model'][st['model']] += 1
+hits = []
 for f in files:
     if flowdir not in first_user_text(f): continue
     matched += 1
-    add(role_of(first_user_text(f)), stats(f))
+    st = stats(f)
+    add(role_of(first_user_text(f)), st)
+    hits.append(f)
     parents.add(os.path.dirname(os.path.dirname(f)) + '.jsonl')
+
+def span(path, needle=None):
+    """文件里(含 needle 的)行的首末时间戳;needle=None = 全部行"""
+    lo = hi = None
+    with open(path, encoding='utf-8', errors='replace') as fh:
+        for line in fh:
+            if needle and needle not in line: continue
+            try: o = json.loads(line)
+            except Exception: continue
+            if not o.get('timestamp'): continue
+            try: t = ts(o['timestamp'])
+            except Exception: continue
+            lo = t if lo is None or t < lo else lo
+            hi = t if hi is None or t > hi else hi
+    return lo, hi
+
+# 本批时间窗:先取 sub-agent 时段,再并上父会话里提到流程目录的那段(派单装配在第一个 agent 之前)
+slo = shi = None
+for f in hits:
+    a, b = span(f)
+    if a and (slo is None or a < slo): slo = a
+    if b and (shi is None or b > shi): shi = b
+winnote = ''
 for p in sorted(parents):
-    if os.path.isfile(p): add('编排方', stats(p))
+    if not os.path.isfile(p): continue
+    a, b = span(p, flowdir)
+    lo = min([x for x in (a, slo) if x], default=None)
+    hi = max([x for x in (b, shi) if x], default=None)
+    win = (lo, hi) if (a and b) else None      # 父会话零次提到流程目录 ⟹ 不切窗(切错比不切坏)
+    if win: winnote = '(窗 ' + lo.astimezone().strftime('%m-%d %H:%M') + '–' + hi.astimezone().strftime('%H:%M') + ',父会话提到本流程目录的时段 ∪ sub-agent 时段)'
+    else:   winnote = '(无窗:父会话零次提到本流程目录,跨批时数字偏大)'
+    add('编排方', stats(p, win))
 if matched == 0:
     print(f'FATAL: {tdir} 下扫了 {len(files)} 份 sub-agent transcript,没有一份的首条 user 消息含 {flowdir} —— 空集不算绿', file=sys.stderr); sys.exit(2)
 
@@ -104,7 +148,7 @@ for role in ORDER + sorted(set(rows) - set(ORDER)):
     if role not in rows: continue
     r = rows[role]; cpt = r['tools'] / r['turns'] if r['turns'] else 0
     model = r['model'].most_common(1)[0][0]
-    lines.append(f"| {role} | {hm(r['dur'])} | 携带 {k(r['carried'])} · 输出 {k(r['out'])} · 当量 {k(r['eq'])} | {r['turns']} 轮 · {cpt:.2f} 调用/轮 · {model} · {r['n']} 会话{'(含别批时数字偏大)' if role == '编排方' else ''} |")
+    lines.append(f"| {role} | {hm(r['dur'])} | 携带 {k(r['carried'])} · 输出 {k(r['out'])} · 当量 {k(r['eq'])} | {r['turns']} 轮 · {cpt:.2f} 调用/轮 · {model} · {r['n']} 会话{winnote if role == '编排方' else ''} |")
     total_turns += r['turns']; total_sessions += r['n']
 sub = [rows[x] for x in rows if x != '编排方']
 lines.append(f"| sub-agent 合计 | {hm(sum(x['dur'] for x in sub))} | 携带 {k(sum(x['carried'] for x in sub))} · 输出 {k(sum(x['out'] for x in sub))} · 当量 {k(sum(x['eq'] for x in sub))} | {sum(x['turns'] for x in sub)} 轮 · {sum(x['n'] for x in sub)} 会话(并行轴时长各自计) |")

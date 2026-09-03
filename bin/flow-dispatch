@@ -16,7 +16,7 @@
 # 输出:整块 markdown 到 stdout,重定向成 <流程目录>/<轮号>-dispatch.md 就是派单;「(待填)」标记的行由编排方 Edit 补,其余勿手改 —— 要改就重跑。
 #   Agent prompt 只给这个文件的路径(编排方零 heredoc:它的输出按输出价计,一批里占它携带上下文的 33%)。
 #   带 --plan 时同源摘取任务节(`## <任务号> ` 到下一个 `## `,与 flow-receipts 同一套定位)印进块里:agent 只读节选,不整读 plan(一份 135 KB 的 plan 被读了 56 次)。
-# 读的配置:FLOW_REPO_DIR FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_REQ_CAP FLOW_ROLE_MODELS FLOW_FIX_BY_WRITER FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_BYTES FLOW_SPEC_DIRS FLOW_WS/FLOW_FACT_LINT_BASELINE;
+# 读的配置:FLOW_KIT_DIR(回件模板绝对路径,自算)FLOW_REPO_DIR FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_REQ_CAP FLOW_ROLE_MODELS FLOW_FIX_BY_WRITER FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_BYTES FLOW_SPEC_DIRS FLOW_WS/FLOW_FACT_LINT_BASELINE;
 #   子命令 flow-route-debts / flow-receipts 按名调用(PATH),输出原样嵌入。
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
@@ -96,9 +96,10 @@ fi
 # 任务节 REQ 计数(与 flow-trace 同一格式:同一行既有 REQ-ID 又有 [状态])
 NOPEN=0; NDONE=0; NDEF=0
 if [ -s "$TMP/sec" ]; then
-  NOPEN=$(LC_ALL=C grep -cE 'REQ-[A-Z0-9]+-[0-9]+.*\[open' "$TMP/sec")
-  NDONE=$(LC_ALL=C grep -cE 'REQ-[A-Z0-9]+-[0-9]+.*\[done' "$TMP/sec")
-  NDEF=$(LC_ALL=C grep -cE 'REQ-[A-Z0-9]+-[0-9]+.*\[deferred' "$TMP/sec")
+  REQ_RE=$(flow_req_re)
+  NOPEN=$(LC_ALL=C grep -cE "$REQ_RE.*\[open" "$TMP/sec")
+  NDONE=$(LC_ALL=C grep -cE "$REQ_RE.*\[done" "$TMP/sec")
+  NDEF=$(LC_ALL=C grep -cE "$REQ_RE.*\[deferred" "$TMP/sec")
 fi
 # 轮次 / 模型行:--round 给了才查 FLOW_ROLE_MODELS(空格分隔的 轮名=模型)
 if [ -n "$ROUND" ]; then
@@ -106,6 +107,15 @@ if [ -n "$ROUND" ]; then
   if [ -n "$MODEL" ]; then ROUNDLINE="- **轮次 / 模型**:$ROUND · model=$MODEL(config FLOW_ROLE_MODELS;Agent 调用带 model=$MODEL)"
   else ROUNDLINE="- **轮次 / 模型**:$ROUND · 继承编排方(FLOW_ROLE_MODELS 未给 $ROUND)"; fi
 else ROUNDLINE="- **轮次 / 模型**:(未给 --round;Agent 调用 model 继承编排方)"; fi
+
+# 回件模板:路径由 kit 自己算并印进派单件。手打的插件缓存路径带版本号(…/flow-kit/0.3.0/…),升级即断。
+TPL_H="$FLOW_KIT_DIR/skills/protocol/references/handoff-template.md"
+TPL_R="$FLOW_KIT_DIR/skills/protocol/references/review-template.md"
+case "$ROUND" in
+  ①写|③改)        TPLLINE="- **回件模板**(整块照抄):$TPL_H" ;;
+  ②A|②B|④A|④B|④*) TPLLINE="- **回件模板**(整块照抄):$TPL_R" ;;
+  *)               TPLLINE="- **回件模板**(整块照抄):写 / 改轮 $TPL_H · 审轮 $TPL_R" ;;
+esac
 
 # 命令行的逐字重建(给复审按 review-template 逐字重跑;参数与上面那次执行同一数组,同源 by construction)
 CMD="flow-route-debts $TASK"
@@ -133,6 +143,7 @@ $HEAD
 - **核心库写权限面**:$CORE
 - **裁决号段**:从 $SEQ 起
 $ROUNDLINE
+$TPLLINE
 - **冻结**:开工在仓库根跑 \`flow-manifest baseline <流程目录>/.manifest-baseline-<轮名>.txt\`(基线放仓外;收工 verify 由编排方在活树跑,protocol §1)
   ⚠ **baseline 打在编排方停止编辑之后**(protocol §3:打早了会让写轮收到幻影 RED,并教会所有人对 RED 耸肩)
 - **扫描纪律**:全仓口径判据须 \`command grep\` 或显式含 $SPECS(protocol §4 范围轴);零命中先过非空转(protocol §4)

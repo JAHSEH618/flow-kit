@@ -5,8 +5,9 @@
 # 用法: flow-clear-map-debt <commit短哈希> [--dry-run]
 #         同日追写模式(默认):账本里 X 的条目块内含「> **<今天>」开头的追写(= 本日已处置)⟹ 勾掉并写指针;否则留给人。
 #       flow-clear-map-debt --verdicts <三态表文件(绝对)> <commit短哈希> [--dry-run]
-#         三态表模式:表行 `| <标记> | <判定> | <证据> | <落点> |`,判定 ∈ {还, 追写, 不动};该 commit 的队列行凡标记在表里的
-#         勾掉并改写为「… | ④三态表:<判定> —— <证据>」;标记不在表里的留给人;判定不在三态集 = FATAL。
+#         三态表模式:表由 `flow-ledger verdicts` 解析(单一解析器 —— 判定格实际写作 `**还**`,自己再写一份正则就会
+#         把整条命令 FATAL 掉,两个仓的队列因此一直是手工勾的);该 commit 的队列行凡标记在表里的勾掉并改写为
+#         「… | ④三态表:<判定> —— <证据>」;标记不在表里的留给人。
 # 标记两种都认(圈码 ①–㊿ 与 #N)。路径:队列 = FLOW_MAP_DEBT_PATH,账本 = FLOW_LEDGER_PATH。
 # 只认 flow-post-commit 写的行格式 `- [ ] 日期 | commit | 触欠账X 的触面 | 该更新:…`。
 set -u
@@ -28,9 +29,19 @@ fi
 case "$DRY" in ""|--dry-run) ;; *) usage ;; esac
 [ -f "$FLOW_MAP_DEBT_PATH" ] || flow_die "map-debt 队列不存在: $FLOW_MAP_DEBT_PATH"
 
-python3 - "$MODE" "$C" "$DRY" "$FLOW_MAP_DEBT_PATH" "$FLOW_LEDGER_PATH" "$FLOW_LEDGER" "$TABLE" <<'PY'
+# 三态表解析单源:flow-ledger verdicts(同层捕获 RC;它自己会 FATAL 掉零合法行的表)
+TSV=""
+if [ "$MODE" = verdicts ]; then
+  TSV="$(flow_tmpdir)/flow-cmd-verdicts.$$"
+  flow-ledger verdicts "$TABLE" > "$TSV" 2>"$TSV.err"; vrc=$?
+  if [ "$vrc" -ne 0 ]; then echo "FATAL: flow-ledger verdicts RC=$vrc" >&2; cat "$TSV.err" >&2; rm -f "$TSV" "$TSV.err"; exit 2; fi
+  cat "$TSV.err" >&2; rm -f "$TSV.err"
+fi
+trap 'rm -f "$TSV"' EXIT
+
+python3 - "$MODE" "$C" "$DRY" "$FLOW_MAP_DEBT_PATH" "$FLOW_LEDGER_PATH" "$FLOW_LEDGER" "$TSV" <<'PY'
 import sys,re,datetime
-mode,c,dry,q,d,dname,table=sys.argv[1:8]
+mode,c,dry,q,d,dname,tsv=sys.argv[1:8]
 MARK=r'(?:[①-⑳㉑-㉟㊱-㊿]|#\d+)'      # 与 flow_mark_re 同集:圈码 1–50 与 #N
 today=datetime.date.today().isoformat()
 row_re=re.compile(r'^- \[ \] (\S+) \| '+re.escape(c)+r' \| 触欠账('+MARK+r') 的触面 \| 该更新:(.*)$')
@@ -50,17 +61,14 @@ if mode=='writeup':
             return f'{today} 收口清账:账本该条同日追写已落(commit 前),见 {dname} {mark} 的「{today}」段;hook 记账重复,勾掉'
         return None
 else:
+    # 表已由 flow-ledger verdicts 解析成 TSV:标记<TAB>判定<TAB>证据(末行 VERDICTS OK 不是数据行)
     verdicts={}
-    trow=re.compile(r'^\|\s*('+MARK+r')\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*$')
-    for l in open(table,encoding='utf-8').read().split('\n'):
-        l=l.replace('\\|','\x00')   # 证据格里的转义竖线先藏起来
-        m=trow.match(l)
-        if not m: continue
-        mark,verdict,evidence,_=[x.replace('\x00','|') if x else x for x in m.groups()]
-        if verdict not in ('还','追写','不动'):
-            fatal(f'三态表 {mark} 的判定「{verdict}」不在 {{还, 追写, 不动}}')
-        verdicts[mark]=(verdict,evidence)
-    if not verdicts: fatal('三态表里没有一行合法的 `| <标记> | <判定> | <证据> | <落点> |`')
+    for l in open(tsv,encoding='utf-8').read().split('\n'):
+        if not l or l.startswith('VERDICTS OK'): continue
+        parts=l.split('\t')
+        if len(parts)<3: continue
+        verdicts[parts[0]]=(parts[1],parts[2])
+    if not verdicts: fatal('flow-ledger verdicts 给出零行判定')
     def decide(mark):
         v=verdicts.get(mark)
         return None if v is None else f'④三态表:{v[0]} —— {v[1]}'

@@ -94,12 +94,16 @@ expect_rc 0 "flow-dispatch" flow-dispatch T1 --tree 快照 --db 禁用 --seq 1 s
 printf '%s' "$LAST_OUT" | grep -q '#1' && ok "派单块含欠账 #1" || fail "派单块缺欠账"
 printf '%s' "$LAST_OUT" | grep -q '边写边落' && ok "派单块含边写边落" || fail "派单块缺边写边落"
 printf '%s' "$LAST_OUT" | grep -q '证据源封闭' && ok "派单块含证据源封闭" || fail "派单块缺证据源封闭"
-printf '%s' "$LAST_OUT" | grep -q '≤32000 字节' && ok "派单块含字节预算" || fail "派单块缺字节预算"
+printf '%s' "$LAST_OUT" | grep -q '≤40000 字节' && ok "派单块含字节预算" || fail "派单块缺字节预算"
 expect_rc 2 "flow-dispatch 绝对触面 FATAL" flow-dispatch T1 --tree 快照 --db 禁用 --seq 1 /abs
 expect_rc 0 "flow-doc-budget" flow-doc-budget "$FL"
-head -c 40000 /dev/zero | tr '\0' x > "$FL/98-fat.md"; printf '\n' >> "$FL/98-fat.md"
-expect_rc 1 "flow-doc-budget 字节红线(1 行 40001 字节)" flow-doc-budget "$FL"
-printf '%s' "$LAST_OUT" | grep -q 'RED .*40001 字节 > 32000' && ok "字节超限点名" || fail "字节超限未点名: $LAST_OUT"
+head -c 48000 /dev/zero | tr '\0' x > "$FL/98-fat.md"; printf '\n' >> "$FL/98-fat.md"
+expect_rc 1 "flow-doc-budget 字节红线(1 行 48001 字节)" flow-doc-budget "$FL"
+printf '%s' "$LAST_OUT" | grep -q 'RED .*48001 字节 > 40000' && ok "字节超限点名" || fail "字节超限未点名: $LAST_OUT"
+head -c 38000 /dev/zero | tr '\0' y > "$FL/97-near.md"; printf '\n' >> "$FL/97-near.md"
+expect_rc 1 "近线件不改红绿(同目录仍有 RED 件)" flow-doc-budget "$FL"
+printf '%s' "$LAST_OUT" | grep -q 'WARN .*38001 字节 .*97-near.md(> 字节线的 90%' && ok "90% 近线 WARN" || fail "近线未 WARN: $(printf '%s' "$LAST_OUT" | grep 97-near)"
+rm -f "$FL/97-near.md"
 { printf 'budget-ok:冒烟\n'; cat "$FL/98-fat.md"; } > "$FL/98-fat.tmp" && mv "$FL/98-fat.tmp" "$FL/98-fat.md"
 expect_rc 0 "flow-doc-budget budget-ok 带过字节线" flow-doc-budget "$FL"
 rm -f "$FL/98-fat.md"
@@ -313,13 +317,16 @@ with open(os.path.join(tr, 'subagents', 'agent-2.jsonl'), 'w') as f:
     f.write(user('2026-09-03T01:00:00.000Z', '别的批次 /nowhere/.flow/x') + '\n')
     f.write(asst('m9', '2026-09-03T01:00:10.000Z', [dict(type='text', text='x')]) + '\n')
 with open(os.path.join(os.path.dirname(tr), 'sid1.jsonl'), 'w') as f:
-    f.write(user('2026-09-03T00:59:00.000Z', '起一批') + '\n')
+    # 派单装配在第一个 agent 起来之前 —— 只按 sub-agent 时段切窗会把它整段丢掉
+    f.write(user('2026-09-03T00:58:00.000Z', f'起一批,派单落 {fl}/01-dispatch.md') + '\n')
     f.write(asst('o1', '2026-09-03T00:59:30.000Z', [dict(type='text', text='ok')], out=7) + '\n')
+    f.write(asst('o2', '2026-09-04T09:00:00.000Z', [dict(type='text', text='别批,窗外')], out=7) + '\n')
 PY
 printf 'FLOW_TRANSCRIPTS_DIR="%s"\n' "$T/transcripts" >> "$WS/.claude/flow.config.sh"
 expect_rc 0 "flow-usage" flow-usage "$FL"
 printf '%s' "$LAST_OUT" | grep -q '^| ①写 | 5m | 携带 2.2k · 输出 30 · 当量 [0-9.k]* | 2 轮 · 0.50 调用/轮 · claude-test · 1 会话' && ok "①写行:去重 2 轮、携带 2.2k、0.50 调用/轮" || fail "①写行错: $(printf '%s' "$LAST_OUT" | grep '①写')"
-printf '%s' "$LAST_OUT" | grep -q '^| 编排方 | .* 1 轮' && ok "父会话记成编排方" || fail "编排方行缺失"
+printf '%s' "$LAST_OUT" | grep -q '^| 编排方 | .* 1 轮' && ok "父会话记成编排方,窗外那轮已剔除" || fail "编排方行错(应 1 轮): $(printf '%s' "$LAST_OUT" | grep 编排方)"
+printf '%s' "$LAST_OUT" | grep -q '窗 09-0.*父会话提到本流程目录' && ok "编排方行带时间窗" || fail "编排方行缺时间窗"
 printf '%s' "$LAST_OUT" | grep -q 'USAGE OK: 2 会话 / 3 轮' && ok "USAGE OK 末行" || fail "USAGE 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
 expect_rc 0 "flow-usage --write" flow-usage "$FL" --write
 [ -f "$FL/.usage.md" ] && ok ".usage.md 已写" || fail ".usage.md 未写"
@@ -334,5 +341,115 @@ printf '%s' "$LAST_OUT" | grep -q 'src/c.ts' && fail "丁栏混进了丙栏" || 
 printf '## 甲栏\n- x\n' > "$FL/02a-bad.md"
 expect_rc 2 "flow-review-diff 无丙栏 FATAL" flow-review-diff "$FL/02a-orig.md" "$FL/02a-bad.md"
 rm -f "$FL/02a-orig.md" "$FL/02a-shadow.md" "$FL/02a-bad.md"
+
+# ── 11. flow-ledger(账本增删改 + 三态表单一解析器)──
+cd "$WS"
+expect_rc 0 "flow-ledger add" flow-ledger add --owner T4 --due T4 --touches src/a.ts --title 新立的账 --body 正文四
+grep -q '<!-- debt:4 mark:#4 status:open owner:T4 due:T4 touches:src/a.ts title:新立的账 -->' "$WS/specs/debts.md" && ok "add 写出机器头(自动取号 #4)" || fail "add 机器头错: $(grep 'debt:4' "$WS/specs/debts.md")"
+grep -q '^> #4 正文四' "$WS/specs/debts.md" && ok "add 写出正文行" || fail "add 正文行缺失"
+expect_rc 2 "flow-ledger add 重号 FATAL" flow-ledger add --owner T4 --due T4 --touches src/a.ts --title x --mark '#4'
+expect_rc 2 "flow-ledger add 绝对触面 FATAL" flow-ledger add --owner T4 --due T4 --touches /abs/x --title x
+expect_rc 0 "flow-ledger append(追写)" flow-ledger append '#4' '追写:触面变宽到 src/b.ts'
+grep -q '^>   追写:触面变宽到 src/b.ts' "$WS/specs/debts.md" && ok "append 落在正文尾" || fail "append 未落盘"
+expect_rc 0 "flow-ledger close" flow-ledger close '#4' --note 冒烟还账
+grep -q '<!-- debt:4 mark:#4 status:closed ' "$WS/specs/debts.md" && ok "close 翻 status" || fail "close 未翻 status"
+grep -q "已还 $(date +%F)" "$WS/specs/debts.md" && ok "close 追一行已还" || fail "close 未追已还行"
+expect_rc 0 "flow-ledger close 幂等(已 closed 只跳过)" flow-ledger close '#4'
+printf '%s' "$LAST_OUT" | grep -q 'skip #4 已是 closed' && ok "重复 close 跳过而非静默改" || fail "重复 close 行为错"
+expect_rc 2 "flow-ledger close 标记不存在 FATAL" flow-ledger close '#99'
+expect_rc 0 "flow-ledger 落盘后自动 lint" flow-ledger append '#3' '再追一行'
+printf '%s' "$LAST_OUT" | grep -q 'LEDGER OK: 已落盘;lint 已过' && ok "末行 LEDGER OK" || fail "末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+cat > "$FL/verdicts2.md" <<'EOF'
+| 项 | 判定 | 命令 | RC |
+|---|---|---|---|
+| #1 | `shasum -c x` | 21 OK | 0 |
+
+## 逐欠账三态表
+| 标记 | 判定 | 证据 | 落点 |
+|---|---|---|---|
+| #3 | **还** | 复跑判据 → 判 5 / RED 0 | debts.md #3 段 |
+| #1 | **不动** | numstat 0 | — |
+EOF
+expect_rc 0 "flow-ledger verdicts(强调号 + 混表)" flow-ledger verdicts "$FL/verdicts2.md"
+printf '%s' "$LAST_OUT" | grep -q '^#3	还	' && ok "**还** 归一化成 还" || fail "强调号未归一化: $(printf '%s' "$LAST_OUT" | head -3)"
+printf '%s' "$LAST_OUT" | grep -q 'VERDICTS OK: 还 1 · 追写 0 · 不动 1' && ok "三态计数" || fail "三态计数错: $(printf '%s' "$LAST_OUT" | tail -1)"
+expect_rc 0 "flow-ledger apply 默认 dry-run" flow-ledger apply "$FL/verdicts2.md"
+printf '%s' "$LAST_OUT" | grep -q '\[dry-run\] close #3' && ok "dry-run 只报不写" || fail "dry-run 输出错"
+grep -q '<!-- debt:3 mark:#3 status:open ' "$WS/specs/debts.md" && ok "dry-run 未动账本" || fail "dry-run 动了账本"
+expect_rc 0 "flow-ledger apply --write" flow-ledger apply "$FL/verdicts2.md" --write
+grep -q '<!-- debt:3 mark:#3 status:closed ' "$WS/specs/debts.md" && ok "apply 把「还」翻成 closed" || fail "apply 未翻 #3"
+grep -q '<!-- debt:1 mark:#1 status:open ' "$WS/specs/debts.md" && ok "「不动」零动作" || fail "「不动」被误改"
+expect_rc 2 "flow-ledger verdicts 零合法行 FATAL" flow-ledger verdicts "$FL/01-write-handoff.md"
+
+# ── 12. flow-close --between(轮间交接口一键)──
+flow-render-index --write >/dev/null 2>&1
+git add -A >/dev/null 2>&1
+git commit -qm ledger >/dev/null 2>&1
+expect_rc 0 "between baseline" flow-manifest baseline "$FL/.base-b.txt"
+printf 'between\n' >> src/a.ts
+printf 'src/a.ts\n' > "$FL/.decl-b.txt"
+expect_rc 0 "flow-freeze after-hashes" flow-freeze "$FL/.after-b.txt"
+expect_rc 0 "flow-close --between" flow-close --between "$FL" "$FL/.base-b.txt" "$FL/.decl-b.txt" "$FL/.after-b.txt" --task T1
+printf '%s' "$LAST_OUT" | grep -q 'BETWEEN OK' && ok "BETWEEN OK" || fail "未见 BETWEEN OK: $(printf '%s' "$LAST_OUT" | tail -3)"
+printf '%s' "$LAST_OUT" | grep -q '树读数' && ok "含树读数(HEAD + porcelain)" || fail "缺树读数"
+printf '%s' "$LAST_OUT" | grep -q '路由复跑' && ok "含路由复跑" || fail "缺路由复跑"
+printf '%s' "$LAST_OUT" | grep -q 'REQ 对账跳过' && ok "未给 --plan 时 REQ 对账显式跳过(不静默)" || fail "REQ 对账跳过未声明"
+expect_rc 2 "flow-close --between 缺 after-hashes FATAL" flow-close --between "$FL" "$FL/.base-b.txt" "$FL/.decl-b.txt"
+printf 'src/b.ts\n' > "$FL/.decl-wrong.txt"
+expect_rc 1 "flow-close --between 漏申报 RED" flow-close --between "$FL" "$FL/.base-b.txt" "$FL/.decl-wrong.txt" "$FL/.after-b.txt"
+printf '%s' "$LAST_OUT" | grep -q 'BETWEEN RED' && ok "BETWEEN RED" || fail "漏申报没红"
+
+# ── 13. flow-receipts 表行体例 + 带连字符任务号的 REQ ──
+cat > "$WS/specs/plan-table.md" <<'EOF'
+# 一期任务表
+| 任务 | 内容 | 验收 |
+|---|---|---|
+| P1.A | 计算规格骨架 | 接收位:骨架落库 |
+| P1.B | schema v0 | 依赖 P1.A 的口径 |
+
+落地记录:P1.A 已出口
+EOF
+expect_rc 2 "表行体例下 section 模式 FATAL(并提示改 config)" flow-receipts specs/plan-table.md P1.A
+printf '%s' "$LAST_OUT" | grep -q 'FLOW_RECEIPT_MODE=table' && ok "FATAL 里给出修法" || fail "FATAL 未给修法"
+printf 'FLOW_RECEIPT_MODE="table"\n' >> "$WS/.claude/flow.config.sh"
+expect_rc 0 "flow-receipts table 体例" flow-receipts specs/plan-table.md P1.A
+printf '%s' "$LAST_OUT" | grep -q 'RECEIPTS OK: 轴1 2 · 轴2 1' && ok "表行两轴计数" || fail "表行计数错: $(printf '%s' "$LAST_OUT" | tail -1)"
+expect_rc 2 "table 体例零命中 FATAL" flow-receipts specs/plan-table.md P9.Z
+sed -i.bak '/FLOW_RECEIPT_MODE/d' "$WS/.claude/flow.config.sh"; rm -f "$WS/.claude/flow.config.sh.bak"
+mkdir -p src/t
+cat > "$WS/specs/plan-hyphen.md" <<'EOF'
+## P4-T2 · 带连字符的任务号
+- REQ-P4-T2-01 [open] WHEN a THEN b
+- REQ-P4T2-02 [open] 无连字符的写法也要认
+EOF
+printf "it('[REQ-P4-T2-01] a', () => {});\nit('[REQ-P4T2-02] b', () => {});\n" > src/t/hyphen.test.ts
+expect_rc 0 "flow-trace 认带连字符的 REQ 号" flow-trace specs/plan-hyphen.md P4-T2
+printf '%s' "$LAST_OUT" | grep -q 'TRACE OK: 2/2' && ok "两种写法都对上" || fail "REQ 对账错: $(printf '%s' "$LAST_OUT" | tail -1)"
+expect_rc 0 "flow-dispatch 数带连字符的 REQ" flow-dispatch P4-T2 --tree 快照 --db 禁用 --seq 1 --plan "$WS/specs/plan-hyphen.md" src/a.ts
+printf '%s' "$LAST_OUT" | grep -q 'REQ open 2 · done 0' && ok "派单 REQ 计数 2" || fail "派单 REQ 计数错: $(printf '%s' "$LAST_OUT" | grep -o 'REQ open[^;]*')"
+expect_rc 0 "flow-dispatch --round ①写 给写模板绝对路径" flow-dispatch T1 --tree 活树-独占 --db 禁用 --seq 1 --round ①写 src/a.ts
+printf '%s' "$LAST_OUT" | grep -q '回件模板.*/skills/protocol/references/handoff-template.md' && ok "模板路径由脚本自算(无版本号手打)" || fail "缺回件模板行: $(printf '%s' "$LAST_OUT" | grep 模板)"
+expect_rc 0 "flow-dispatch --round ④A 给审模板" flow-dispatch T1 --tree 快照 --db 禁用 --seq 1 --round ④A src/a.ts
+printf '%s' "$LAST_OUT" | grep -q '回件模板.*/references/review-template.md' && ok "审轮给复审模板" || fail "审轮模板行错"
+rm -rf src/t "$WS/specs/plan-hyphen.md" "$WS/specs/plan-table.md"
+
+# ── 14. flow-merge-lane(并行支三方合并器;空比对守卫)──
+git checkout -- src/a.ts 2>/dev/null || true
+git add -A >/dev/null 2>&1
+git commit -qm pre-lane >/dev/null 2>&1
+BASE=$(git rev-parse --short HEAD)
+LANE="$T/lane"; mkdir -p "$LANE/src"
+cp src/a.ts "$LANE/src/a.ts"; printf 'lane-side\n' >> "$LANE/src/a.ts"
+cp src/b.ts "$LANE/src/b.ts"
+printf 'src/a.ts\n' > "$FL/.lane-list.txt"
+expect_rc 0 "flow-merge-lane plan" flow-merge-lane plan "$BASE" "$LANE" "$FL/.lane-list.txt"
+printf '%s' "$LAST_OUT" | grep -q '^FF    src/a.ts' && ok "主树未动 → FF" || fail "merge-lane plan 判定错: $(printf '%s' "$LAST_OUT" | head -2)"
+grep -q 'lane-side' src/a.ts && fail "plan 不该写主树" || ok "plan 一个字节不写"
+printf 'src/b.ts\n' > "$FL/.lane-empty.txt"
+expect_rc 2 "flow-merge-lane 空比对守卫 FATAL" flow-merge-lane plan "$BASE" "$LANE" "$FL/.lane-empty.txt"
+printf '%s' "$LAST_OUT" | grep -q '逐字节相同' && ok "点名支树没改它" || fail "空比对守卫未点名"
+expect_rc 0 "flow-merge-lane apply" flow-merge-lane apply "$BASE" "$LANE" "$FL/.lane-list.txt"
+grep -q 'lane-side' src/a.ts && ok "apply 写进主树" || fail "apply 未写主树"
+git checkout -- src/a.ts 2>/dev/null || true
 
 [ "$red" = 0 ] && { echo "SMOKE OK"; exit 0; } || { echo "SMOKE RED"; exit 1; }
