@@ -95,7 +95,7 @@ description: 四轮制(写 / 双轴审 / 改 / 复审)多 agent 工作流的编�
 ## 7 · 账本体例
 
 - 每条欠账 = 一行机器头 + 条目正文:`<!-- debt:N mark:#N status:open|closed owner:<任务号> due:<任务号或日期> touches:<仓库相对路径前缀,逗号分隔> title:<一句> -->`,下一行 `> #N <正文>`。标记新号一律 `#N`;历史圈码 ①–㊿ 兼容。状态只有 open / closed,第三种状态对路由与索引都不可见。
-- 索引块是生成物(`flow-render-index --write`),勿手改;`flow-freshness` 核索引 hash 与账本开放集一致。
+- 索引块是生成物(`flow-render-index --write`),勿手改;`flow-freshness` 核索引 hash 与账本开放集一致。开放条目多到几 KB 时用 `FLOW_INDEX_DOC` 把它搬出常驻文件(根文档留一行指针,`flow-freshness` 会抓「两处索引」)—— 派单的欠账必读本就同源于 `flow-route-debts`,索引是给人看的。
 - 改账本后 `flow-route-debts --lint`。
 
 ## 8 · 工具速查

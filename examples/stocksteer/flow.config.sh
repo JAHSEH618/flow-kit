@@ -7,7 +7,9 @@ FLOW_REPO="StockSteer"                 # 仓路径,相对工作区根;单仓工�
 
 # ── 布局(相对仓根,除非注明)────────────────────────────────────────────────
 FLOW_LEDGER="specs/debts.md"           # 欠账账本(机器头体例见 skill protocol §账本)
-FLOW_ROOT_DOC="CLAUDE.md"              # 欠账索引块住在哪份文件(仓根 CLAUDE.md)
+FLOW_ROOT_DOC="CLAUDE.md"              # 项目地图 / 门读数 / 钉版住在哪份文件(仓根 CLAUDE.md)
+#FLOW_INDEX_DOC="docs/debts-index.md"  # 欠账索引块的落点;不设 = 跟 FLOW_ROOT_DOC
+#                                        43 条开放索引 = 5.5 KB,住在根文档里就是每个会话每一轮都重付;搬走后根文档留一行指针
 FLOW_SPEC_DIRS="specs"                 # 规格目录,空格分隔;冻结的 shasum 轴与 fact-lint 扫描范围用它
 FLOW_SPEC_UNTRACKED=1                  # 1 = 规格目录被 gitignore(真值活在 git 外):冻结走 git+shasum 双轴,grep 要显式带它
                                        # 0 = 规格入库:冻结只走 git 轴

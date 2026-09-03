@@ -4,7 +4,8 @@
 #   从 cwd 向上找不到 .claude/flow.config.sh(不在 flow 工作区)就一个字不出,不走 flow_load_config 的 FATAL 路。
 # 四项:(1) FLOW_MAP_DEBT_PATH 里未勾行(`- [ ]`)数 >0
 #       (2) git shim 未装:仓 .git/hooks/post-commit 不存在或不含 flow-post-commit
-#       (3) 索引漂移:FLOW_ROOT_DOC_PATH 里 `<!-- debts-index hash:XXXXXXXX` ≠ 账本开放集 hash(与 flow-render-index 同一条流水线)
+#       (3) 索引漂移:FLOW_INDEX_DOC_PATH 里 `<!-- debts-index hash:XXXXXXXX` ≠ 账本开放集 hash(与 flow-render-index 同一条流水线);
+#           索引搬出根文档后根文档还留着旧块 ⟹ 也报(两处索引 = 其中一处必然会漂,而读的人不知道读的是哪处)
 #       (4) 规则书变长:FLOW_FLOW_DIR_PATH/.rulebook-lines 在,而 FLOW_LOCAL_DOC_PATH 现行数 > 它(棘轮只许降)
 #       (5) 会话未瘦身:FLOW_KEEP_* 都写了,而 flow-settings --check 有漂移(新装了插件 / MCP 没关);没写 FLOW_KEEP_* 则不提(装的时候没选,不在这里催)
 set -u
@@ -26,11 +27,15 @@ check() {
     add "git shim 未装($FLOW_REPO/.git/hooks/post-commit → flow-post-commit)"
   fi
 
-  if [ -f "$FLOW_LEDGER_PATH" ] && [ -f "$FLOW_ROOT_DOC_PATH" ]; then
+  if [ -f "$FLOW_LEDGER_PATH" ] && [ -f "$FLOW_INDEX_DOC_PATH" ]; then
     OPEN=$(flow_open_heads)
     HASH=$(printf '%s\n' "$OPEN" | flow_sha256 | cut -c1-8)
-    doc=$(sed -n 's/^<!-- debts-index hash:\([0-9a-f]*\).*/\1/p' "$FLOW_ROOT_DOC_PATH" | sed -n 1p)
-    [ "$doc" = "$HASH" ] || add "欠账索引漂移(文档 ${doc:-无} ≠ 账本开放集 $HASH;重跑 flow-render-index --write)"
+    doc=$(sed -n 's/^<!-- debts-index hash:\([0-9a-f]*\).*/\1/p' "$FLOW_INDEX_DOC_PATH" | sed -n 1p)
+    [ "$doc" = "$HASH" ] || add "欠账索引漂移($FLOW_INDEX_DOC ${doc:-无} ≠ 账本开放集 $HASH;重跑 flow-render-index --write)"
+    if [ "$FLOW_INDEX_DOC" != "$FLOW_ROOT_DOC" ] && [ -f "$FLOW_ROOT_DOC_PATH" ] \
+       && grep -q '<!-- debts-index ' "$FLOW_ROOT_DOC_PATH"; then
+      add "两处索引($FLOW_ROOT_DOC 里还留着旧块,而索引已搬到 $FLOW_INDEX_DOC;删掉旧块,留一行指针)"
+    fi
   fi
 
   rl="$FLOW_FLOW_DIR_PATH/.rulebook-lines"

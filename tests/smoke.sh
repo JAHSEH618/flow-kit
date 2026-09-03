@@ -452,4 +452,29 @@ expect_rc 0 "flow-merge-lane apply" flow-merge-lane apply "$BASE" "$LANE" "$FL/.
 grep -q 'lane-side' src/a.ts && ok "apply 写进主树" || fail "apply 未写主树"
 git checkout -- src/a.ts 2>/dev/null || true
 
+# ── 15. FLOW_INDEX_DOC(欠账索引搬出常驻文件;43 条索引 = 5.5 KB,住根文档就是每轮重付)──
+cd "$WS"
+mkdir -p docs; printf '# 欠账索引(生成物)\n' > docs/idx.md
+printf 'FLOW_INDEX_DOC="docs/idx.md"\n' >> "$WS/.claude/flow.config.sh"
+expect_rc 0 "flow-render-index --write 默认落 FLOW_INDEX_DOC" flow-render-index --write
+grep -q '<!-- debts-index hash:' docs/idx.md && ok "索引落在 FLOW_INDEX_DOC" || fail "索引未落 FLOW_INDEX_DOC"
+out=$(flow-freshness 2>&1)
+printf '%s' "$out" | grep -q '两处索引' && ok "根文档留着旧块 → freshness 报两处索引" || fail "两处索引未报: $out"
+python3 - "$WS/CLAUDE.md" <<'PYEOF'
+import sys, re
+p = sys.argv[1]; ls = open(p, encoding='utf-8').read().split('\n')
+out = []; skip = False
+for l in ls:
+    if l.startswith('<!-- debts-index '): skip = True; out.append('欠账索引:见 docs/idx.md(生成物,flow-render-index --write)'); continue
+    if l.startswith('<!-- /debts-index'): skip = False; continue
+    if not skip: out.append(l)
+open(p, 'w', encoding='utf-8').write('\n'.join(out))
+PYEOF
+out=$(flow-freshness 2>&1); [ -z "$out" ] && ok "删掉旧块后 freshness 静默" || fail "应静默,却说: $out"
+grep -q '欠账索引:见 docs/idx.md' "$WS/CLAUDE.md" && ok "根文档只剩一行指针" || fail "指针行缺失"
+sed -i.bak '/FLOW_INDEX_DOC/d' "$WS/.claude/flow.config.sh"; rm -f "$WS/.claude/flow.config.sh.bak"
+out=$(flow-freshness 2>&1)
+printf '%s' "$out" | grep -q '欠账索引漂移' && ok "不设 FLOW_INDEX_DOC 时回落根文档(此时它只剩指针 → 报漂移)" || fail "回落根文档失效: $out"
+flow-render-index --write >/dev/null 2>&1
+
 [ "$red" = 0 ] && { echo "SMOKE OK"; exit 0; } || { echo "SMOKE RED"; exit 1; }
