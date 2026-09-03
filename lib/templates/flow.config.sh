@@ -51,7 +51,8 @@ FLOW_FACT_LINT_BASELINE=".claude/fact-lint-baseline.tsv"
 
 # ── 预算与阈值 ──
 FLOW_DOC_BUDGET_FILE=400
-FLOW_DOC_BUDGET_BYTES=40000
+FLOW_DOC_BUDGET_SELF=40000             # 自写字节红线(RED):总字节减去 <!-- flow:gen-* --> 段。模型逐字打的那部分才是墙钟
+FLOW_DOC_BUDGET_BYTES=40000            # 总字节 WARN 线:读取面还是它(一份派单件五个 agent 各读一遍)
 FLOW_DOC_BUDGET_DIR=4000
 FLOW_DOC_BUDGET_RULEBOOK=250
 FLOW_DEBT_CAP=8
@@ -59,6 +60,7 @@ FLOW_DEBT_WARN=16
 FLOW_FIX_BY_WRITER=1                   # 1 = ③改轮回①写轮本人
 FLOW_FOLD_MAX=6                        # 不阻塞条 ≤ 此数且全在③写权限面内 ⟹ 不起收尾轮
 FLOW_REQ_CAP=8                         # 任务节 open REQ 条数上限(超过 = 拆任务或 flow-dispatch --cap-ok)
+FLOW_TURN_CAP=120                      # 单轴请求数上限,flow-usage 只 WARN(REQ 条数不是长度的代理量:6 条 REQ 长出过 189 个请求)
 FLOW_RECEIPT_MODE="section"            # plan 体例:section = 任务是 `## <任务号>` 小节;table = 任务是表行(flow-receipts 按它枚举)
 #FLOW_INDEX_DOC="docs/debts-index.md"  # 欠账索引块的落点;不设 = 跟 FLOW_ROOT_DOC。开放条目多时搬出常驻文件,根文档留一行指针
 FLOW_ROLE_MODELS=""                    # 分角色模型,如 "②A=sonnet";空 = 全部继承编排方;换前先 flow-review-diff 对照

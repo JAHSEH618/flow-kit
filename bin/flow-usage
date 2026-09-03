@@ -6,14 +6,20 @@
 #     ⚠ 别按「最早出现的位置」取:批次名里带圈码时(「P4 批次②」)全部 agent 会被归成②,实测五轮全归一行,轮数账只能手填。
 #   ③改回①本人时并入①写行(同一会话)。
 #   含这些 sub-agent 的父会话 = 编排方,单独一行(它若跨批,数字含别批的活,备注标「跨批」由人判)。
-# 计数:轮 = 去重 message.id 的 assistant 消息数(流式分片同 id);携带 = Σ(input + cache_creation + cache_read);调用 = tool_use 块数(按 id 去重);
+# 计数:轮 = 去重 message.id 的 assistant 消息数(= 唯一 requestId 数,实测一一对应);携带 = Σ(input + cache_creation + cache_read);调用 = tool_use 块数(按 id 去重);
 #   当量 = input×1 + cache_creation×1.25 + cache_read×0.1 + output×5(以 input 单价为 1,供批间只比不涨;不是账单)。
+#   ⚠ 同一 message.id 的多条记录**逐字段取 max**,不许留第一条(0.5.0 修):一次响应按 apiBlockIndex 拆成多条,
+#     第一条通常是 thinking 块、output_tokens 只有 2–6。留第一条会把输出列低估约 3 倍(①写实测 60,899 而真值 200,275),
+#     而输出列是唯一指向墙钟去向的那一列 —— 实测 延迟(s) ≈ 1.5 + 1.4×(上下文/100k) + 1.3×(输出/100 token)。
+#   读批量 = 纯读调用里点到的不同路径数 / 纯读调用数。一次响应只发得出一个工具块(实测五轴 0.99–1.09 调用/轮,那是响应形态),
+#     所以「批量」只能靠一条 Bash 串多条命令;该量的是这个,不是「调用/轮」。
+# 检验判据(只 WARN,RC 不变 —— 轮数账是账不是门):单轴请求 > FLOW_TURN_CAP;读批量 < 2 路径/读调用。
 #   编排方按**本批时间窗**切:窗 = 父会话里提到本批流程目录路径的首末时间戳 ∪ 本批 sub-agent 的时段。
 #     前半段是关键:开工清账与派单装配发生在第一个 agent 起来**之前**,只按 sub-agent 时段切会把它整段丢掉。
 #     父会话一次都没提到流程目录 ⟹ 不切窗(备注写明),跨批时数字偏大 —— 但「切了却切错」比「没切」更坏。
 # 用法: flow-usage <流程目录(绝对)> [--write]      --write 另写 <流程目录>/.usage.md(dotfile,不进 doc-budget 热路径)
 # 末行固定:`USAGE OK: N 会话 / M 轮`;零会话命中 ⟹ FATAL RC=2(空集不算绿:「没花 token」与「没扫到」不许同型)。
-# 读的配置:FLOW_TRANSCRIPTS_DIR(默认 ~/.claude/projects;结构 <项目>/<会话>/subagents/agent-*.jsonl)
+# 读的配置:FLOW_TRANSCRIPTS_DIR(默认 ~/.claude/projects;结构 <项目>/<会话>/subagents/agent-*.jsonl)FLOW_TURN_CAP
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
 flow_load_config
@@ -56,8 +62,41 @@ def role_of(txt):
 def ts(s):
     return datetime.datetime.fromisoformat(s.replace('Z', '+00:00'))
 
+# 读批量:一个「纯读调用」里点到几个不同路径。语言中立(只认 shell 命令头与路径形状),不进 config。
+READ_HEADS = {'cat', 'sed', 'grep', 'egrep', 'fgrep', 'rg', 'head', 'tail', 'awk', 'nl', 'wc', 'ls', 'find',
+              'stat', 'diff', 'comm', 'file', 'cut', 'sort', 'uniq', 'tr', 'column', 'jq', 'shasum',
+              'md5sum', 'sha256sum', 'od', 'xxd', 'basename', 'dirname', 'realpath', 'readlink'}
+NEUTRAL = {'cd', 'echo', 'printf', 'true', 'test', '[', ':', 'pwd', 'command'}
+SEG_RE = re.compile(r'\|\||&&|[|;\n]')
+# 段首的 `VAR=值`(含「整段只有赋值」那种:实测 ②A 有 36 条 `SNAP=<路径>` 独占一行)
+ASSIGN_RE = re.compile(r'^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|\'[^\']*\'|[^\s;|&]*)\s*)+')
+TOK_RE = re.compile(r'[^\s\'"();|&<>]+')
+
+def read_shape(cmd):
+    """(是不是纯读调用, 这次点到的不同路径数)。写重定向 / 非读命令头 ⟹ 不算读调用(宁可少算)。"""
+    probe = cmd.replace('2>&1', '').replace('>&1', '').replace('>&2', '')
+    probe = re.sub(r'>>?\s*/dev/null', '', probe)
+    if '>' in probe: return (False, 0)
+    nread = 0
+    for seg in SEG_RE.split(cmd):
+        seg = seg.strip().lstrip('( ')
+        if not seg: continue
+        seg = ASSIGN_RE.sub('', seg, count=1)
+        if not seg.strip(): continue                          # 整段只是赋值
+        head = os.path.basename(seg.split()[0])
+        if head in READ_HEADS: nread += 1
+        elif head not in NEUTRAL: return (False, 0)
+    if nread == 0: return (False, 0)
+    paths = set()
+    for t in TOK_RE.findall(cmd):
+        if t.startswith('-') or t.startswith('/dev/'): continue
+        if '=' in t: t = t.split('=', 1)[1]
+        if '/' in t or re.fullmatch(r'[\w@.~-]+\.[A-Za-z][\w]{0,5}', t): paths.add(t.rstrip('/'))
+    return (True, len(paths))
+
 def stats(path, win=None):
     seen = {}; tools = set(); stamps = []; models = collections.Counter()
+    nread = 0; npath = 0
     with open(path, encoding='utf-8', errors='replace') as fh:
         for line in fh:
             try: o = json.loads(line)
@@ -69,13 +108,27 @@ def stats(path, win=None):
             if o.get('timestamp'): stamps.append(o['timestamp'])
             if o.get('type') != 'assistant': continue
             m = o.get('message') or {}; u = m.get('usage') or {}; mid = m.get('id')
-            if mid and u and mid not in seen:
-                seen[mid] = (u.get('input_tokens', 0) or 0, u.get('cache_creation_input_tokens', 0) or 0,
-                             u.get('cache_read_input_tokens', 0) or 0, u.get('output_tokens', 0) or 0)
+            # ⚠ 一次 API 响应在 transcript 里按 apiBlockIndex 拆成多条记录(实测 189 个请求里 117 个是多记录),
+            #   第一条通常是 thinking 块、output_tokens 只有 2–6。留「第一条」会把输出列系统性低估约 3 倍
+            #   (①写实测 60,899 而真值 200,275)——而输出列恰恰是唯一指向墙钟去向的那一列。逐字段取 max:
+            #   携带三项在各分片里相同(取 max 即原值),output_tokens 是流式累计(max 即终值)。
+            if mid and u:
+                v = (u.get('input_tokens', 0) or 0, u.get('cache_creation_input_tokens', 0) or 0,
+                     u.get('cache_read_input_tokens', 0) or 0, u.get('output_tokens', 0) or 0)
+                old = seen.get(mid)
+                seen[mid] = v if old is None else tuple(max(a, b) for a, b in zip(old, v))
             if m.get('model'): models[m['model']] += 1
             for b in m.get('content') or []:
                 if isinstance(b, dict) and b.get('type') == 'tool_use':
-                    tools.add(b.get('id') or (mid, o.get('apiBlockIndex')))
+                    tid = b.get('id') or (mid, o.get('apiBlockIndex'))
+                    if tid in tools: continue
+                    tools.add(tid)
+                    i = b.get('input') or {}
+                    if b.get('name') == 'Bash':
+                        isread, np = read_shape(i.get('command', '') or '')
+                        if isread: nread += 1; npath += np
+                    elif b.get('name') == 'Read':
+                        nread += 1; npath += 1
     dur = 0.0
     if stamps:
         try: dur = (ts(max(stamps)) - ts(min(stamps))).total_seconds()
@@ -84,14 +137,15 @@ def stats(path, win=None):
     cr = sum(v[2] for v in seen.values()); out = sum(v[3] for v in seen.values())
     return dict(turns=len(seen), inp=inp, cw=cw, cr=cr, out=out, carried=inp + cw + cr,
                 eq=inp + 1.25 * cw + 0.1 * cr + 5 * out, tools=len(tools), dur=dur,
+                nread=nread, npath=npath,
                 model=models.most_common(1)[0][0] if models else '?', n=1)
 
 files = glob.glob(os.path.join(tdir, '*', '*', 'subagents', '*.jsonl'))
-rows = collections.defaultdict(lambda: dict(turns=0, inp=0, cw=0, cr=0, out=0, carried=0, eq=0.0, tools=0, dur=0.0, model=collections.Counter(), n=0))
+rows = collections.defaultdict(lambda: dict(turns=0, inp=0, cw=0, cr=0, out=0, carried=0, eq=0.0, tools=0, dur=0.0, nread=0, npath=0, model=collections.Counter(), n=0))
 parents = set(); matched = 0
 def add(role, st):
     r = rows[role]
-    for k in ('turns', 'inp', 'cw', 'cr', 'out', 'carried', 'eq', 'tools', 'dur', 'n'): r[k] += st[k]
+    for k in ('turns', 'inp', 'cw', 'cr', 'out', 'carried', 'eq', 'tools', 'dur', 'nread', 'npath', 'n'): r[k] += st[k]
     r['model'][st['model']] += 1
 hits = []
 for f in files:
@@ -141,18 +195,28 @@ def k(n):
     return f'{n/1e6:.2f}M' if n >= 1e6 else (f'{n/1e3:.1f}k' if n >= 1e3 else f'{int(n)}')
 def hm(s):
     s = int(s); return f'{s//3600}h{(s%3600)//60:02d}m' if s >= 3600 else f'{s//60}m'
+TURN_CAP = int(os.environ.get('FLOW_TURN_CAP') or 120)
+READ_BATCH_FLOOR = 2.0
+def rb(r): return r['npath'] / r['nread'] if r['nread'] else 0.0
+
 head = ['| 项 | 时长 | token | 备注 |', '|---|---|---|---|']
-lines = []
+lines = []; warns = []
 total_turns = 0; total_sessions = 0
 for role in ORDER + sorted(set(rows) - set(ORDER)):
     if role not in rows: continue
     r = rows[role]; cpt = r['tools'] / r['turns'] if r['turns'] else 0
     model = r['model'].most_common(1)[0][0]
-    lines.append(f"| {role} | {hm(r['dur'])} | 携带 {k(r['carried'])} · 输出 {k(r['out'])} · 当量 {k(r['eq'])} | {r['turns']} 轮 · {cpt:.2f} 调用/轮 · {model} · {r['n']} 会话{winnote if role == '编排方' else ''} |")
+    lines.append(f"| {role} | {hm(r['dur'])} | 携带 {k(r['carried'])} · 输出 {k(r['out'])} · 当量 {k(r['eq'])} | {r['turns']} 轮 · {cpt:.2f} 调用/轮 · 读批量 {rb(r):.2f} 路径/读调用({r['nread']} 次)· {model} · {r['n']} 会话{winnote if role == '编排方' else ''} |")
     total_turns += r['turns']; total_sessions += r['n']
+    # 检验判据(只 WARN,不改 RC:轮数账是账不是门)
+    if r['n'] == 1 and r['turns'] > TURN_CAP:
+        warns.append(f"WARN {role}:{r['turns']} 请求 > FLOW_TURN_CAP {TURN_CAP} —— 携带 ∝ 轮数 × 上下文,而上下文又随轮数长(二次)。处置是拆任务,不是加纪律")
+    if r['nread'] >= 5 and rb(r) < READ_BATCH_FLOOR:
+        warns.append(f"WARN {role}:读批量 {rb(r):.2f} < {READ_BATCH_FLOOR} 路径/读调用 —— 多条读合进同一个 Bash;一次响应只发得出一个工具块,省不了「调用/轮」,只能省往返")
 sub = [rows[x] for x in rows if x != '编排方']
-lines.append(f"| sub-agent 合计 | {hm(sum(x['dur'] for x in sub))} | 携带 {k(sum(x['carried'] for x in sub))} · 输出 {k(sum(x['out'] for x in sub))} · 当量 {k(sum(x['eq'] for x in sub))} | {sum(x['turns'] for x in sub)} 轮 · {sum(x['n'] for x in sub)} 会话(并行轴时长各自计) |")
-out = '\n'.join(head + lines)
+srd = sum(x['nread'] for x in sub); spt = sum(x['npath'] for x in sub)
+lines.append(f"| sub-agent 合计 | {hm(sum(x['dur'] for x in sub))} | 携带 {k(sum(x['carried'] for x in sub))} · 输出 {k(sum(x['out'] for x in sub))} · 当量 {k(sum(x['eq'] for x in sub))} | {sum(x['turns'] for x in sub)} 轮 · 读批量 {(spt / srd if srd else 0):.2f} 路径/读调用({srd} 次)· {sum(x['n'] for x in sub)} 会话(并行轴时长各自计) |")
+out = '\n'.join(head + lines + ([''] + warns if warns else []))
 print(out)
 if write == '--write':
     p = os.path.join(flowdir, '.usage.md')

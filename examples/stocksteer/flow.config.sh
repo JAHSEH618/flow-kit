@@ -64,9 +64,16 @@ FLOW_KEEP_PLUGINS="vtsls claude-hud impeccable"   # 裸 name 或 name@marketplac
 FLOW_KEEP_MCP="exa"                                               # 用户级 MCP 名;写空串 = 全关
 
 # ── 预算与阈值 ───────────────────────────────────────────────────────────────
-FLOW_DOC_BUDGET_FILE=400               # 单个流程件行数红线
-FLOW_DOC_BUDGET_BYTES=40000            # 单个流程件字节红线(token 按字节计;112 KB 的复验件靠长行躲过了行数线)
-#                                        实测两份 ④ 回件卡在旧线 32000 的 99% ⟹ 红线在塑造内容;超 90% 会先 WARN
+FLOW_DOC_BUDGET_FILE=400               # 单个流程件**自写**行数红线
+FLOW_DOC_BUDGET_SELF=40000             # 单个流程件**自写**字节红线(RED)= 总字节 − <!-- flow:gen-* --> 段。
+#                                        为什么改判自写:墙钟拟合 延迟(s) ≈ 1.5 + 1.4×(上下文/100k) + 1.3×(输出/100 token),
+#                                        四条复审轴各有 21–34% 的墙钟耗在 `cat >> 回件 <<EOF` 上(单次最慢 144 s);
+#                                        而派单件 48 KB 里 46 KB 是 flow-dispatch 生成的,一个字节也不用模型打 —— 从前每批六句 budget-ok 全花在这上面。
+#                                        为什么线还是 40000 而不是按墙钟推的 12000:p4c 六份回件逐节量过,没有一节超 14%,
+#                                        最大的单条 4.6 KB、中位 0.8–2.8 KB —— 没有胖条目可砍。要砍到 12 KB 只能删必答四组数 /
+#                                        事实句三层 / 非空转,而那三项每条后面都挂着一次记过账的假绿(protocol §4)。回件的字节买的是结论本身。
+FLOW_DOC_BUDGET_BYTES=40000            # 总字节 WARN 线(不 RED):读取面还是它,一份派单件五个 agent 各读一遍
+#                                        实测两份 ④ 回件卡在旧线 32000 的 99% ⟹ 红线在塑造内容;自写超 90% 会先 WARN
 FLOW_DOC_BUDGET_DIR=4000               # 流程目录热路径合计行数 WARN 线
 FLOW_DOC_BUDGET_RULEBOOK=250           # 规则书(flow-local.md)行数上限;棘轮:只许降
 FLOW_DEBT_CAP=8                        # owner 归本任务的欠账条数上限(超过 = 拆任务或 --cap-ok)
@@ -74,6 +81,8 @@ FLOW_DEBT_WARN=16                      # 必读总条数只 WARN 的线
 FLOW_FIX_BY_WRITER=1                   # 1 = ③改轮 SendMessage 回①写轮本人;0 = 另起 agent
 FLOW_FOLD_MAX=6                        # 折轮条件:不阻塞条 ≤ 此数且全在③写权限面内 ⟹ 不起收尾轮
 FLOW_REQ_CAP=8                         # 任务节 open REQ 条数上限:①写是最长的会话,携带成本随轮数平方长,超了拆任务(或 --cap-ok)
+FLOW_TURN_CAP=120                      # 单轴请求数上限,flow-usage 只 WARN(不是门)。
+#                                        REQ 条数不是长度的代理量:p4c ①写只有 6 条 REQ,却长出 189 个请求、携带 51.8M(全批的 48%)
 FLOW_RECEIPT_MODE="section"            # plan 体例:section = 任务是 `## <任务号>` 小节;table = 任务是表行
 #                                        体例不对时 flow-receipts 恒 FATAL,接收位就退回人眼核 —— 这是装第二个项目才暴露的
 FLOW_ROLE_MODELS=""                    # 分角色模型,如 "②A=sonnet";空 = 继承编排方。换前同一产物两模型各审一次,flow-review-diff 原版独有为空才换

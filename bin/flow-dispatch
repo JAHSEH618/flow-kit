@@ -14,9 +14,11 @@
 #   flow-dispatch <任务号> --tree … --db … --seq … --lane-merge <路径清单文件(绝对)> [触面路径...]
 #       合并批模式:触面从清单文件读(一行一路径;# 注释与空行略过);命令行再给的触面必须都在清单里,否则 FATAL;拒绝 --plan。
 # 输出:整块 markdown 到 stdout,重定向成 <流程目录>/<轮号>-dispatch.md 就是派单;「(待填)」标记的行由编排方 Edit 补,其余勿手改 —— 要改就重跑。
+#   生成段由 `<!-- flow:gen-begin -->` / `<!-- flow:gen-end -->` 括起(止标记落在「编排方待填」之前):flow-doc-budget 按总字节减去它判自写预算。
+#   派单件 48 KB 里 46 KB 是这里生成的,一个字节也不用模型打 —— 从前它每批都要一句 `budget-ok:` 带过,那是同一条线同时判两种东西。
 #   Agent prompt 只给这个文件的路径(编排方零 heredoc:它的输出按输出价计,一批里占它携带上下文的 33%)。
 #   带 --plan 时同源摘取任务节(`## <任务号> ` 到下一个 `## `,与 flow-receipts 同一套定位)印进块里:agent 只读节选,不整读 plan(一份 135 KB 的 plan 被读了 56 次)。
-# 读的配置:FLOW_KIT_DIR(回件模板绝对路径,自算)FLOW_REPO_DIR FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_REQ_CAP FLOW_ROLE_MODELS FLOW_FIX_BY_WRITER FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_BYTES FLOW_SPEC_DIRS FLOW_WS/FLOW_FACT_LINT_BASELINE;
+# 读的配置:FLOW_KIT_DIR(回件模板绝对路径,自算)FLOW_REPO_DIR FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_REQ_CAP FLOW_ROLE_MODELS FLOW_FIX_BY_WRITER FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_SELF FLOW_SPEC_DIRS FLOW_WS/FLOW_FACT_LINT_BASELINE;
 #   子命令 flow-route-debts / flow-receipts 按名调用(PATH),输出原样嵌入。
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
@@ -136,6 +138,7 @@ else
 fi
 
 cat <<HDR
+<!-- flow:gen-begin -->
 $HEAD
 
 - **树权限**:$TREE(protocol §3:只读 agent 一律快照;活树是变异轴独占资源)
@@ -148,11 +151,14 @@ $TPLLINE
   ⚠ **baseline 打在编排方停止编辑之后**(protocol §3:打早了会让写轮收到幻影 RED,并教会所有人对 RED 耸肩)
 - **扫描纪律**:全仓口径判据须 \`command grep\` 或显式含 $SPECS(protocol §4 范围轴);零命中先过非空转(protocol §4)
 - **假话门**:写轮收工跑 \`flow-fact-lint verify $FLOW_WS/$FLOW_FACT_LINT_BASELINE\` —— 新增 RED 零才许交付;基线存量归收尾轮
-- **移交件预算**:单件 ≤$FLOW_DOC_BUDGET_FILE 行且 ≤$FLOW_DOC_BUDGET_BYTES 字节(超限首部 \`budget-ok:<理由>\` 显式带过);命令全量输出落 <流程目录>/.evidence/,
-  件内只贴摘录+路径;引上游用指针(裁决号/文件+节号)不抄正文;收工编排方跑 \`flow-doc-budget\`(protocol §5)
+- **移交件预算**:回件**自写**部分 ≤$FLOW_DOC_BUDGET_FILE 行且 ≤$FLOW_DOC_BUDGET_SELF 字节(本派单件的生成段由 \`<!-- flow:gen-* -->\` 括起,不计进你的预算;
+  超限首部 \`budget-ok:<理由>\` 显式带过);命令全量输出落 <流程目录>/.evidence/,件内只贴摘录+路径;引上游用指针(裁决号/文件+节号)不抄正文;收工编排方跑 \`flow-doc-budget\`(protocol §5)
+  ⚠ 回件是**你逐字打出来的**:实测四条复审轴各有 21–34% 的墙钟耗在 \`cat >> 回件 <<EOF\` 上,单次最慢 144 秒 / 7915 输出 token。少写一段的收益比少读十个文件大得多。
 - **读取纪律**(一批里整读字节的 37% 是别的 agent 已读过的同一文件):上一轮回件先读首节「改动索引表」,按表只读文件区间;
   整读一个文件要在回件里给一行理由;定位用 LSP(延迟加载工具,先 ToolSearch select:LSP;88 份会话零次调用就是没人加载过)/ \`grep -n\`,不用 cat 找;plan 只读本块的任务书节选,账本只读本块的必读段
-- **工具纪律**(每一步都重付整个上下文,实测每轮只带 1.12 个调用):互不依赖的调用放同一条消息并发;多步 shell 合成一个 Bash;
+- **工具纪律**(一次响应只发得出一个工具块 —— 实测五轴全在 0.99–1.09 调用/轮,那是响应形态,不是执行不力):
+  **要批量就把多条命令合进同一个 Bash**(\`cmd1; echo ===; cmd2; echo ===; cmd3\`),别指望一条消息里发多个工具块;
+  实测 ①写 44 次读调用里 32 次只读一个文件,而 ②B 一次读到 7 个 —— 差的那 20 个往返 ≈ 5–6 分钟;
   flow-* 命令与门的输出 \`> <流程目录>/.evidence/<名>.txt; rc=\$?\`,判读只贴末行读数 + RC(末行为此固定可 grep),全量不 cat 进上下文;自造扫描仍逐行判
 - **证据源封闭**:证据只来自树、上游 spec、本批流程目录;会话记录(~/.claude/projects/**/*.jsonl)与 tool-results 不是证据源,不读不引
   ⚠ **边做边落盘**:进程中途死于 API 断连时,**没落盘的一律全丢**;
@@ -216,6 +222,7 @@ RH
 fi
 
 cat <<FT
+<!-- flow:gen-end -->
 
 ### 编排方待填(生成器管不到的判断项)
 - 交付判据与任务书之外的裁决(任务书正文已在节选段,不再抄;变异实测是交付条件,①写轮)

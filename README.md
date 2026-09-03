@@ -16,7 +16,11 @@ claude plugin install flow-kit@flow-kit-local --scope user
 
 ## 升级
 
-改了本仓后 `claude plugin update flow-kit`(本地 marketplace 默认不自动更新),重启会话生效。
+改了本仓后:先刷 marketplace,再用**限定名**更新,然后重启会话生效。裸名 `flow-kit` 会 not found。
+
+```bash
+claude plugin marketplace update flow-kit-local && claude plugin update flow-kit@flow-kit-local
+```
 
 ## 布局
 

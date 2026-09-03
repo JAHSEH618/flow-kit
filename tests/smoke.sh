@@ -94,16 +94,26 @@ expect_rc 0 "flow-dispatch" flow-dispatch T1 --tree 快照 --db 禁用 --seq 1 s
 printf '%s' "$LAST_OUT" | grep -q '#1' && ok "派单块含欠账 #1" || fail "派单块缺欠账"
 printf '%s' "$LAST_OUT" | grep -q '边写边落' && ok "派单块含边写边落" || fail "派单块缺边写边落"
 printf '%s' "$LAST_OUT" | grep -q '证据源封闭' && ok "派单块含证据源封闭" || fail "派单块缺证据源封闭"
-printf '%s' "$LAST_OUT" | grep -q '≤40000 字节' && ok "派单块含字节预算" || fail "派单块缺字节预算"
+printf '%s' "$LAST_OUT" | grep -q '≤40000 字节' && ok "派单块含自写字节预算" || fail "派单块缺自写字节预算"
+printf '%s' "$LAST_OUT" | grep -qF '<!-- flow:gen-begin -->' && printf '%s' "$LAST_OUT" | grep -qF '<!-- flow:gen-end -->' && ok "派单块自带生成段标记" || fail "派单块缺 flow:gen 标记"
 expect_rc 2 "flow-dispatch 绝对触面 FATAL" flow-dispatch T1 --tree 快照 --db 禁用 --seq 1 /abs
 expect_rc 0 "flow-doc-budget" flow-doc-budget "$FL"
 head -c 48000 /dev/zero | tr '\0' x > "$FL/98-fat.md"; printf '\n' >> "$FL/98-fat.md"
-expect_rc 1 "flow-doc-budget 字节红线(1 行 48001 字节)" flow-doc-budget "$FL"
-printf '%s' "$LAST_OUT" | grep -q 'RED .*48001 字节 > 40000' && ok "字节超限点名" || fail "字节超限未点名: $LAST_OUT"
+expect_rc 1 "flow-doc-budget 自写字节红线(1 行 48001 字节)" flow-doc-budget "$FL"
+printf '%s' "$LAST_OUT" | grep -q 'RED .*自写 48001 字节 > 40000' && ok "自写超限点名" || fail "自写超限未点名: $LAST_OUT"
 head -c 38000 /dev/zero | tr '\0' y > "$FL/97-near.md"; printf '\n' >> "$FL/97-near.md"
 expect_rc 1 "近线件不改红绿(同目录仍有 RED 件)" flow-doc-budget "$FL"
-printf '%s' "$LAST_OUT" | grep -q 'WARN .*38001 字节 .*97-near.md(> 字节线的 90%' && ok "90% 近线 WARN" || fail "近线未 WARN: $(printf '%s' "$LAST_OUT" | grep 97-near)"
+printf '%s' "$LAST_OUT" | grep -q 'WARN 自写 1 行 38001 字节.*97-near.md(自写 > 字节线的 90%' && ok "90% 近线 WARN" || fail "近线未 WARN: $(printf '%s' "$LAST_OUT" | grep 97-near)"
 rm -f "$FL/97-near.md"
+# 生成段豁免:48 KB 全在 flow:gen 里 ⟹ 自写 0,只按总字节 WARN,不 RED(派单件从前每批都要一句 budget-ok 带过)
+{ printf '<!-- flow:gen-begin -->\n'; head -c 48000 /dev/zero | tr '\0' g; printf '\n<!-- flow:gen-end -->\n'; } > "$FL/96-gen.md"
+expect_rc 1 "生成段件在 RED 目录里仍逐件判" flow-doc-budget "$FL"
+printf '%s' "$LAST_OUT" | grep -q 'WARN 自写 0 行 0 字节(总 3 行 4804[0-9] 字节).*96-gen.md(总字节 > 40000' && ok "生成段不计进自写,只按总字节 WARN" || fail "生成段豁免失效: $(printf '%s' "$LAST_OUT" | grep 96-gen)"
+printf '<!-- flow:gen-begin -->\nx\n' > "$FL/95-unbal.md"
+flow-doc-budget "$FL" > /dev/null 2>&1 || true
+expect_rc 1 "标记不成对仍逐件判" flow-doc-budget "$FL"
+printf '%s' "$LAST_OUT" | grep -q 'WARN flow:gen 标记不成对(begin 1 / end 0).*95-unbal.md' && ok "标记不成对 WARN" || fail "标记不成对未 WARN: $(printf '%s' "$LAST_OUT" | grep 95-unbal)"
+rm -f "$FL/96-gen.md" "$FL/95-unbal.md"
 { printf 'budget-ok:冒烟\n'; cat "$FL/98-fat.md"; } > "$FL/98-fat.tmp" && mv "$FL/98-fat.tmp" "$FL/98-fat.md"
 expect_rc 0 "flow-doc-budget budget-ok 带过字节线" flow-doc-budget "$FL"
 rm -f "$FL/98-fat.md"
@@ -310,8 +320,10 @@ def user(ts, text):
     return json.dumps(dict(type='user', timestamp=ts, message=dict(role='user', content=text)), ensure_ascii=False)
 with open(os.path.join(tr, 'subagents', 'agent-1.jsonl'), 'w') as f:
     f.write(user('2026-09-03T01:00:00.000Z', f'你是 p1 的 ①写 agent。派单:{fl}/01-dispatch.md') + '\n')
-    f.write(asst('m1', '2026-09-03T01:00:10.000Z', [dict(type='text', text='hi')]) + '\n')
-    f.write(asst('m1', '2026-09-03T01:00:11.000Z', [dict(type='tool_use', id='tu1', name='Bash', input={})]) + '\n')
+    # 同一 message.id 的两条分片:首条是 thinking 块(out=2),次条才带真输出(out=10)。
+    # 留「第一条」会把输出列低估 3 倍(实测 ①写 60,899 而真值 200,275)⟹ 必须逐字段取 max。
+    f.write(asst('m1', '2026-09-03T01:00:10.000Z', [dict(type='thinking', thinking='')], out=2) + '\n')
+    f.write(asst('m1', '2026-09-03T01:00:11.000Z', [dict(type='tool_use', id='tu1', name='Bash', input={'command': 'cat src/a.ts src/b.ts'})], out=10) + '\n')
     f.write(asst('m2', '2026-09-03T01:05:00.000Z', [dict(type='text', text='done')], out=20) + '\n')
 with open(os.path.join(tr, 'subagents', 'agent-2.jsonl'), 'w') as f:
     f.write(user('2026-09-03T01:00:00.000Z', '别的批次 /nowhere/.flow/x') + '\n')
@@ -322,9 +334,10 @@ with open(os.path.join(os.path.dirname(tr), 'sid1.jsonl'), 'w') as f:
     f.write(asst('o1', '2026-09-03T00:59:30.000Z', [dict(type='text', text='ok')], out=7) + '\n')
     f.write(asst('o2', '2026-09-04T09:00:00.000Z', [dict(type='text', text='别批,窗外')], out=7) + '\n')
 PY
-printf 'FLOW_TRANSCRIPTS_DIR="%s"\n' "$T/transcripts" >> "$WS/.claude/flow.config.sh"
+printf 'FLOW_TRANSCRIPTS_DIR="%s"\nFLOW_TURN_CAP=1\n' "$T/transcripts" >> "$WS/.claude/flow.config.sh"
 expect_rc 0 "flow-usage" flow-usage "$FL"
-printf '%s' "$LAST_OUT" | grep -q '^| ①写 | 5m | 携带 2.2k · 输出 30 · 当量 [0-9.k]* | 2 轮 · 0.50 调用/轮 · claude-test · 1 会话' && ok "①写行:去重 2 轮、携带 2.2k、0.50 调用/轮" || fail "①写行错: $(printf '%s' "$LAST_OUT" | grep '①写')"
+printf '%s' "$LAST_OUT" | grep -q '^| ①写 | 5m | 携带 2.2k · 输出 30 · 当量 [0-9.k]* | 2 轮 · 0.50 调用/轮 · 读批量 2.00 路径/读调用(1 次)· claude-test · 1 会话' && ok "①写行:去重 2 轮、携带 2.2k、输出取 max=30、读批量 2.00" || fail "①写行错: $(printf '%s' "$LAST_OUT" | grep '①写')"
+printf '%s' "$LAST_OUT" | grep -q 'WARN ①写:2 请求 > FLOW_TURN_CAP 1' && ok "单轴请求超 FLOW_TURN_CAP 报 WARN" || fail "请求上限未 WARN: $(printf '%s' "$LAST_OUT" | grep WARN)"
 printf '%s' "$LAST_OUT" | grep -q '^| 编排方 | .* 1 轮' && ok "父会话记成编排方,窗外那轮已剔除" || fail "编排方行错(应 1 轮): $(printf '%s' "$LAST_OUT" | grep 编排方)"
 printf '%s' "$LAST_OUT" | grep -q '窗 09-0.*父会话提到本流程目录' && ok "编排方行带时间窗" || fail "编排方行缺时间窗"
 printf '%s' "$LAST_OUT" | grep -q 'USAGE OK: 2 会话 / 3 轮' && ok "USAGE OK 末行" || fail "USAGE 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
