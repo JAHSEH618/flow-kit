@@ -43,6 +43,8 @@ baseline)
   {
     # 头行记下扫描区:verify 按它复扫,两侧同源(嵌套目录不能靠 cut -d/ 猜回来)
     echo "# freeze-baseline $(date +%FT%T) @ $(git rev-parse --short HEAD 2>/dev/null || echo none) areas: $areas"
+    # F-14:这份文件与 `.after-*-hashes.txt` 肉眼极像、消费者不同(行首 git/sha 前缀)—— 喂给 shasum -c 恒空转恒绿。头行第二句写死消费者。
+    echo "# ⚠ 只能喂 flow-manifest verify;不是 shasum -c 体例(行首带 git/sha 前缀),喂给 shasum -c 一行都对不上 = 恒绿"
     # -uall:不带它 git 把未跟踪**目录**折成一行目录名,整目录的新文件从此不在基线里
     # (实测:未申报文件藏进未跟踪目录,verify 照绿)
     git -c core.quotepath=false status --porcelain -uall | sed 's/^/git /'   # 关 quotepath:中文路径否则成八进制转义

@@ -12,6 +12,8 @@
 #   例: flow-receipts specs/plan/p2-engine.md P2-T7
 # 仓根取自 FLOW_REPO_DIR(脚本自己 cd;plan 的相对路径以仓根为锚,不依赖调用方 cwd)。
 # 末行固定:`RECEIPTS OK: 轴1 <N> · 轴2 <M>`;两轴都空 ⟹ FATAL RC=2(「全覆盖」与「没扫到」不许同型)。
+# 摘录按 160 **字节**截(awk 在 LC_ALL=C 下按字节),截点若落在多字节字中间会产出非法 UTF-8(F-9,三批复发:派单件五份全中,
+#   编排方每批 iconv -c 清一遍)。utrunc 截完往回退到字边界:UTF-8 前导字节 ≥ \300、续字节 \200–\277,退不超过 3 字节。
 # 读的配置:FLOW_REPO_DIR FLOW_RECEIPT_MODE
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
@@ -23,15 +25,17 @@ cd "$FLOW_REPO_DIR"
 [ -f "$f" ] || flow_die "文件不存在 $f"
 MODE="${FLOW_RECEIPT_MODE:-section}"
 case "$MODE" in section|table) ;; *) flow_die "FLOW_RECEIPT_MODE 须为 section|table,得到:「$MODE」" ;; esac
+# 字边界截断(awk 函数,前置进每个 awk 程序;整个脚本的 awk 一律 LC_ALL=C,length/substr 按字节)
+UT=$(flow_awk_utrunc)
 
 if [ "$MODE" = table ]; then
   echo "## 轴1 · $t 的任务表行(体例 table;以 | 开头且点名 $t)"
-  a1=$(awk -v t="$t" -v F="$f" '/^[[:space:]]*\|/ && index($0,t) {printf "%s:%d: %s\n", F, NR, substr($0,1,160)}' "$f")
+  a1=$(LC_ALL=C awk -v t="$t" -v F="$f" "$UT"'/^[[:space:]]*\|/ && index($0,t) {printf "%s:%d: %s\n", F, NR, utrunc($0,160)}' "$f")
   [ -n "$a1" ] && printf '%s\n' "$a1"
   n1=$(printf '%s' "$a1" | grep -c . || true)
   echo ""
   echo "## 轴2 · 非表行里点名 $t 的行(别处落给它的账)"
-  a2=$(awk -v t="$t" -v F="$f" '!/^[[:space:]]*\|/ && index($0,t) {printf "%s:%d: %s\n", F, NR, substr($0,1,160)}' "$f")
+  a2=$(LC_ALL=C awk -v t="$t" -v F="$f" "$UT"'!/^[[:space:]]*\|/ && index($0,t) {printf "%s:%d: %s\n", F, NR, utrunc($0,160)}' "$f")
   [ -n "$a2" ] && printf '%s\n' "$a2"
   n2=$(printf '%s' "$a2" | grep -c . || true)
 else
@@ -42,14 +46,13 @@ else
   [ -n "$sec_end" ] || sec_end=$(wc -l < "$f" | tr -d ' ')
 
   echo "## 轴1 · $t 节内标记行(L$sec_start–$sec_end)"
-  a1=$(awk -v s="$sec_start" -v e="$sec_end" -v F="$f" \
-    'NR>=s && NR<=e && /接收位|强制条款|开口项/ {printf "%s:%d: %s\n", F, NR, substr($0,1,160)}' "$f")
+  # ⚠ "$UT" 与程序体之间不许有反斜杠换行:续行后中间的缩进空格把两段拆成两个词,程序体就成了「文件名」,两轴静默零命中
+  a1=$(LC_ALL=C awk -v s="$sec_start" -v e="$sec_end" -v F="$f" "$UT"'NR>=s && NR<=e && /接收位|强制条款|开口项/ {printf "%s:%d: %s\n", F, NR, utrunc($0,160)}' "$f")
   [ -n "$a1" ] && printf '%s\n' "$a1"
   n1=$(printf '%s' "$a1" | grep -c . || true)
   echo ""
   echo "## 轴2 · 节外点名 $t 的行(别的节落给它的账)"
-  a2=$(awk -v s="$sec_start" -v e="$sec_end" -v t="$t" -v F="$f" \
-    '(NR<s || NR>e) && index($0,t) {printf "%s:%d: %s\n", F, NR, substr($0,1,160)}' "$f")
+  a2=$(LC_ALL=C awk -v s="$sec_start" -v e="$sec_end" -v t="$t" -v F="$f" "$UT"'(NR<s || NR>e) && index($0,t) {printf "%s:%d: %s\n", F, NR, utrunc($0,160)}' "$f")
   [ -n "$a2" ] && printf '%s\n' "$a2"
   n2=$(printf '%s' "$a2" | grep -c . || true)
 fi

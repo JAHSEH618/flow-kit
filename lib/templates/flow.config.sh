@@ -60,7 +60,10 @@ FLOW_DEBT_WARN=16
 FLOW_FIX_BY_WRITER=1                   # 1 = ③改轮回①写轮本人
 FLOW_FOLD_MAX=6                        # 不阻塞条 ≤ 此数且全在③写权限面内 ⟹ 不起收尾轮
 FLOW_REQ_CAP=8                         # 任务节 open REQ 条数上限(超过 = 拆任务或 flow-dispatch --cap-ok)
-FLOW_TURN_CAP=120                      # 单轴请求数上限,flow-usage 只 WARN(REQ 条数不是长度的代理量:6 条 REQ 长出过 189 个请求)
+FLOW_TURN_CAP=120                      # 单会话请求数上限,flow-usage 只 WARN(REQ 条数不是长度的代理量:6 条 REQ 长出过 189 个请求);续轮单算
+FLOW_DISPATCH_EXCERPT_BYTES=12000      # 派单里 plan 任务节选封顶字节;超过只印 outline + REQ 行 + 节尾;②③④ 不印正文
+FLOW_MICRO_FIX_LINES=3                 # ④ 必闭且改动估计 ≤ 此行数 ⟹ 编排方落笔 + 提出轴复验,不起 ③改二
+FLOW_STALL_SEC=300                     # flow-usage 卡顿判据:单次工具调用 ≥ 此秒数单列 WARN
 FLOW_RECEIPT_MODE="section"            # plan 体例:section = 任务是 `## <任务号>` 小节;table = 任务是表行(flow-receipts 按它枚举)
 #FLOW_INDEX_DOC="docs/debts-index.md"  # 欠账索引块的落点;不设 = 跟 FLOW_ROOT_DOC。开放条目多时搬出常驻文件,根文档留一行指针
 FLOW_ROLE_MODELS=""                    # 分角色模型,如 "②A=sonnet";空 = 全部继承编排方;换前先 flow-review-diff 对照

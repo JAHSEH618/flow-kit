@@ -1,0 +1,145 @@
+#!/bin/sh
+# flow-round —— 轮级的两个过渡各一条命令(开工 / 收工交接口)+ 状态档事实段生成。
+# 病根:编排方在每个轮间用 10–25 个请求做文书(基线、冻结、fact-lint、预算、between、状态档整段 python 重写),每个请求带 30 万上下文;
+#   两批实测编排方自占关键路径 70–100 min,其中状态档整段重写 ≥6 次 × 3–5k token,还为读 kit 源码学用法每批花 3–4 个请求。
+#   文件名也长出两套(`.manifest-baseline-①写` 与 `…-①写轮`)。本命令按约定派生全部文件名,编排方只给 <流程目录> <轮名>,判读只看末行。
+# 用法:
+#   flow-round open  <流程目录(绝对)> <轮名>                      # 开工:fact-lint verify(F-13)→ manifest baseline → doc-budget → 步骤账在否 → 状态档事实段
+#   flow-round close <流程目录(绝对)> <轮名> [--task <号>] [--plan <plan绝对>]
+#                                                                   # 收工交接口:flow-close --between(文件名按约定)+ 步骤账全勾 + 状态档事实段
+#   flow-round state <流程目录(绝对)>                             # 只刷状态档事实段(00-ORCH-STATE.md 的 <!-- flow:gen-* --> 段;段外是编排方的裁决,不动)
+# 约定文件名(flow-dispatch --dir 印进派单的就是这些;agent 与编排方两侧同源):
+#   .manifest-baseline-<轮名>.txt · .declared-<轮名>.txt · .after-<轮名>-hashes.txt · .steps-<轮名>.md · .evidence/<轮名>-*.txt
+# F-13:开工序里从没有 `flow-fact-lint verify` 这一步 —— 落位段写进 specs/ 后直接 baseline 冻结,自带的 RED 潜到①写收工才炸,
+#   而那时 specs/ 已在所有 agent 的禁写面。open 先 verify,新增 RED > 0 即红(门定义刚改过就先 `flow-fact-lint baseline` 重打)。
+# 末行固定:`ROUND-OPEN OK|RED` / `ROUND-CLOSE OK|RED` / `ROUND-STATE OK`;参数错 FATAL RC=2。
+# 读的配置:FLOW_REPO_DIR FLOW_FACT_LINT_ROOTS FLOW_FACT_LINT_BASELINE_PATH;子命令 flow-close / flow-manifest / flow-fact-lint / flow-doc-budget / flow-step 按名调用。
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_load_config
+
+usage() { echo "用法: flow-round open|close <流程目录(绝对)> <轮名> [--task <号>] [--plan <plan绝对>] | flow-round state <流程目录(绝对)>" >&2; exit 2; }
+CMD="${1:-}"; DIR="${2:-}"
+[ -n "$CMD" ] && [ -n "$DIR" ] || usage
+case "$DIR" in /*) ;; *) flow_die "流程目录须绝对路径: $DIR" ;; esac
+[ -d "$DIR" ] || flow_die "流程目录不存在: $DIR"
+ROUND=""; TASK=""; PLAN=""
+if [ "$CMD" != state ]; then
+  ROUND="${3:-}"; [ -n "$ROUND" ] || usage; shift 3
+  while [ $# -gt 0 ]; do
+    case "$1" in --task|--plan) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
+    case "$1" in --task) TASK="$2"; shift 2 ;; --plan) PLAN="$2"; shift 2 ;; *) flow_die "未知参数 $1" ;; esac
+  done
+fi
+EV="$DIR/.evidence"; mkdir -p "$EV"
+red=0; step=0
+hdr() { step=$((step+1)); echo "== $step. $1 =="; }
+
+# 轮名 → 文件前缀(派单 / 回件按它找;别的轮名按字面找)
+prefix_of() {
+  case "$1" in
+    ①写*) echo 01 ;; ②A*) echo 02a ;; ②B*) echo 02b ;; ③改*) echo 03 ;; ④A*) echo 04a ;; ④B*) echo 04b ;;
+    *) echo "$1" ;;
+  esac
+}
+kb() { printf '%d KB' $(( ($(wc -c < "$1" | tr -d ' ') + 512) / 1024 )); }
+newest() {   # newest <glob 模式(相对 DIR)>:按 mtime 最新的一个文件名(无则空)
+  ( cd "$DIR" && ls -t $1 2>/dev/null | head -1 )
+}
+
+# —— 状态档事实段:00-ORCH-STATE.md 的 gen 段整段重生成;段外(编排方的裁决)一字不动 ——
+gen_state() {
+  S="$DIR/00-ORCH-STATE.md"
+  T=$(mktemp "$(flow_tmpdir)/flow-round.XXXXXX") || exit 2
+  {
+    echo "<!-- flow:gen-begin -->"
+    echo "## 〇 · 事实段(flow-round 生成 $(date +%F\ %H:%M);段内勿手改,段外是编排方的裁决)"
+    echo "- 树:HEAD $(git -C "$FLOW_REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo none) · porcelain $(git -C "$FLOW_REPO_DIR" -c core.quotepath=false status --porcelain -uall 2>/dev/null | LC_ALL=C grep -c .) · 流程目录 $DIR"
+    echo ""
+    echo "| 轮 | 派单 | 步骤账 | 回件 | 冻结件 | 门末行 |"
+    echo "|---|---|---|---|---|---|"
+    ( cd "$DIR" && ls -tr .manifest-baseline-*.txt 2>/dev/null ) | sed -e 's/^\.manifest-baseline-//' -e 's/\.txt$//' | while IFS= read -r r; do
+      [ -n "$r" ] || continue
+      pfx=$(prefix_of "$r")
+      d=$(newest "${pfx}*dispatch*.md"); h=$(newest "${pfx}*handoff*.md ${pfx}*review*.md")
+      dcell="—"; [ -n "$d" ] && dcell="$d $(kb "$DIR/$d")"
+      hcell="—"; [ -n "$h" ] && hcell="$h $(kb "$DIR/$h")"
+      if [ -f "$DIR/.steps-$r.md" ]; then scell=$(flow-step show "$DIR" "$r" 2>/dev/null | tail -1 | sed -e 's/^STEPS OK: //' -e 's/^STEPS DONE: //' -e 's/ · 下一步.*//'); else scell="无"; fi
+      fcell=""
+      [ -f "$DIR/.after-$r-hashes.txt" ] && fcell="after ✓" || fcell="after ✗"
+      [ -f "$DIR/.declared-$r.txt" ] && fcell="$fcell declared ✓" || fcell="$fcell declared ✗"
+      g=$(ls -t "$EV"/"$r"-*gates*.txt 2>/dev/null | head -1)
+      gcell="—"; [ -n "$g" ] && gcell=$(LC_ALL=C grep -E '^FLOW-GATES' "$g" | tail -1 | cut -c1-60)
+      [ -n "$gcell" ] || gcell="(无 FLOW-GATES 行)"
+      echo "| $r | $dcell | $scell | $hcell | $fcell | $gcell |"
+    done
+    echo ""
+    echo "- 最近落盘(.evidence,mtime 降序 3 条):$( ( cd "$EV" && ls -t 2>/dev/null | head -3 | tr '\n' ' ' ) )"
+    echo "<!-- flow:gen-end -->"
+  } > "$T"
+  if [ -f "$S" ]; then
+    if grep -q '^<!-- flow:gen-begin -->' "$S" && grep -q '^<!-- flow:gen-end -->' "$S"; then
+      # 替换标记段:段前 + 新段 + 段后
+      awk -v T="$T" '
+        /^<!-- flow:gen-begin -->/ { while ((getline l < T) > 0) print l; skip = 1; next }
+        /^<!-- flow:gen-end -->/ && skip { skip = 0; next }
+        !skip { print }' "$S" > "$S.tmp" && mv "$S.tmp" "$S"
+    else
+      { cat "$T"; echo ""; cat "$S"; } > "$S.tmp" && mv "$S.tmp" "$S"
+    fi
+  else
+    { echo "# 00-ORCH-STATE —— 编排方状态档(中断点专用件,不连载)"; echo ""; cat "$T"; echo ""; echo "## 一 · 编排方裁决(手写区;第一节永远 = 下一份可直接派的派单)"; echo ""; } > "$S"
+  fi
+  rm -f "$T"
+  echo "状态档事实段已刷: $S"
+}
+
+case "$CMD" in
+open)
+  BASE="$DIR/.manifest-baseline-$ROUND.txt"
+  hdr "flow-fact-lint verify(F-13:落位段自带的 RED 在这里炸,不潜到写轮)"
+  if [ -z "$FLOW_FACT_LINT_ROOTS" ]; then echo "  跳过:FLOW_FACT_LINT_ROOTS 未配置"
+  elif [ ! -f "$FLOW_FACT_LINT_BASELINE_PATH" ]; then echo "  跳过:基线不存在 $FLOW_FACT_LINT_BASELINE_PATH(先 flow-fact-lint baseline)"
+  else
+    ( cd "$FLOW_REPO_DIR" && flow-fact-lint verify > "$EV/$ROUND-open-factlint.txt" 2>&1 ); rc=$?
+    LC_ALL=C grep -E '^verify:|^RED NEW|^FATAL' "$EV/$ROUND-open-factlint.txt"; echo "RC=$rc"
+    if [ "$rc" != 0 ]; then
+      echo "  RED:新增 RED > 0 —— 是编排方刚写的落位段就地改;门定义刚改过(0.6.0 补了「行」单位与全树)就先 flow-fact-lint baseline 重打"
+      echo "ROUND-OPEN RED: $ROUND(fact-lint 先红,基线没打 —— 改完重跑 open)"; exit 1
+    fi
+  fi
+  hdr "flow-manifest baseline → $(basename "$BASE")"
+  if [ -f "$BASE" ]; then echo "  FATAL:基线已存在(重开一轮要显式 rm,不静默覆盖)"; red=1
+  else ( cd "$FLOW_REPO_DIR" && flow-manifest baseline "$BASE" ); rc=$?; echo "RC=$rc"; [ "$rc" = 0 ] || red=1; fi
+  hdr "flow-doc-budget(派单件自写字节)"
+  flow-doc-budget "$DIR" > "$EV/$ROUND-open-budget.txt" 2>&1; rc=$?
+  LC_ALL=C grep -E '^RED|^FATAL|^WARN' "$EV/$ROUND-open-budget.txt"; echo "RC=$rc"; [ "$rc" = 0 ] || red=1
+  hdr "步骤账 .steps-$ROUND.md"
+  if [ -f "$DIR/.steps-$ROUND.md" ]; then flow-step show "$DIR" "$ROUND" | tail -1
+  else echo "  WARN:无步骤账 —— flow-dispatch --dir 会建;没有它就没有断点续跑"; fi
+  hdr "状态档事实段"; gen_state
+  if [ "$red" = 0 ]; then echo "ROUND-OPEN OK: $ROUND(基线 $(basename "$BASE");此后编排方对仓内文件零编辑)"; exit 0; else echo "ROUND-OPEN RED: $ROUND"; exit 1; fi ;;
+close)
+  BASE="$DIR/.manifest-baseline-$ROUND.txt"; DECL="$DIR/.declared-$ROUND.txt"; AFTER="$DIR/.after-$ROUND-hashes.txt"
+  for f in "$BASE" "$DECL" "$AFTER"; do [ -f "$f" ] || flow_die "收工件缺失: $f(约定名;agent 收工件没落全,先补,别绕过)"; done
+  hdr "flow-close --between(交付态哈希 + 冻结 verify + 非空转 + 树读数 + 路由复跑 + REQ 对账 + 预算)"
+  set -- "$DIR" "$BASE" "$DECL" "$AFTER"
+  [ -n "$TASK" ] && set -- "$@" --task "$TASK"
+  [ -n "$PLAN" ] && set -- "$@" --plan "$PLAN"
+  flow-close --between "$@" > "$EV/$ROUND-close-between.txt" 2>&1; rc=$?
+  LC_ALL=C grep -E '^== |^RED|^FATAL|^BETWEEN|^OK=|RC=' "$EV/$ROUND-close-between.txt" | sed 's/^/  /'
+  echo "RC=$rc(全量 $EV/$ROUND-close-between.txt)"; [ "$rc" = 0 ] || red=1
+  hdr "步骤账全勾"
+  if [ -f "$DIR/.steps-$ROUND.md" ]; then
+    last=$(flow-step show "$DIR" "$ROUND" | tail -1); echo "  $last"
+    case "$last" in "STEPS DONE"*) ;; *) echo "  RED:步骤账未全勾 —— 要么 agent 没收工,要么漏勾;先核回件再定"; red=1 ;; esac
+  else echo "  WARN:无步骤账,跳过"; fi
+  hdr "回件"
+  pfx=$(prefix_of "$ROUND"); h=$(newest "${pfx}*handoff*.md ${pfx}*review*.md")
+  if [ -n "$h" ]; then echo "  $DIR/$h($(kb "$DIR/$h"));编排方只读〇节 + 丙栏"; else echo "  RED:找不到 ${pfx}*handoff*.md / ${pfx}*review*.md"; red=1; fi
+  hdr "状态档事实段"; gen_state
+  if [ "$red" = 0 ]; then echo "ROUND-CLOSE OK: $ROUND"; exit 0; else echo "ROUND-CLOSE RED: $ROUND"; exit 1; fi ;;
+state)
+  gen_state; echo "ROUND-STATE OK"; exit 0 ;;
+*) usage ;;
+esac

@@ -20,7 +20,8 @@
 #   flow-fact-lint baseline [<基线文件(绝对)>] [路径...]        # 写基线 TSV(RED 类存量容忍,收尾轮烧减后重跑收紧)
 #   flow-fact-lint verify   [<基线文件(绝对)>] [路径...]        # 新增 RED 命中(不在基线)= RED,RC=1;修掉的报 FIXED
 # 基线省略 = FLOW_FACT_LINT_BASELINE_PATH;路径省略 = FLOW_FACT_LINT_ROOTS 全扫(空 = FATAL,要配)。
-# 行内豁免:该行含 fact-ok(写的人当场自分类 —— 枚举在前分类在后,挪到了写作时刻)。
+# 行内豁免:该行含 `fact-ok(` / `fact-ok:`(全角括号 / 冒号同)—— 写的人当场自分类并紧跟理由。
+#   F-15:旧写法「含 fact-ok 三个字即豁免」让叙述性提到它的行被静默豁免;豁免只认紧跟理由的形态。
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
 flow_load_config
@@ -34,10 +35,12 @@ fi
 for a in "$@"; do case "$a" in /*) flow_die "路径参数须仓相对,不许绝对路径: $a" ;; esac; done
 
 # —— 类模式(CJK 按字节做字面量交替,禁用 CJK 字符类:BSD awk 按字节匹配)——
-QCLAIM="${FLOW_FL_QCLAIM:-本仓从|本仓没|本仓无|全仓|整个仓|树里没有|树上没有|从没跑过|从没有人|从来没有|从未有|只有一个|只在一处|没有任何|没有别的|无一例外|永远不会|绝不会|不存在第二|只有两个|只有三个|只有两处|只有两条|只有三处|只有三条|没有第二|没有第三|不存在第三}"
+QCLAIM="${FLOW_FL_QCLAIM:-本仓从|本仓没|本仓无|全仓|全树|整树|整个仓|树里没有|树上没有|从没跑过|从没有人|从来没有|从未有|只有一个|只在一处|没有任何|没有别的|无一例外|永远不会|绝不会|不存在第二|只有两个|只有三个|只有两处|只有两条|只有三处|只有三条|没有第二|没有第三|不存在第三}"
 QWIDE="${FLOW_FL_QWIDE:-全部|所有|每条|任何|一律|从不|从没|从未|永不|绝不|唯一}"
 PROV="${FLOW_FL_PROV:-第一手|独立复跑|$(flow_mark_re)[a-z]? *(实测|复跑|验证)|(写轮|改轮|复审) *(实测|复跑|验证)}"
-SELFNUM="${FLOW_FL_SELFNUM:-(下面|以下|上文|下文|本段|本文件|全段|共计|共) *([0-9]+|(一|二|三|四|五|六|七|八|九|十)+) *(条|处|个|项|件)}"
+# F-16:单位表补「行」(「实跑 grep 是 7 行」类自报计数此前门完全看不见);「实跑 / 实测 / 命中 … N 行」这一形也算自指数
+#   ⚠ BSD awk 的动态正则不认 {n,m} 区间(整条静默编译失败 ⟹ 该行之后全不判),连接段只能用 [^0-9]*
+SELFNUM="${FLOW_FL_SELFNUM:-(下面|以下|上文|下文|本段|本文件|全段|共计|共) *([0-9]+|(一|二|三|四|五|六|七|八|九|十)+) *(条|处|个|项|件|行)|(实跑|实测|命中)[^0-9]*[0-9]+ *(行|条|处|个|项|件)}"
 
 MATCH_AWK='
 {
@@ -48,7 +51,7 @@ MATCH_AWK='
     else { if (line !~ /^[[:space:]]*(\/\/|\*|\/\*)/ && line !~ /[[:space:]]\/\//) next }
   }
   t=line; sub(/^[[:space:]]+/,"",t); sub(/[[:space:]]+$/,"",t); gsub(/\t/," ",t)
-  ok = (t ~ /fact-ok/) ? "OKD" : "HIT"
+  ok = (t ~ /fact-ok[(:]/ || index(t,"fact-ok（") || index(t,"fact-ok：")) ? "OKD" : "HIT"
   q=t; gsub(/所有权/,"",q)
   qc=q; gsub(/没有任何红/,"",qc)   # 静默性申报(「…没有任何红」)不是全树断言,摘出 QCLAIM;仍由 QWIDE 的「任何」落 WARN
   c=""
@@ -83,6 +86,7 @@ cat > "$SELF/pos.ts" <<'EOF'
 // 这张表只有两个写口,没有第三个
 // ③z 实测 + ④z 独立复跑通过
 // 下面三条依次生效:
+// 实跑 grep 是 7 行,fact-ok 三个字出现在叙述里不算豁免
 const x = 1 // 空值一律走默认分支
 EOF
 cat > "$SELF/neg.ts" <<'EOF'
@@ -92,6 +96,7 @@ const y = 2 // 常规缓存失效路径
 EOF
 cat > "$SELF/pos.md" <<'EOF'
 全仓零命中该模式。
+全树零命中该模式。
 ③e 实测:输出如下。
 #12b 复跑:读数同上。
 下面三条各造一个样本。
@@ -106,8 +111,8 @@ match_file "$SELF/pos.md" pos.md > "$SELF/o3"; match_file "$SELF/neg.md" neg.md 
 wq=$(cut -f2 "$SELF/o1" "$SELF/o3" | grep -c '^QUANT$'); ww=$(cut -f2 "$SELF/o1" | grep -c '^QUANTW$')
 wp=$(cut -f2 "$SELF/o1" "$SELF/o3" | grep -c '^PROV$'); ws=$(cut -f2 "$SELF/o1" "$SELF/o3" | grep -c '^SELFNUM$')
 wn=$(cat "$SELF/o2" "$SELF/o4" | grep -c .)
-if [ "$wq" -lt 3 ] || [ "$ww" -lt 1 ] || [ "$wp" -lt 3 ] || [ "$ws" -lt 2 ] || [ "$wn" -ne 0 ]; then
-  echo "FATAL: 非空转自证失败(QUANT=$wq/3 QUANTW=$ww/1 PROV=$wp/3 SELFNUM=$ws/2 阴性误响=$wn/0)—— 模式坏了,拒绝给结论" >&2
+if [ "$wq" -lt 4 ] || [ "$ww" -lt 1 ] || [ "$wp" -lt 3 ] || [ "$ws" -lt 3 ] || [ "$wn" -ne 0 ]; then
+  echo "FATAL: 非空转自证失败(QUANT=$wq/4 QUANTW=$ww/1 PROV=$wp/3 SELFNUM=$ws/3 阴性误响=$wn/0)—— 模式坏了,拒绝给结论" >&2
   exit 2
 fi
 echo "witness: QUANT✓(code+md) QUANTW✓ PROV✓(code+md;圈码+#N) SELFNUM✓(code+md) 阴性✓(阳性另造,非实例清单)"

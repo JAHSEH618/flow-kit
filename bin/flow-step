@@ -1,0 +1,71 @@
+#!/bin/sh
+# flow-step —— 轮的步骤账(断点续跑的真值源)。
+# 病根:轮的进度只活在 agent 的上下文里,叫停 / 撞限额 / watchdog 判死,任一中断都是整轮返工
+#   (两批实测各 ≈30 min:①写-续 13 min、②A/②B-r2 18 min、新起③ 26 min、续轮派单由编排方手写 3–5k token)。
+#   把进度落成文件:agent 每完成一步打一个勾;续轮派单由 `flow-dispatch --resume` 从这份账机械生成,谁接手都从下一个没勾的步骤起。
+# 文件:<流程目录>/.steps-<轮名>.md(dotfile:不进 doc-budget 热路径,`ls` 不带 -a 看不见)。
+#   体例每行 `- [ ] N · 文字` / `- [x] N · 文字 · <时间> · <备注>`;首行是 `# 步骤账 · <轮名>` 头。
+# 用法:
+#   flow-step init <流程目录(绝对)> <轮名> <步骤文字>...   # 建账;已存在 ⟹ FATAL(重建先删,进度不许被静默覆盖)
+#   flow-step add  <流程目录(绝对)> <轮名> <步骤文字>      # 追加一步(agent 拆自己的子步骤)
+#   flow-step done <流程目录(绝对)> <轮名> <步骤号> [备注]  # 打勾;已勾 ⟹ WARN 不重写;号不存在 ⟹ FATAL
+#   flow-step show <流程目录(绝对)> <轮名>                 # 打印账 + 末行
+# 末行固定:`STEPS OK: 已勾 a / 共 b · 下一步 N · <文字>`;全勾 `STEPS DONE: 已勾 b / 共 b`;账不存在 ⟹ FATAL RC=2。
+# 读的配置:无(文件参数绝对路径;库只为 die/warn)。
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+
+usage() { echo "用法: flow-step init|add|done|show <流程目录(绝对)> <轮名> [...]" >&2; exit 2; }
+CMD="${1:-}"; DIR="${2:-}"; ROUND="${3:-}"
+[ -n "$CMD" ] && [ -n "$DIR" ] && [ -n "$ROUND" ] || usage
+case "$DIR" in /*) ;; *) flow_die "流程目录须绝对路径: $DIR" ;; esac
+[ -d "$DIR" ] || flow_die "流程目录不存在: $DIR"
+shift 3
+F="$DIR/.steps-$ROUND.md"
+
+count_lines() {   # 打印 "已勾 总数 下一步号 下一步文字"
+  LC_ALL=C awk -v F="$F" '
+    /^- \[x\] / { done++; total++; next }
+    /^- \[ \] / { total++; if (nxt == "") { l = $0; sub(/^- \[ \] /, "", l); n = l; sub(/ · .*/, "", n); t = l; sub(/^[0-9]+ · /, "", t); nxt = n; nt = t } ; next }
+    END { printf "%d\t%d\t%s\t%s\n", done + 0, total + 0, nxt, nt }' "$F"
+}
+tail_line() {
+  count_lines | { IFS="$(printf '\t')" read -r d t n nt
+    if [ "$t" = 0 ]; then echo "FATAL: 步骤账零步: $F" >&2; exit 2; fi
+    if [ "$d" = "$t" ]; then echo "STEPS DONE: 已勾 $d / 共 $t"; else echo "STEPS OK: 已勾 $d / 共 $t · 下一步 $n · $nt"; fi; }
+}
+
+case "$CMD" in
+init)
+  [ $# -ge 1 ] || flow_die "init 至少要一条步骤文字"
+  [ -f "$F" ] && flow_die "步骤账已存在,不覆盖(进度不许被静默覆盖;要重建先 rm): $F"
+  { echo "# 步骤账 · $ROUND(flow-step;每完成一步 \`flow-step done $DIR $ROUND <N> \"<一句>\"\`;续轮从第一个未勾步骤接手)"; i=0
+    for s in "$@"; do i=$((i+1)); printf -- '- [ ] %d · %s\n' "$i" "$s"; done; } > "$F"
+  echo "步骤账已建: $F($i 步)"; tail_line ;;
+add)
+  [ $# -ge 1 ] || flow_die "add 需要步骤文字"
+  [ -f "$F" ] || flow_die "步骤账不存在(先 init): $F"
+  n=$(LC_ALL=C grep -c '^- \[[ x]\] ' "$F"); n=$((n+1))
+  printf -- '- [ ] %d · %s\n' "$n" "$*" >> "$F"
+  echo "已加第 $n 步"; tail_line ;;
+done)
+  N="${1:-}"; [ -n "$N" ] || flow_die "done 需要步骤号"
+  case "$N" in ''|*[!0-9]*) flow_die "步骤号须为数字: $N" ;; esac
+  shift; NOTE="$*"
+  [ -f "$F" ] || flow_die "步骤账不存在(先 init): $F"
+  LC_ALL=C grep -q "^- \[[ x]\] $N · " "$F" || flow_die "第 $N 步不存在: $F"
+  if LC_ALL=C grep -q "^- \[x\] $N · " "$F"; then flow_warn "第 $N 步已勾过,不重写"; tail_line; exit 0; fi
+  TS=$(date +%FT%H:%M)
+  # 只改那一行;awk 不吃 -v 里的多行,备注单行(含换行 FATAL)。⚠ $(printf '\n') 会被命令替换剥掉尾换行成空串,模式就成了 **
+  NL=$(printf '\nx'); NL=${NL%x}
+  case "$NOTE" in *"$NL"*) flow_die "备注不许含换行" ;; esac
+  STEP_N="$N" STEP_TS="$TS" STEP_NOTE="$NOTE" LC_ALL=C awk '
+    BEGIN { n = ENVIRON["STEP_N"]; ts = ENVIRON["STEP_TS"]; note = ENVIRON["STEP_NOTE"] }
+    $0 ~ ("^- \\[ \\] " n " · ") { sub(/^- \[ \] /, "- [x] "); $0 = $0 " · " ts (note == "" ? "" : " · " note) }
+    { print }' "$F" > "$F.tmp" && mv "$F.tmp" "$F"
+  echo "已勾第 $N 步"; tail_line ;;
+show)
+  [ -f "$F" ] || flow_die "步骤账不存在: $F(没有步骤账就没有断点;从回件重建:flow-step init …)"
+  cat "$F"; tail_line ;;
+*) usage ;;
+esac

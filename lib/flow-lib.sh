@@ -75,7 +75,11 @@ flow_load_config() {
   FLOW_FIX_BY_WRITER=1
   FLOW_FOLD_MAX=6
   FLOW_REQ_CAP=8
-  FLOW_TURN_CAP=120                     # 单轴请求数上限(flow-usage 只 WARN):携带 ∝ 轮数 × 上下文,上下文又随轮数长 ⟹ 二次
+  FLOW_TURN_CAP=120                     # 单会话请求数上限(flow-usage 只 WARN):携带 ∝ 轮数 × 上下文,上下文又随轮数长 ⟹ 二次;按会话判,续轮单算
+  FLOW_DISPATCH_EXCERPT_BYTES=12000     # 派单里 plan 任务节选的字节封顶:超过只印 outline + REQ 行 + 节尾(本刀落位段),其余给「文件 + 行号」指针
+                                        # 实测一节 42 KB 横跨三刀,八个 agent 各读一遍 ≈ 该批携带 10%;②③④ 一律不印正文
+  FLOW_MICRO_FIX_LINES=3                # ④ 判必闭且改动估计 ≤ 此行数(且在③写权限面内)⟹ 编排方落笔 + 提出轴复验,不起 ③改二(微改通道)
+  FLOW_STALL_SEC=300                    # flow-usage 卡顿判据:一次工具调用 ≥ 此秒数单列 WARN(harness 卡顿实测 600 s 整、两轴同刻放行)
   FLOW_RECEIPT_MODE="section"           # plan 体例:section = `## <任务号>` 小节;table = 任务是表行
   FLOW_ROLE_MODELS=""
   FLOW_TRANSCRIPTS_DIR="$HOME/.claude/projects"
@@ -104,7 +108,7 @@ flow_load_config() {
          FLOW_MAP_DEBT FLOW_MAP_DEBT_PATH FLOW_LOCAL_DOC FLOW_LOCAL_DOC_PATH \
          FLOW_FACT_LINT_BASELINE FLOW_FACT_LINT_BASELINE_PATH FLOW_FACT_LINT_ROOTS FLOW_FACT_LINT_EXCLUDE \
          FLOW_GATE_SUMMARY_RE FLOW_INFRA_FAIL_RE FLOW_INFRA_FAIL_GATES FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_BYTES FLOW_DOC_BUDGET_SELF FLOW_DOC_BUDGET_DIR FLOW_DOC_BUDGET_RULEBOOK \
-         FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_FIX_BY_WRITER FLOW_FOLD_MAX FLOW_MERGE_STRATEGY FLOW_REQ_CAP FLOW_TURN_CAP FLOW_ROLE_MODELS FLOW_TRANSCRIPTS_DIR \
+         FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_FIX_BY_WRITER FLOW_FOLD_MAX FLOW_MERGE_STRATEGY FLOW_REQ_CAP FLOW_TURN_CAP FLOW_DISPATCH_EXCERPT_BYTES FLOW_MICRO_FIX_LINES FLOW_STALL_SEC FLOW_ROLE_MODELS FLOW_TRANSCRIPTS_DIR \
          FLOW_KEEP_PLUGINS FLOW_KEEP_MCP
 }
 
@@ -131,6 +135,24 @@ flow_filter_kit_owned() {   # stdin 一行一路径 → 去掉 kit 自有件(精
 #   枚举失败吐的是空集,而空集在三个调用方那里都是绿 —— 调用方必须按 §J 同层捕获,RC≠0 不许当空集用。
 flow_changed_paths() {
   git -C "$FLOW_REPO_DIR" -c core.quotepath=false status --porcelain -uall | sed 's/^...//' | sed 's/.* -> //' | flow_filter_kit_owned
+}
+
+# —— UTF-8 字边界截断(awk 函数源码;调用方 `LC_ALL=C awk "$(flow_awk_utrunc)"'… utrunc($0, N) …'`,length/substr 按字节)——
+#   按字节截会劈开多字节汉字产出非法 UTF-8(F-9,三批复发:派单件五份全中,编排方每批 iconv -c 清);
+#   截完往回退到字边界:前导字节 ≥ \300、续字节 \200–\277,最多退 3 字节。flow-receipts 的摘录与 flow-dispatch 的节头共用。
+flow_awk_utrunc() {
+  cat <<'AWK'
+function utrunc(s, n,   t, i, c, k) {
+  if (length(s) <= n) return s
+  t = substr(s, 1, n)
+  for (i = n; i > n - 4 && i > 0; i--) {
+    c = substr(t, i, 1)
+    if (c < "\200") return t
+    if (c >= "\300") { k = (c >= "\360") ? 4 : ((c >= "\340") ? 3 : 2); return (i + k - 1 > n) ? substr(t, 1, i - 1) : t }
+  }
+  return t
+}
+AWK
 }
 
 # —— 门与哨兵:config 里以函数给出(sh 原生,免解析分隔符)。没定义就给空实现,调用方自判「零门」——

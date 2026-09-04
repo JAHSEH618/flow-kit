@@ -81,8 +81,13 @@ FLOW_DEBT_WARN=16                      # 必读总条数只 WARN 的线
 FLOW_FIX_BY_WRITER=1                   # 1 = ③改轮 SendMessage 回①写轮本人;0 = 另起 agent
 FLOW_FOLD_MAX=6                        # 折轮条件:不阻塞条 ≤ 此数且全在③写权限面内 ⟹ 不起收尾轮
 FLOW_REQ_CAP=8                         # 任务节 open REQ 条数上限:①写是最长的会话,携带成本随轮数平方长,超了拆任务(或 --cap-ok)
-FLOW_TURN_CAP=120                      # 单轴请求数上限,flow-usage 只 WARN(不是门)。
+FLOW_TURN_CAP=120                      # 单会话请求数上限,flow-usage 只 WARN(不是门);按会话判,续轮单算(按轴合计时有续轮必红)。
 #                                        REQ 条数不是长度的代理量:p4c ①写只有 6 条 REQ,却长出 189 个请求、携带 51.8M(全批的 48%)
+FLOW_DISPATCH_EXCERPT_BYTES=12000      # 派单里 plan 任务节选的字节封顶。实测 §P4-T3 一节 42 KB 横跨三刀,八个 agent 各读一遍 ≈ 该批携带 10%;
+#                                        超过只印 outline + REQ 行 + 节尾(本刀的落位段住在节尾),其余「文件 + 行号」指针;②③④ 一律只给 outline + REQ 行
+FLOW_MICRO_FIX_LINES=3                 # 微改通道:④ 判必闭且改动估计 ≤ 此行数、在③写权限面内 ⟹ 编排方落笔(占裁决号)+ 提出那条的轴复验,不起 ③改二。
+#                                        实测 p4d 两条一句话改动走了整整一个周期(③改二 19 min + 续 9 min + ④B 定点 8 min)
+FLOW_STALL_SEC=300                     # flow-usage 卡顿判据:一次工具调用 ≥ 此秒数单列 WARN(p4d 实测 ②A ②B 各挂 600 s 整、同一秒放行 —— harness 的,不是脚本的)
 FLOW_RECEIPT_MODE="section"            # plan 体例:section = 任务是 `## <任务号>` 小节;table = 任务是表行
 #                                        体例不对时 flow-receipts 恒 FATAL,接收位就退回人眼核 —— 这是装第二个项目才暴露的
 FLOW_ROLE_MODELS=""                    # 分角色模型,如 "②A=sonnet";空 = 继承编排方。换前同一产物两模型各审一次,flow-review-diff 原版独有为空才换

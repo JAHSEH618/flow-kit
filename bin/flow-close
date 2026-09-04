@@ -1,13 +1,19 @@
 #!/bin/sh
-# flow-close —— 编排方的两种核对一键。
+# flow-close —— 编排方的核对与收口一键(四种模式)。
 #   默认(轮收工):§B5 冻结核对 + 非空转 + 交付态哈希 + 账本 lint + 文档预算 + 规则书棘轮。
-#   --between(轮间交接口):交付态哈希 + 冻结核对 + 非空转 + 树读数 + 路由复跑 + REQ 对账 + 文档预算。
+#   --between(轮间交接口):交付态哈希 + 冻结核对 + 非空转 + 树读数 + 路由复跑 + REQ 对账 + 文档预算。(flow-round close 按约定名调它)
+#   --wrap(收口机械段,0.6.0):三态表 dry-run → 索引重渲 → 账本 lint → REQ 对账 → 门整跑(收口那一次)→ 默认模式六项 → 轮数账 --write → 状态档事实段。
+#       病根:收口十步里的机械步曾各占编排方一个请求(ShipLedger 收口 ≈60 min、StockSteer 20+27 min);这里一条命令、一行末行。
+#       判断步(账本 diff 审、spec 落地记录、根文档读数、commit 消息)仍归编排方 —— 它们不是机械的。
+#   --ship(收口提交后,0.6.0):clear-map-debt → push dev → gh pr create → flow-pr-merge --background,一条命令四个请求。
 # 病根:轮间那套一直是手拼 5–7 条命令、每批 4 次(实测 ≈28 min/批,占编排固定开销的三分之一),
 #   而手拼时 RC 隔着管道取、判据进 && 链 —— 正是 §J 那两条硬规矩最常破的地方。
 # 用法: flow-close <流程目录(绝对)> <基线文件(绝对)> <申报清单(绝对)> [after-hashes(绝对)]
 #       flow-close --between <流程目录(绝对)> <基线(绝对)> <申报清单(绝对)> <after-hashes(绝对)> [--task <任务号>] [--plan <plan绝对>]
 #         --task 给了才跑路由复跑(按申报清单里的路径),--task + --plan 都给了才跑 flow-trace。
-# 逐项打印 RC;任一红 ⟹ 末行 `ROUND-CLOSE RED` / `BETWEEN RED` 且 RC=1;全绿 ⟹ `ROUND-CLOSE OK` / `BETWEEN OK`。
+#       flow-close --wrap <流程目录(绝对)> <基线(绝对)> <申报清单(绝对)> [after-hashes(绝对)] [--task <号>] [--plan <plan绝对>] [--verdicts <三态表绝对>]
+#       flow-close --ship <commit> --subject <PR 标题> [--verdicts <三态表绝对>]
+# 逐项打印 RC;任一红 ⟹ 末行 `ROUND-CLOSE RED` / `BETWEEN RED` / `WRAP RED` 且 RC=1;全绿 ⟹ `… OK`。--ship 末行 `SHIP OK: PR #N …` / `SHIP RED`。
 #   flow-doc-budget 的 WARN 不算红(它是仪表盘)。
 # 非空转:抽的行必须真在实改集里(先 tracked 轴,空则 ignored 轴与基线比 sha);抽不在实改集里的行永远不红 —— 那不是非空转,是空转。
 # 规则书棘轮:FLOW_LOCAL_DOC 行数记在 FLOW_FLOW_DIR/.rulebook-lines,只许降(变长 = RED);超 FLOW_DOC_BUDGET_RULEBOOK 也 RED。
@@ -18,25 +24,64 @@ set -u
 flow_load_config
 
 MODE=close
-if [ "${1:-}" = "--between" ]; then MODE=between; shift; fi
+case "${1:-}" in --between) MODE=between; shift ;; --wrap) MODE=wrap; shift ;; --ship) MODE=ship; shift ;; esac
+
+# —— --ship:提交之后的四步。commit 必须已存在(判据在前,动作在后)——
+if [ "$MODE" = ship ]; then
+  COMMIT="${1:-}"; [ -n "$COMMIT" ] || flow_die "用法: flow-close --ship <commit> --subject <PR 标题> [--verdicts <三态表绝对>]"
+  shift; SUBJ=""; VERD=""
+  while [ $# -gt 0 ]; do
+    case "$1" in --subject|--verdicts) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
+    case "$1" in --subject) SUBJ="$2"; shift 2 ;; --verdicts) VERD="$2"; shift 2 ;; *) flow_die "未知参数 $1" ;; esac
+  done
+  [ -n "$SUBJ" ] || flow_die "--ship 必须给 --subject(PR 标题是判断,不由脚本编)"
+  cd "$FLOW_REPO_DIR" || exit 2
+  git cat-file -e "$COMMIT^{commit}" 2>/dev/null || flow_die "commit 不存在: $COMMIT(先提交,提交归人 / 编排方)"
+  sred=0; st=0
+  shdr() { st=$((st+1)); echo "== $st. $1 =="; }
+  shdr "flow-clear-map-debt"
+  if [ -n "$VERD" ]; then flow-clear-map-debt --verdicts "$VERD" "$COMMIT"; rc=$?; else flow-clear-map-debt "$COMMIT"; rc=$?; fi
+  echo "RC=$rc"; [ "$rc" = 0 ] || sred=1
+  shdr "git push origin $FLOW_DEV_BRANCH"
+  git push origin "$FLOW_DEV_BRANCH" 2>&1 | tail -3; prc=$?
+  cur=$(git rev-parse --short "origin/$FLOW_DEV_BRANCH" 2>/dev/null || echo none); echo "origin/$FLOW_DEV_BRANCH=$cur"
+  git merge-base --is-ancestor "$COMMIT" "origin/$FLOW_DEV_BRANCH" 2>/dev/null || { echo "  RED:push 后 origin/$FLOW_DEV_BRANCH 不含 $COMMIT"; sred=1; }
+  if [ "$sred" != 0 ]; then echo "SHIP RED: 未开 PR"; exit 1; fi
+  shdr "gh pr create --base $FLOW_MAIN_BRANCH --head $FLOW_DEV_BRANCH"
+  N=$(gh pr list --head "$FLOW_DEV_BRANCH" --base "$FLOW_MAIN_BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null)
+  if [ -n "$N" ]; then echo "  已有开着的 PR #$N,复用"
+  else
+    gh pr create --base "$FLOW_MAIN_BRANCH" --head "$FLOW_DEV_BRANCH" --title "$SUBJ" --body "flow-kit 收口 · commit $COMMIT · $(date +%F)" > "$(flow_tmpdir)/flow-ship.$$" 2>&1; crc=$?
+    tail -2 "$(flow_tmpdir)/flow-ship.$$"; rm -f "$(flow_tmpdir)/flow-ship.$$"
+    [ "$crc" = 0 ] || { echo "SHIP RED: gh pr create RC=$crc"; exit 1; }
+    N=$(gh pr list --head "$FLOW_DEV_BRANCH" --base "$FLOW_MAIN_BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null)
+    [ -n "$N" ] || { echo "SHIP RED: 开了 PR 却取不到号"; exit 1; }
+  fi
+  shdr "flow-pr-merge $N --background"
+  flow-pr-merge "$N" --background --subject "$SUBJ"; rc=$?; [ "$rc" = 0 ] || { echo "SHIP RED: flow-pr-merge RC=$rc"; exit 1; }
+  echo "SHIP OK: PR #$N 已开,CI 绿即合(日志 $FLOW_FLOW_DIR_PATH/.pr-merge-$N.log;末行 PR-MERGE DONE|BLOCKED)"
+  exit 0
+fi
+
 if [ "$MODE" = between ]; then
   [ $# -ge 4 ] || flow_die "用法: flow-close --between <流程目录> <基线> <申报清单> <after-hashes> [--task <任务号>] [--plan <plan绝对>]"
 else
-  [ $# -ge 3 ] || flow_die "用法: flow-close <流程目录(绝对)> <基线文件(绝对)> <申报清单(绝对)> [after-hashes(绝对)]"
+  [ $# -ge 3 ] || flow_die "用法: flow-close [--wrap] <流程目录(绝对)> <基线文件(绝对)> <申报清单(绝对)> [after-hashes(绝对)] [--task] [--plan] [--verdicts]"
 fi
 DIR="$1"; BASE="$2"; DECL="$3"; shift 3
 AFTER=""
 case "${1:-}" in ""|--*) ;; *) AFTER="$1"; shift ;; esac
-TASK=""; PLAN=""
+TASK=""; PLAN=""; VERD=""
 while [ $# -gt 0 ]; do
-  case "$1" in --task|--plan) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
+  case "$1" in --task|--plan|--verdicts) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
   case "$1" in
     --task) TASK="$2"; shift 2 ;;
     --plan) PLAN="$2"; shift 2 ;;
+    --verdicts) [ "$MODE" = wrap ] || flow_die "--verdicts 只在 --wrap 下认"; VERD="$2"; shift 2 ;;
     *) flow_die "未知参数 $1" ;;
   esac
 done
-for p in "$DIR" "$BASE" "$DECL" ${AFTER:+"$AFTER"} ${PLAN:+"$PLAN"}; do
+for p in "$DIR" "$BASE" "$DECL" ${AFTER:+"$AFTER"} ${PLAN:+"$PLAN"} ${VERD:+"$VERD"}; do
   case "$p" in /*) ;; *) flow_die "文件参数须绝对路径: $p" ;; esac
 done
 [ "$MODE" = between ] && [ -z "$AFTER" ] && flow_die "--between 必须给 after-hashes(轮间核对的第一判据就是上一轮交付态)"
@@ -160,9 +205,42 @@ step_rulebook() {
   fi
 }
 
+# —— 收口机械段(--wrap)——
+step_verdicts() {
+  [ -n "$VERD" ] || { echo "== (三态表 dry-run 跳过:未给 --verdicts)=="; return 0; }
+  hdr "flow-ledger apply $(basename "$VERD")(dry-run;--write 归编排方 diff 审之后)"
+  flow-ledger apply "$VERD" > "$TMP/verd" 2>&1; rc=$?
+  LC_ALL=C grep -E 'dry-run|LEDGER|VERDICTS|RED|FATAL|WARN' "$TMP/verd" | head -40; echo "RC=$rc"; [ "$rc" = 0 ] || red=1
+}
+step_index() {
+  hdr "flow-render-index --write"
+  flow-render-index --write > "$TMP/idx" 2>&1; rc=$?; tail -2 "$TMP/idx"; echo "RC=$rc"; [ "$rc" = 0 ] || red=1
+}
+step_gates() {
+  hdr "flow-gates --reset(收口那一次整跑;命中缓存就不整跑)"
+  mkdir -p "$DIR/.evidence"
+  ( cd "$FLOW_REPO_DIR" && flow-gates --reset > "$DIR/.evidence/close-gates.txt" 2>&1 ); rc=$?
+  LC_ALL=C grep -E '^FLOW-GATES' "$DIR/.evidence/close-gates.txt" | tail -1; echo "RC=$rc(全量 $DIR/.evidence/close-gates.txt)"; [ "$rc" = 0 ] || red=1
+}
+step_usage() {
+  hdr "flow-usage --write(轮数账;零会话命中只 WARN,账不是门)"
+  flow-usage "$DIR" --write > "$TMP/usage" 2>&1; rc=$?
+  LC_ALL=C grep -E '^USAGE|^FATAL|^WARN' "$TMP/usage" | head -20; echo "RC=$rc"
+  [ "$rc" = 0 ] || echo "  WARN:轮数账没生成(transcripts 没扫到本批)—— 不判红"
+}
+step_state() {
+  hdr "状态档事实段"
+  flow-round state "$DIR" | tail -1
+}
+
 if [ "$MODE" = between ]; then
   step_after; step_manifest; step_hollow; step_tree; step_route; step_trace; step_budget
   if [ "$red" = 0 ]; then echo "BETWEEN OK"; exit 0; else echo "BETWEEN RED"; exit 1; fi
+fi
+if [ "$MODE" = wrap ]; then
+  step_verdicts; step_index; step_lint; step_trace; step_gates; step_manifest; step_hollow; step_after; step_budget; step_rulebook; step_usage; step_state
+  if [ "$red" = 0 ]; then echo "WRAP OK: 机械段全绿;剩下的归编排方 —— 账本 diff 审 + apply --write · spec 落地记录 · 根文档读数 · commit · flow-close --ship"; exit 0
+  else echo "WRAP RED"; exit 1; fi
 fi
 step_manifest; step_hollow; step_after; step_lint; step_budget; step_rulebook
 if [ "$red" = 0 ]; then echo "ROUND-CLOSE OK"; exit 0; else echo "ROUND-CLOSE RED"; exit 1; fi
