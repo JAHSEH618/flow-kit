@@ -14,16 +14,22 @@
 #   读批量 = 纯读调用里点到的不同路径数 / 纯读调用数。一次响应只发得出一个工具块(实测五轴 0.99–1.09 调用/轮,那是响应形态),
 #     所以「批量」只能靠一条 Bash 串多条命令;该量的是这个,不是「调用/轮」。
 # 检验判据(只 WARN,RC 不变 —— 轮数账是账不是门):单**会话**请求 > FLOW_TURN_CAP(按会话不按轴:续轮单算,否则有续轮必红);读批量 < 2 路径/读调用;
-#   单次工具调用 ≥ FLOW_STALL_SEC 记「卡顿」(p4d 实测 ②A ②B 各挂 600 s 整、同一秒放行,输出正常 —— harness 侧,不是脚本慢;看不见就会记到 flow 头上)。
+#   卡顿两种(0.7.0):① 单次工具调用 ≥ FLOW_STALL_SEC(p4d 实测 ②A ②B 各挂 600 s 整、同一秒放行,输出正常 —— harness 侧);
+#   ② 生成侧断流:sub-agent 拿到工具结果之后 ≥ FLOW_STALL_SEC 没有下一条输出(p4e 实测 ③改二 一次 python 改树后 600 s 整无请求、被 watchdog 中断,
+#     旧账记成「空等 10m」卡顿 0)。只判 sub-agent:编排方在等 sub-agent 是合法等待。中断的会话若有「<轮>续」会话,另出一行「中断税」= 卡顿 + 编排方接手 + 续轮装载。
 # 墙钟归因(0.6.0):每个会话拆 生成(首块 − 上一事件 + 流式)/ 工具(结果 − 末块)/ 空等(> 15 min 无事件:人或日界)/ 卡顿次数;
-#   编排方另出「独占关键路径」= 它的请求区间里没有任何 sub-agent 在跑的那部分(两批实测 70–100 min,ShipLedger 占关键路径一半),
+#   编排方另出「独占关键路径」= 它的请求区间里没有任何 sub-agent 在跑的那部分,0.7.0 起拆成 开工 / 轮间 / 收口 三段自动出(手填行退役),
 #   与「输出去向」(状态档 / 派单 / 报告 / flow-* / 门自跑 / git / 读 / 轮询 …,按输出 token)—— 输出是墙钟的十倍杠杆,先砍它。
 # 角色识别(0.6.0):「的」之后第一个含轮名的短语定轴(容忍 ** 与空格),短语带 续 / r2 记「<轮>续」、带 定点 记「<轮>定点」;
 #   短语无轮名时 合并+跨检 ⟹ 合并跨检、调研 ⟹ 调研;都没有才退到全文顺序扫。旧正则被「的 **④B · 变异复验轴**」打败后 ②B/④B 曾并进错行。
-#   编排方按**本批时间窗**切:窗 = 父会话里提到本批流程目录路径的首末时间戳 ∪ 本批 sub-agent 的时段。
-#     前半段是关键:开工清账与派单装配发生在第一个 agent 起来**之前**,只按 sub-agent 时段切会把它整段丢掉。
+#   编排方按**本批时间窗**切:窗 = 父会话里提到本批流程目录路径的首末时间戳 ∪ 本批 sub-agent 的时段,再(0.7.0)
+#     起点往前推到开工序 —— 最后一次提到别批目录之后、3 h 内的第一个开工标记(flow-freshness / Skill flow-kit:protocol / route-debts --lint / map-debt);
+#     终点往后延到收口末 —— 事件连续(间隔 ≤ 15 min)、没碰到别批目录时的最后一个收口标记(pr-merge / gh pr / git push|commit / flow-close)或本批目录提及。
+#     p4e 实测旧窗(首次提到目录 = 派单 mkdir 那一步起、--write 那一刻止)只盖住编排方 142 请求里的 65:开工 11 min 与收口 16 min 全在窗外,
+#     「独占关键路径 14m ✅」是切窗产物,真值 ≈40 min。flow-close --ship --dir 末尾重跑一次,窗才含 commit / PR。
 #     父会话一次都没提到流程目录 ⟹ 不切窗(备注写明),跨批时数字偏大 —— 但「切了却切错」比「没切」更坏。
-# 用法: flow-usage <流程目录(绝对)> [--write]      --write 另写 <流程目录>/.usage.md(dotfile,不进 doc-budget 热路径)
+# 用法: flow-usage <流程目录(绝对)> [--write]      --write 另写 <流程目录>/.usage.md(dotfile,不进 doc-budget 热路径);
+#   生成段由 <!-- flow:gen-begin/end --> 括起,重跑保留标记之后的手填段(0.6.0 的旧件没有标记:从「## 固定开销行(手填」起保留)
 # 末行固定:`USAGE OK: N 会话 / M 轮`;零会话命中 ⟹ FATAL RC=2(空集不算绿:「没花 token」与「没扫到」不许同型)。
 # 读的配置:FLOW_TRANSCRIPTS_DIR(默认 ~/.claude/projects;结构 <项目>/<会话>/subagents/agent-*.jsonl)FLOW_TURN_CAP
 set -u
@@ -144,11 +150,12 @@ def category(name, inp):
     if name == 'AskUserQuestion': return '问用户'
     return name
 
-def stats(path, win=None):
-    """一个会话的账:token 四项(同 message.id 逐字段取 max)· 请求数 · 调用数 · 读批量 · 墙钟四段 · 卡顿清单 · 活动区间 · 输出去向。"""
+def stats(path, win=None, sub=False):
+    """一个会话的账:token 四项(同 message.id 逐字段取 max)· 请求数 · 调用数 · 读批量 · 墙钟四段 · 卡顿清单 · 活动区间 · 输出去向。
+    sub=True(sub-agent)才判生成侧断流与中断:编排方等 sub-agent 是合法等待。"""
     reqs = {}; order = []; tools = set(); models = collections.Counter()
-    nread = 0; npath = 0
-    events = []   # (ts, kind, message.id)  kind ∈ assistant / tool_result / human
+    nread = 0; npath = 0; first_act = None
+    events = []   # (ts, kind, message.id, text)  kind ∈ assistant / tool_result / human;text 只给 human(认「[Request interrupted」)
     with open(path, encoding='utf-8', errors='replace') as fh:
         for line in fh:
             try: o = json.loads(line)
@@ -161,7 +168,11 @@ def stats(path, win=None):
             if typ == 'user':
                 c = (o.get('message') or {}).get('content')
                 is_tr = isinstance(c, list) and any(isinstance(b, dict) and b.get('type') == 'tool_result' for b in c)
-                events.append((t, 'tool_result' if is_tr else 'human', None))
+                if is_tr: htxt = ''
+                elif isinstance(c, str): htxt = c
+                elif isinstance(c, list): htxt = ' '.join(b.get('text', '') for b in c if isinstance(b, dict) and b.get('type') == 'text')
+                else: htxt = ''
+                events.append((t, 'tool_result' if is_tr else 'human', None, htxt[:120]))
                 continue
             if typ != 'assistant': continue
             m = o.get('message') or {}; u = m.get('usage') or {}; mid = m.get('id')
@@ -169,7 +180,7 @@ def stats(path, win=None):
             r = reqs.get(mid)
             if r is None:
                 r = {'first': t, 'last': t, 'u': (0, 0, 0, 0), 'tu': None}; reqs[mid] = r; order.append(mid)
-                events.append((t, 'assistant', mid))
+                events.append((t, 'assistant', mid, ''))
             r['last'] = max(r['last'], t)
             # ⚠ 一次 API 响应按 apiBlockIndex 拆成多条记录,首条通常是 thinking 块、output 只有 2–6;逐字段取 max(0.5.0 修,此前输出列低估 3 倍)
             if u:
@@ -189,18 +200,26 @@ def stats(path, win=None):
                     if b.get('name') == 'Bash':
                         isread, np = read_shape(i.get('command', '') or '')
                         if isread: nread += 1; npath += np
+                        elif first_act is None: first_act = t      # 第一个非读调用 = 装载段结束(续轮的中断税用)
                     elif b.get('name') == 'Read':
                         nread += 1; npath += 1
+                    elif first_act is None: first_act = t
     # 墙钟四段:按事件序推。生成 = 首块 − 上一事件末 + 流式(末块 − 首块);工具 = 结果 − 末块;>15 min 无事件 = 空等
     events.sort(key=lambda e: e[0])
-    gen = tool = idle = 0.0; stalls = []; intervals = []
+    gen = tool = idle = 0.0; stalls = []; intervals = []; intr = None; stall_before_intr = 0.0
     prev_end = None; prev_kind = None; prev_mid = None; cur = None
-    for t, kind, mid in events:
+    for t, kind, mid, txt in events:
         end = max(t, reqs[mid]['last']) if (kind == 'assistant' and mid in reqs) else t
+        interrupted = (kind == 'human' and 'interrupted' in txt.lower())
         if prev_end is not None:
             d = (t - prev_end).total_seconds()
             if d < 0: d = 0.0
-            if d > IDLE:
+            if sub and prev_kind == 'tool_result' and kind in ('assistant', 'human') and d >= STALL:
+                # 生成侧断流(0.7.0):工具结果回来之后 ≥ STALL 没有下一条输出;记进空等列 + 卡顿计数,单列 WARN
+                stalls.append((prev_end, d, '生成侧断流:工具结果之后无输出' + (',以中断收场' if interrupted else ',之后才续上')))
+                idle += d
+                if interrupted: stall_before_intr = d
+            elif d > IDLE:
                 idle += d
                 if cur: intervals.append(tuple(cur)); cur = None
             elif kind == 'assistant':
@@ -211,6 +230,7 @@ def stats(path, win=None):
                     stalls.append((prev_end, d, (reqs[prev_mid]['tu'] or (None, None, ''))[2] if prev_mid in reqs else ''))
             else:
                 idle += d
+        if interrupted: intr = t
         if kind == 'assistant' and mid in reqs: gen += (end - t).total_seconds()
         if cur is None: cur = [t, end]
         cur[1] = max(cur[1], end)
@@ -225,7 +245,7 @@ def stats(path, win=None):
         cats[category(tu[0], tu[1]) if tu else category(None, {})] += reqs[m]['u'][3]
     # 编排方独占用:每个请求的区间 = (上一事件末 → 本请求末块)
     spans = []; pe = None
-    for t, kind, mid in events:
+    for t, kind, mid, _txt in events:
         end = max(t, reqs[mid]['last']) if (kind == 'assistant' and mid in reqs) else t
         if kind == 'assistant' and mid in reqs:
             a = pe if (pe is not None and (t - pe).total_seconds() <= IDLE) else t
@@ -234,7 +254,8 @@ def stats(path, win=None):
     return dict(turns=len(order), inp=inp, cw=cw, cr=cr, out=out, carried=inp + cw + cr,
                 eq=inp + 1.25 * cw + 0.1 * cr + 5 * out, tools=len(tools), dur=dur,
                 nread=nread, npath=npath, gen=gen, tool=tool, idle=idle, stalls=stalls, intervals=intervals,
-                spans=spans, cats=cats,
+                spans=spans, cats=cats, intr=intr, first_act=first_act, stall_before_intr=stall_before_intr,
+                start=events[0][0] if events else None, end=events[-1][0] if events else None,
                 model=models.most_common(1)[0][0] if models else '?', n=1, sid=os.path.basename(path).replace('.jsonl', '')[:14])
 
 files = glob.glob(os.path.join(tdir, '*', '*', 'subagents', '*.jsonl'))
@@ -252,12 +273,13 @@ parents = set(); matched = 0
 def add(role, st):
     r = rows[role]
     for k in ('turns', 'inp', 'cw', 'cr', 'out', 'carried', 'eq', 'tools', 'dur', 'nread', 'npath', 'n', 'gen', 'tool', 'idle'): r[k] += st[k]
-    r['stalls'] += st['stalls']; r['model'][st['model']] += 1; r['sessions'].append((st['sid'], st['turns']))
+    r['stalls'] += st['stalls']; r['model'][st['model']] += 1
+    r['sessions'].append(dict(sid=st['sid'], turns=st['turns'], start=st['start'], end=st['end'], intr=st['intr'], first_act=st['first_act'], stall=st['stall_before_intr']))
 hits = []; sub_intervals = []
 for f in files:
     if not belongs(first_user_text(f)): continue
     matched += 1
-    st = stats(f)
+    st = stats(f, sub=True)
     add(role_of(first_user_text(f)), st)
     hits.append(f); sub_intervals += st['intervals']
     parents.add(os.path.dirname(os.path.dirname(f)) + '.jsonl')
@@ -284,21 +306,76 @@ for f in hits:
     if a and (slo is None or a < slo): slo = a
     if b and (shi is None or b > shi): shi = b
 winnote = ''; orch_cats = collections.Counter(); orch_solo = 0.0
+solo_open = solo_between = solo_close = 0.0; win_lo = win_hi = None
 def overlaps(a, b):
     return any(not (b < x or a > y) for x, y in sub_intervals)
+
+# 窗的两端(0.7.0):开工序在首次提到流程目录之前,收口在 --write 之后 —— 只按目录提及切,两头都丢
+OPEN_RE = re.compile(r'flow-freshness|flow-kit:protocol|flow-route-debts --lint|map-debt')
+CLOSE_RE = re.compile(r'pr-merge|PR-MERGE|gh pr |git push|git commit|flow-close|flow-clear-map-debt')
+flowparent = os.path.dirname(flowdir); flowname = os.path.basename(flowdir)
+OTHER_RES = [re.compile(re.escape(flowparent) + r'/(?!\.)([^/\s"\'`)]+)')]
+if ws and flowdir.startswith(ws + '/'):
+    rel = flowdir[len(ws) + 1:]                                  # 如 .flow/p4e:编排方常写相对路径(cd 工作区后 D=.flow/p4e)
+    OTHER_RES.append(re.compile(r'(?<![\w/])' + re.escape(os.path.dirname(rel)) + r'/(?!\.)([^/\s"\'`)]+)'))
+    REL_RE = re.compile(r'(?<![\w/])' + re.escape(rel) + r'(?![\w-])')
+else:
+    REL_RE = None
+def other_batch(txt):
+    return any(m.group(1) != flowname for rx in OTHER_RES for m in rx.finditer(txt))
+def mentions(txt):
+    return belongs(txt) or (REL_RE is not None and REL_RE.search(txt) is not None)
+def parent_requests(path):
+    """父会话每个请求:(t, 工具输入拼成的文本)。只看 assistant 的 tool_use(Bash 命令 / Skill 名 / Agent prompt / 文件路径)。"""
+    out = []
+    with open(path, encoding='utf-8', errors='replace') as fh:
+        for line in fh:
+            try: o = json.loads(line)
+            except Exception: continue
+            if o.get('type') != 'assistant' or not o.get('timestamp'): continue
+            parts = []
+            for b in (o.get('message') or {}).get('content') or []:
+                if isinstance(b, dict) and b.get('type') == 'tool_use':
+                    i = b.get('input') or {}
+                    if isinstance(i, dict): parts.append(' '.join(str(v) for v in i.values() if isinstance(v, str)))
+            if not parts: continue
+            try: out.append((ts(o['timestamp']), ' '.join(parts)))
+            except Exception: pass
+    out.sort(key=lambda x: x[0])
+    return out
+
 for p in sorted(parents):
     if not os.path.isfile(p): continue
     a, b = span(p, flowdir)
     lo = min([x for x in (a, slo) if x], default=None)
     hi = max([x for x in (b, shi) if x], default=None)
     win = (lo, hi) if (a and b) else None      # 父会话零次提到流程目录 ⟹ 不切窗(切错比不切坏)
-    if win: winnote = '(窗 ' + lo.astimezone().strftime('%m-%d %H:%M') + '–' + hi.astimezone().strftime('%H:%M') + ',父会话提到本流程目录的时段 ∪ sub-agent 时段)'
+    if win:
+        preq = parent_requests(p)
+        # 起点往前推到开工序:最后一次提到别批目录之后、lo 之前 3 h 内的第一个开工标记
+        last_other = max([t for t, x in preq if t < lo and other_batch(x)], default=None)
+        opens = [t for t, x in preq if t < lo and OPEN_RE.search(x) and (last_other is None or t > last_other) and (lo - t).total_seconds() <= 3 * 3600]
+        if opens: lo = min(opens)
+        # 终点往后延到收口末:hi 之后事件连续(间隔 ≤ IDLE)、没碰到别批目录,取最后一个收口标记或本批目录提及
+        cur = hi; hi2 = hi
+        for t, x in preq:
+            if t <= hi: continue
+            if other_batch(x) or (t - cur).total_seconds() > IDLE: break
+            cur = t
+            if CLOSE_RE.search(x) or mentions(x): hi2 = t
+        hi = hi2; win = (lo, hi); win_lo, win_hi = lo, hi
+        winnote = '(窗 ' + lo.astimezone().strftime('%m-%d %H:%M') + '–' + hi.astimezone().strftime('%H:%M') + ':开工序起 → 收口末;父会话提到本流程目录 ∪ sub-agent 时段,两头按开工 / 收口标记延)'
     else:   winnote = '(无窗:父会话零次提到本流程目录,跨批时数字偏大)'
     st = stats(p, win)
     add('编排方', st); orch_cats += st['cats']
-    # 独占关键路径:编排方的请求区间与任何 sub-agent 活动区间不相交的那部分(它一个人在跑,别人都在等它)
+    # 独占关键路径:编排方的请求区间与任何 sub-agent 活动区间不相交的那部分(它一个人在跑,别人都在等它);按位置拆 开工 / 轮间 / 收口
     for a2, b2 in st['spans']:
-        if not overlaps(a2, b2): orch_solo += (b2 - a2).total_seconds()
+        if overlaps(a2, b2): continue
+        d = (b2 - a2).total_seconds()
+        if slo and b2 <= slo: solo_open += d
+        elif shi and a2 >= shi: solo_close += d
+        else: solo_between += d
+orch_solo = solo_open + solo_between + solo_close
 if matched == 0:
     print(f'FATAL: {tdir} 下扫了 {len(files)} 份 sub-agent transcript,没有一份的首条 user 消息含 {flowdir} —— 空集不算绿', file=sys.stderr); sys.exit(2)
 
@@ -307,6 +384,9 @@ def k(n):
     return f'{n/1e6:.2f}M' if n >= 1e6 else (f'{n/1e3:.1f}k' if n >= 1e3 else f'{int(n)}')
 def hm(s):
     s = int(s); return f'{s//3600}h{(s%3600)//60:02d}m' if s >= 3600 else f'{s//60}m'
+def ms(s):
+    s = int(s); return f'{s//60}m{s%60:02d}s'
+def lt(t): return t.astimezone().strftime('%H:%M') if t else '?'
 def rb(r): return r['npath'] / r['nread'] if r['nread'] else 0.0
 
 head = ['| 项 | 时长 | token | 备注 |', '|---|---|---|---|']
@@ -319,17 +399,37 @@ for role in roles:
     r = rows[role]; cpt = r['tools'] / r['turns'] if r['turns'] else 0
     model = r['model'].most_common(1)[0][0]
     lines.append(f"| {role} | {hm(r['dur'])} | 携带 {k(r['carried'])} · 输出 {k(r['out'])} · 当量 {k(r['eq'])} | {r['turns']} 轮 · {cpt:.2f} 调用/轮 · 读批量 {rb(r):.2f} 路径/读调用({r['nread']} 次)· {model} · {r['n']} 会话{winnote if role == '编排方' else ''} |")
-    solo = f" · 独占关键路径 {hm(orch_solo)}" if role == '编排方' else ''
+    solo = f" · 独占关键路径 {hm(orch_solo)}(开工 {hm(solo_open)} · 轮间 {hm(solo_between)} · 收口 {hm(solo_close)})" if role == '编排方' else ''
     wall.append(f"| {role} | {hm(r['dur'])} | {hm(r['gen'])} | {hm(r['tool'])} | {hm(r['idle'])} | {len(r['stalls'])}{solo} |")
     total_turns += r['turns']; total_sessions += r['n']
     # 检验判据(只 WARN,不改 RC:轮数账是账不是门);请求上限按会话判,续轮单算
-    for sid, tn in r['sessions']:
-        if tn > TURN_CAP:
-            warns.append(f"WARN {role}:会话 {sid} {tn} 请求 > FLOW_TURN_CAP {TURN_CAP} —— 携带 ∝ 轮数 × 上下文,而上下文又随轮数长(二次)。处置是拆任务,不是加纪律")
+    for s in r['sessions']:
+        if s['turns'] > TURN_CAP:
+            warns.append(f"WARN {role}:会话 {s['sid']} {s['turns']} 请求 > FLOW_TURN_CAP {TURN_CAP} —— 携带 ∝ 轮数 × 上下文,而上下文又随轮数长(二次)。处置是拆任务,不是加纪律")
     if r['nread'] >= 5 and rb(r) < READ_BATCH_FLOOR:
         warns.append(f"WARN {role}:读批量 {rb(r):.2f} < {READ_BATCH_FLOOR} 路径/读调用 —— 多条读合进同一个 Bash;一次响应只发得出一个工具块,省不了「调用/轮」,只能省往返")
     for t0, d, desc in r['stalls']:
-        warns.append(f"WARN 卡顿 {role}:{t0.astimezone().strftime('%m-%d %H:%M:%S')} 工具 {int(d)}s `{desc}` —— ≥ FLOW_STALL_SEC {STALL}s;输出若正常就是 harness 侧,不是脚本慢,从本批账上扣掉再比")
+        if desc.startswith('生成侧断流'):
+            warns.append(f"WARN 卡顿 {role}:{t0.astimezone().strftime('%m-%d %H:%M:%S')} {desc} {int(d)}s —— ≥ FLOW_STALL_SEC {STALL}s;上下文与输出都正常就是 harness 侧,从本批账上扣掉再比")
+        else:
+            warns.append(f"WARN 卡顿 {role}:{t0.astimezone().strftime('%m-%d %H:%M:%S')} 工具 {int(d)}s `{desc}` —— ≥ FLOW_STALL_SEC {STALL}s;输出若正常就是 harness 侧,不是脚本慢,从本批账上扣掉再比")
+# 中断税(0.7.0):被中断的会话 + 它的「<轮>续」会话 ⟹ 卡顿 + 编排方接手(中断 → 续轮首请求)+ 续轮装载(首请求 → 第一个非读调用)
+for role in [x for x in rows if x != '编排方' and not x.endswith('续')]:
+    for s in rows[role]['sessions']:
+        if not s['intr']: continue
+        cont = rows.get(role + '续'); nxt = None
+        if cont:
+            c = [x for x in cont['sessions'] if x['start'] and x['start'] > s['intr']]
+            nxt = min(c, key=lambda x: x['start']) if c else None
+        t0 = s['intr'].astimezone().strftime('%m-%d %H:%M:%S')
+        if nxt:
+            take = (nxt['start'] - s['intr']).total_seconds()
+            load = (nxt['first_act'] - nxt['start']).total_seconds() if nxt['first_act'] else 0.0
+            warns.append(f"中断税 {role}→{role}续:卡顿 {ms(s['stall'])} + 编排方接手 {ms(take)} + 续轮装载 {ms(load)} = {ms(s['stall'] + take + load)}(中断于 {t0},会话 {s['sid']};续轮 {nxt['sid']})")
+        else:
+            warns.append(f"中断 {role}:{t0} 被中断(会话 {s['sid']},卡顿 {ms(s['stall'])}),没扫到「{role}续」会话")
+if orch_solo > 1800:
+    warns.append(f"WARN 编排方独占关键路径 {hm(orch_solo)} > 30 min(开工 {hm(solo_open)} · 轮间 {hm(solo_between)} · 收口 {hm(solo_close)})—— 不达标只许退役规矩或修工具,不许加规矩")
 sub = [rows[x] for x in rows if x != '编排方']
 srd = sum(x['nread'] for x in sub); spt = sum(x['npath'] for x in sub)
 lines.append(f"| sub-agent 合计 | {hm(sum(x['dur'] for x in sub))} | 携带 {k(sum(x['carried'] for x in sub))} · 输出 {k(sum(x['out'] for x in sub))} · 当量 {k(sum(x['eq'] for x in sub))} | {sum(x['turns'] for x in sub)} 轮 · 读批量 {(spt / srd if srd else 0):.2f} 路径/读调用({srd} 次)· {sum(x['n'] for x in sub)} 会话(并行轴时长各自计) |")
@@ -338,12 +438,44 @@ if orch_cats:
     tot = sum(orch_cats.values()) or 1
     outcat = ['', '## 编排方输出去向(按输出 token;输出是墙钟的十倍杠杆,先砍这里)', '| 去向 | 输出 | 占比 |', '|---|---|---|']
     for kk, v in orch_cats.most_common(8): outcat.append(f'| {kk} | {k(v)} | {v * 100 // tot}% |')
-out = '\n'.join(head + lines + wall + outcat + ([''] + warns if warns else []))
+# 固定开销行(0.7.0 自动;从前手填,p4e 实测手填「开工 ≈35m / 收口 ≈40m」而真值 11 / 16 min)
+fixed = []
+if '编排方' in rows:
+    merged = []
+    for a, b in sorted(sub_intervals):
+        if merged and a <= merged[-1][1]: merged[-1][1] = max(merged[-1][1], b)
+        else: merged.append([a, b])
+    ngap = max(len(merged) - 1, 0)
+    n_full = n_cached = 0
+    for gf in glob.glob(os.path.join(flowdir, '.evidence', '*gates*.txt')):
+        try: last = [l for l in open(gf, encoding='utf-8', errors='replace').read().split('\n') if l.startswith('FLOW-GATES')]
+        except Exception: last = []
+        if not last: continue
+        if '(cached' in last[-1]: n_cached += 1
+        else: n_full += 1
+    fixed = ['', '## 编排方固定开销(自动:只算它在生成或跑工具、且没有 sub-agent 在跑的时段;开工 = 窗起 → 首个 sub-agent,收口 = 末个 sub-agent 收工 → 窗末)',
+             '| 项 | 时长 | 备注 |', '|---|---|---|',
+             f'| 开工清账 + 派单装配 | {hm(solo_open)} | {lt(win_lo)} → {lt(slo)} |',
+             f'| 轮间核对 × {ngap} | {hm(solo_between)} | sub-agent 时段之间只有编排方在跑的部分 |',
+             f'| 收口 | {hm(solo_close)} | {lt(shi)} → {lt(win_hi)};要含 commit / PR 得在 flow-close --ship --dir 之后再看 |',
+             f'| 门整跑次数 | 整跑 {n_full} + 缓存命中 {n_cached} | .evidence/*gates*.txt 的 FLOW-GATES 末行;判据 轮内每轮 ≤1 + 收口 1 |',
+             f'| 独占关键路径合计 | {hm(orch_solo)} | 判据 ≤ 30 min{"" if orch_solo <= 1800 else " —— ❌"} |']
+out = '\n'.join(head + lines + wall + fixed + outcat + ([''] + warns if warns else []))
 print(out)
 if write == '--write':
     p = os.path.join(flowdir, '.usage.md')
+    tail = ''
+    if os.path.exists(p):
+        old = open(p, encoding='utf-8').read()
+        kk = old.find('<!-- flow:gen-end -->')
+        if kk >= 0: tail = old[kk + len('<!-- flow:gen-end -->'):]
+        else:
+            kk = old.find('\n## 固定开销行(手填')      # 0.6.0 的旧件:手填段从这个标题起,原样保留
+            if kk >= 0: tail = '\n' + old[kk + 1:]
+    if not tail.strip():
+        tail = '\n\n## 手填(生成段之外;重跑 --write 保留本段)\n\n| 项 | 读数 | 备注 |\n|---|---|---|\n| 本批退役规矩数 | | ≥ 1;退役了哪条、做成了什么(flow-rulebook retire) |\n'
     with open(p, 'w', encoding='utf-8') as fh:
-        fh.write(f'# 轮数账(flow-usage 生成 {datetime.date.today().isoformat()};当量权重 input 1 · cache_creation 1.25 · cache_read 0.1 · output 5)\n\n{out}\n')
+        fh.write(f'# 轮数账(flow-usage 生成 {datetime.date.today().isoformat()};当量权重 input 1 · cache_creation 1.25 · cache_read 0.1 · output 5)\n\n<!-- flow:gen-begin -->\n{out}\n<!-- flow:gen-end -->' + tail)
     print(f'写入 {p}')
 print(f'USAGE OK: {total_sessions} 会话 / {total_turns} 轮')
 PY

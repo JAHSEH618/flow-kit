@@ -7,7 +7,8 @@
 #   flow-ledger verdicts <三态表(绝对)>              → TSV「标记<TAB>判定<TAB>证据」;判定归一化(去 ** ` 与空白)
 #   flow-ledger close <标记> [--note <一句>]          → 机器头 status:open→closed,正文尾追一行「**已还 <日期>**:<note>」
 #   flow-ledger append <标记> <一行文字>              → 正文尾追一行(追写;原文一字不改)
-#   flow-ledger add --owner <任务号> --due <任务号或日期> --touches <a,b> --title <一句> [--body <正文>] [--mark #N]
+#   flow-ledger add --owner <任务号> --due <任务号或日期> --touches <a,b> --title <一句> [--body <正文> | --body-file <绝对路径|->] [--mark #N]
+#                                                     → 正文可多行(--body-file 读文件,- 读 stdin);整块带 `> ` 前缀也认(0.7.0)
 #   flow-ledger apply <三态表(绝对)> [--write]        → 吃三态表:判定「还」的逐条 close(默认 dry-run);
 #                                                       「追写」列给人(正文是人写的散文,机器不许代笔)、「不动」零动作
 # 体例(protocol §7):一行机器头 `<!-- debt:N mark:#N status:open|closed owner:… due:… touches:… title:… -->`
@@ -27,7 +28,7 @@ usage() {
   flow-ledger verdicts <三态表(绝对)>
   flow-ledger close <标记> [--note <一句>]
   flow-ledger append <标记> <一行文字>
-  flow-ledger add --owner <任务号> --due <任务号或日期> --touches <a,b> --title <一句> [--body <正文>] [--mark #N]
+  flow-ledger add --owner <任务号> --due <任务号或日期> --touches <a,b> --title <一句> [--body <正文> | --body-file <绝对路径|->] [--mark #N]
   flow-ledger apply <三态表(绝对)> [--write]
 U
   exit 2
@@ -53,18 +54,31 @@ case "$CMD" in
   append)
     A1="${1:-}"; NOTE="${2:-}"; { [ -n "$A1" ] && [ -n "$NOTE" ]; } || usage; shift 2 ;;
   add)
+    BF=""
     while [ $# -gt 0 ]; do
-      case "$1" in --owner|--due|--touches|--title|--body|--mark) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
+      case "$1" in --owner|--due|--touches|--title|--body|--body-file|--mark) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
       case "$1" in
         --owner) OWNER="$2"; shift 2 ;;
         --due) DUE="$2"; shift 2 ;;
         --touches) TOUCHES="$2"; shift 2 ;;
         --title) TITLE="$2"; shift 2 ;;
         --body) BODY="$2"; shift 2 ;;
+        --body-file) BF="$2"; shift 2 ;;
         --mark) MARK="$2"; shift 2 ;;
         *) usage ;;
       esac
     done
+    # 多行正文走文件或 stdin(0.7.0):p4e 收口 5 条新账各用一次 python heredoc 插正文再核两轮 —— --body 装不下多段引用体
+    if [ -n "$BF" ]; then
+      [ -z "$BODY" ] || flow_die "--body 与 --body-file 二选一"
+      if [ "$BF" = - ]; then BODY=$(cat)
+      else
+        case "$BF" in /*) ;; *) flow_die "--body-file 须绝对路径(文件参数纪律): $BF" ;; esac
+        [ -f "$BF" ] || flow_die "正文文件不存在: $BF"
+        BODY=$(cat "$BF")
+      fi
+      [ -n "$BODY" ] || flow_die "正文为空: $BF"
+    fi
     { [ -n "$OWNER" ] && [ -n "$DUE" ] && [ -n "$TOUCHES" ] && [ -n "$TITLE" ]; } || flow_die "add 必填:--owner --due --touches --title"
     case "$TOUCHES" in /*|*",/"*) flow_die "touches 必须仓库相对,不许绝对路径: $TOUCHES" ;; esac
     [ -z "$MARK" ] || flow_is_mark "$MARK" || flow_die "--mark 不是合法标记(圈码或 #N): $MARK"
@@ -109,7 +123,7 @@ def body_tail(head_i, end):
 
 def save():
     tmp = LP + '.flow-ledger.new'
-    open(tmp, 'w', encoding='utf-8').write('\n'.join(src))
+    open(tmp, 'w', encoding='utf-8').write('\n'.join(src).rstrip('\n') + '\n')   # 恰好一个尾换行(add 曾让文件末行没有换行)
     os.replace(tmp, LP)
 
 def parse_verdicts(path):
@@ -160,8 +174,14 @@ elif cmd == 'add':
     while src and not src[-1].strip(): src.pop()
     src.append('')
     src.append(f'<!-- debt:{nxt} mark:{mk} status:open owner:{owner} due:{due} touches:{touches} title:{title} -->')
-    src.append(f'> {mk} {body or title}')
-    print(f'ok   立新条 {mk}(debt:{nxt})owner {owner} · 期限 {due} · 触面 {touches}')
+    # 正文可多行:整块带 `> ` 前缀(编排方照账本体例写好的)也认 —— 剥掉再统一加;首行若已带本标记也剥掉,不重复
+    lines = [re.sub(r'^>\s*', '', l).rstrip() for l in (body or title).split('\n')]
+    if lines and lines[0].startswith(mk + ' '): lines[0] = lines[0][len(mk) + 1:]
+    while lines and not lines[-1]: lines.pop()
+    if not lines or not lines[0].strip(): fatal('正文首行为空')
+    src.append(f'> {mk} {lines[0]}')
+    for l in lines[1:]: src.append(f'>   {l}' if l else '>')
+    print(f'ok   立新条 {mk}(debt:{nxt})owner {owner} · 期限 {due} · 触面 {touches} · 正文 {len(lines)} 行')
     save()
 elif cmd == 'apply':
     got, skipped = parse_verdicts(a1)

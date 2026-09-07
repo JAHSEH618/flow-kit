@@ -15,7 +15,8 @@
 #              ③ 建 .evidence/。与 flow-round open|close 同一套约定文件名。--dir 必须与 --round 同给。
 #   任务节选按轴(0.6.0):①写(或未给 --round)印正文但按 FLOW_DISPATCH_EXCERPT_BYTES 封顶 —— 超过只印 节头 + outline + REQ 行 + 节尾
 #     (本刀的落位段住在节尾),中间给「文件 + 行号」指针;②③④ 一律只印 outline + REQ 行(它们读的是回件索引表,不是任务书正文)。
-#     实测一节 42 KB 横跨三刀,八个 agent 各读一遍 ≈ 该批携带的 10%。
+#     实测一节 42 KB 横跨三刀,八个 agent 各读一遍 ≈ 该批携带的 10%。REQ 行只印 open / deferred(0.7.0):[done] 行 p4e 实测占派单 10.3 KB。
+#   收工段的 flow-gates --reset 只印给 --db 独占 的轮(F-22);②③④ 的欠账必读**不**按申报清单路由 —— 实测过,账本触面是宽前缀,28 = 28 条,零收益。
 #   --round 只决定「轮次 / 模型」行:FLOW_ROLE_MODELS 里给了该轮就印 model=<x>(Agent 调用照抄),否则继承编排方。
 #   带 --plan 时另数任务节的 REQ:open > FLOW_REQ_CAP ⟹ RC=3(①写是最长的会话,携带成本随轮数平方长;拆任务,或 --cap-ok 带过,理由进派单)。
 #   flow-dispatch <任务号> --tree … --db … --seq … --lane-merge <路径清单文件(绝对)> [触面路径...]
@@ -47,6 +48,8 @@ if [ "${1:-}" = "--resume" ]; then
   [ -f "$STEPS" ] || flow_die "步骤账不存在: $STEPS —— 没有步骤账就没有断点;先从回件重建(flow-step init $RDIR $RROUND <步骤…>,已做的 flow-step done)再来"
   LAST=$(flow-step show "$RDIR" "$RROUND" | tail -1)
   case "$LAST" in "STEPS DONE"*) flow_die "步骤账已全勾($LAST)—— 不是断点,是收工;走 flow-round close" ;; esac
+  # ⚠ 下面是未加引号的 heredoc:反引号要写成 \` 才是字面量。0.6.0 写成 \\\` 留下了活反引号,把 flow-manifest verify / git status / ls 真跑了一遍、
+  #   输出嵌进派单,<N> 还被当成重定向(「N: No such file」)—— F-24,p4e 实测。
   cat <<RS
 <!-- flow:gen-begin -->
 ## 派单必带块 —— $RROUND-续(flow-dispatch --resume 生成 $(date +%F);原派单 $ORIG;生成段勿手改,要改重跑)
@@ -54,10 +57,10 @@ if [ "${1:-}" = "--resume" ]; then
 - **你是谁**:$RROUND-续。上一个 $RROUND agent 已停(叫停 / 限额 / watchdog),上下文唤不回;你**不重建推理**,从步骤账的下一个未勾步骤接手,不开新战场。
 - **原派单**(整块照做;已勾的步骤跳过,权限面 / 号段 / 纪律全部沿用):$ORIG
 - **步骤账**:$STEPS —— $LAST
-  每完成一步:\\`flow-step done $RDIR $RROUND <N> "<一句>"\\`;续轮之外别的 agent 也可能接手,勾在文件里不在你脑子里
+  每完成一步:\`flow-step done $RDIR $RROUND <N> "<一句>"\`;续轮之外别的 agent 也可能接手,勾在文件里不在你脑子里
 - **先对树核,再动手**(通知里的 result 只带首句;watchdog 判 failed 也不代表没干活 —— 两批实测两次中断都停在「差最后一步」):
-  \\`flow-manifest verify $RDIR/.manifest-baseline-$RROUND.txt $RDIR/.declared-$RROUND.txt\\`(申报清单还没落就先按回件索引表 / \\`git status\\` 补一份)
-  \\`ls -t $RDIR/.evidence | head\\` 看最后一条落盘;回件已有的节**只追加不重写**
+  \`flow-manifest verify $RDIR/.manifest-baseline-$RROUND.txt $RDIR/.declared-$RROUND.txt\`(申报清单还没落就先按回件索引表 / \`git status\` 补一份)
+  \`ls -t $RDIR/.evidence | head\` 看最后一条落盘;回件已有的节**只追加不重写**
 - **收工件**:同原派单(.after-$RROUND-hashes.txt · .declared-$RROUND.txt · 回件);回件末尾加一行「续轮从步骤 N 接手,N 之前的内容出自上一个 agent」
 <!-- flow:gen-end -->
 
@@ -174,13 +177,21 @@ case "$ROUND" in
   *)               TPLLINE="- **回件模板**(整块照抄):写 / 改轮 $TPL_H · 审轮 $TPL_R" ;;
 esac
 
+# 门整跑只归库独占的轮(F-22,p4e 实测:--db 禁用 的 ②A 拿到的收工段里仍有 flow-gates --reset,与人填段直接冲突,它为此花了一段自证)
+if [ "$DB" = 独占 ]; then
+  GATELINE="    \`flow-gates --reset > $DIR/.evidence/$ROUND-gates.txt 2>&1; echo RC=\$?\`(每轮至多一次整跑;同一棵树别跑第二遍)"
+  GATESTEP=" + flow-gates --reset"
+else
+  GATELINE="    (库权限 $DB:门整跑不归你 —— 不跑 flow-gates --reset / dbreset / 集成;要读数引上一轮 .evidence/*-gates.txt 的末行)"
+  GATESTEP=""
+fi
 # 冻结 / 收工 / 步骤账行:--dir 给了就连实参印(约定名与 flow-round 同源),没给就印占位写法
 if [ -n "$DIR" ]; then
   FREEZELINE="- **冻结**:基线 \`$DIR/.manifest-baseline-$ROUND.txt\` 由编排方 \`flow-round open\` 在派单后打(你开工时它应已存在;不存在就停,别自己打)
 - **收工三件(命令连实参,照抄)**:
     \`flow-freeze $DIR/.after-$ROUND-hashes.txt\` · 申报清单 \`$DIR/.declared-$ROUND.txt\`(一行一路径,不许散文)
     \`flow-manifest verify $DIR/.manifest-baseline-$ROUND.txt $DIR/.declared-$ROUND.txt > $DIR/.evidence/$ROUND-manifest-verify.txt 2>&1; echo RC=\$?\`(必须读到 verify OK 或 RED;FATAL 与没跑一律当红)
-    \`flow-gates --reset > $DIR/.evidence/$ROUND-gates.txt 2>&1; echo RC=\$?\`(每轮至多一次整跑;同一棵树别跑第二遍)
+$GATELINE
     \`flow-fact-lint verify > $DIR/.evidence/$ROUND-factlint.txt 2>&1; echo RC=\$?\` · \`flow-doc-budget $DIR\`
 - **步骤账**:\`$DIR/.steps-$ROUND.md\`(每完成一步 \`flow-step done $DIR $ROUND <N> \"<一句>\"\`;你被中断时续轮从第一个未勾步骤接手,勾在文件里不在你脑子里)"
 else
@@ -198,11 +209,11 @@ if [ -n "$DIR" ] && [ ! -f "$DIR/.steps-$ROUND.md" ]; then
         LC_ALL=C grep -E "$(flow_req_re).*\[open" "$TMP/sec" | sed -e 's/^[-*[:space:]]*//' -e 's/[[:space:]]*\[open[^]]*\]//' | cut -c1-90 >> "$STEPARGS"
       fi
       [ -s "$STEPARGS" ] || echo "主活:按派单写代码 + 测绿(任务节无 open REQ 行或无 plan 节选;自己 flow-step add 拆步骤)" >> "$STEPARGS"
-      printf '%s\n' "回件:索引表 + 甲乙丙丁戊 + 收工读数(边写边落)" "收工核对:flow-freeze + 申报清单 + flow-manifest verify + flow-gates --reset + flow-fact-lint verify + flow-doc-budget" >> "$STEPARGS" ;;
+      printf '%s\n' "回件:索引表 + 甲乙丙丁戊 + 收工读数(边写边落)" "收工核对:flow-freeze + 申报清单 + flow-manifest verify$GATESTEP + flow-fact-lint verify + flow-doc-budget" >> "$STEPARGS" ;;
     ②*|④*)
-      printf '%s\n' "装载:读派单 + 上一轮回件首节索引表(按表跳读)" "主活:按本轮清单逐条核,每闭一条追加落盘" "回件:〇甲乙丙丁戊 + 必答四组数(④A 另落三态表)" "收工核对:flow-freeze + 申报清单 + flow-manifest verify(快照零改动也要 verify)+ flow-doc-budget" >> "$STEPARGS" ;;
+      printf '%s\n' "装载:读派单 + 上一轮回件首节索引表(按表跳读)" "主活:按本轮清单逐条核,每闭一条追加落盘" "回件:〇甲乙丙丁戊 + 必答四组数(④A 另落三态表)" "收工核对:flow-freeze + 申报清单 + flow-manifest verify(快照零改动也要 verify)$GATESTEP + flow-doc-budget" >> "$STEPARGS" ;;
     *)
-      printf '%s\n' "装载:读派单 + 两份审查回件的〇节与丙栏" "主活:逐条 finding 改或反证顶回,每条追加落盘" "回件:索引表每行挂 finding 号 + 收工读数" "收工核对:flow-freeze + 申报清单 + flow-manifest verify + flow-gates --reset + flow-fact-lint verify + flow-doc-budget" >> "$STEPARGS" ;;
+      printf '%s\n' "装载:读派单 + 两份审查回件的〇节与丙栏" "主活:逐条 finding 改或反证顶回,每条追加落盘" "回件:索引表每行挂 finding 号 + 收工读数" "收工核对:flow-freeze + 申报清单 + flow-manifest verify$GATESTEP + flow-fact-lint verify + flow-doc-budget" >> "$STEPARGS" ;;
   esac
   # 多行文字进位置参数:逐行读,不靠分词
   set --
@@ -215,7 +226,7 @@ fi
 if [ "$FLOW_FIX_BY_WRITER" = 1 ]; then
   FIX="SendMessage 回①写轮本人(断连才起新 agent);审查方结论优先,反证必须带命令"
 else
-  FIX="另起 agent"
+  FIX="另起 agent(宿主无 SendMessage;派单自带上一轮回件索引表,按表跳读);审查方结论优先,反证必须带命令"
 fi
 SPECS=""; for d in $FLOW_SPEC_DIRS; do SPECS="$SPECS $d/"; done; SPECS="${SPECS# }"
 
@@ -267,15 +278,16 @@ print_excerpt() {
   if [ "$AXIS" = 1 ]; then echo "(本轮 $ROUND 只给 outline + REQ 行:你读的是上一轮回件的索引表,不是任务书正文;正文按「文件 + 行号」指针按需读)"
   else echo "(节 $SECB 字节 > 封顶 $FLOW_DISPATCH_EXCERPT_BYTES:只印 节头 + outline + REQ 行 + 节尾;中间按「文件 + 行号」指针按需读)"; fi
   echo ""; echo "#### 节头"
-  # 节头 ≤1500 字节:按行累计,最后一行按字边界截(head -c 会劈开汉字 ⟹ 非法 UTF-8,F-9 同族)
-  awk 'NR>1 && /^###/{exit} {print}' "$TMP/sec" | LC_ALL=C awk "$(flow_awk_utrunc)"'{ if (n + length($0) + 1 > 1500) { print utrunc($0, 1500 - n); exit } print; n += length($0) + 1 }'
+  # 节头 ≤1500 字节:到第一个 ### 或第一条 REQ 行为止(没有 ### 的节会把整节当节头,[done] 行就从这里漏回来);按行累计,最后一行按字边界截(head -c 会劈开汉字 ⟹ 非法 UTF-8,F-9 同族)
+  LC_ALL=C awk -v re="$REQ_RE" 'NR>1 && (/^###/ || $0 ~ re){exit} {print}' "$TMP/sec" | LC_ALL=C awk "$(flow_awk_utrunc)"'{ if (n + length($0) + 1 > 1500) { print utrunc($0, 1500 - n); exit } print; n += length($0) + 1 }'
   echo ""; echo "#### outline(行号是 $PLAN 的)"
   awk -v s="$SECS" '/^###/{printf "L%d: %s\n", s+NR-1, $0}' "$TMP/sec"
-  echo ""; echo "#### REQ 行(全部,带行号)"
-  LC_ALL=C awk -v s="$SECS" -v re="$REQ_RE" '$0 ~ re {printf "L%d: %s\n", s+NR-1, $0}' "$TMP/sec"
+  # [done] 的 REQ 行不印(0.7.0):p4e 实测一节 21 条 REQ 里 14 条 done 占派单 10.3 KB,八个 agent 各读一遍;要看按行号 sed -n
+  echo ""; echo "#### REQ 行(open / deferred,带行号;[done] $NDONE 条不印,整节 L$SECS–L$SECE 按需 sed -n 读)"
+  LC_ALL=C awk -v s="$SECS" -v re="$REQ_RE" '$0 ~ re && $0 !~ /\[done/ {printf "L%d: %s\n", s+NR-1, $0}' "$TMP/sec"
   if [ "$AXIS" = 0 ]; then
     # 节尾:本刀的落位段按惯例住在节尾;给剩余预算(封顶减去已印的节头 1.5 KB + outline + REQ 行),整行对齐
-    used=$(( 1500 + $(awk '/^###/' "$TMP/sec" | wc -c | tr -d ' ') + $(LC_ALL=C grep -E "$REQ_RE" "$TMP/sec" | wc -c | tr -d ' ') ))
+    used=$(( 1500 + $(awk '/^###/' "$TMP/sec" | wc -c | tr -d ' ') + $(LC_ALL=C grep -E "$REQ_RE" "$TMP/sec" | LC_ALL=C grep -v '\[done' | wc -c | tr -d ' ') ))
     rem=$(( FLOW_DISPATCH_EXCERPT_BYTES - used )); [ "$rem" -lt 2000 ] && rem=2000
     tail -c "$rem" "$TMP/sec" | sed 1d > "$TMP/tail"
     ntail=$(wc -l < "$TMP/tail" | tr -d ' '); nsec=$(wc -l < "$TMP/sec" | tr -d ' ')
@@ -342,7 +354,8 @@ cat <<FT
 ### 编排方待填(生成器管不到的判断项)
 - 交付判据与任务书之外的裁决(任务书正文已在节选段,不再抄;①写不跑变异电池,变异归 ②B 与 ④B)
 - 自报三处「最没把握」的要求(①写轮)
-- ④ 的必闭每条带「改动估计 N 行」:≤ $FLOW_MICRO_FIX_LINES 行且在③写权限面内走微改通道(编排方落笔 + 提出轴复验,不起 ③改二)
+- ④ 的必闭每条带「改动估计 N 行 · 性质 测试|探针|注释|生产」+ 可原样重跑的复现命令 + 期望读数;非生产条合计 ≤ $FLOW_MICRO_FIX_LINES 行且全在③写权限面内 ⟹ 微改通道:
+  编排方落笔(占裁决号)+ 复跑那些复现命令对读数,不起 ③改二、不 SendMessage(oracle 由审方在改动之前写下,写≠审仍守);有一条「生产」就整批走 ③改二
 - 本轮**必读清单**(移交件按件点名;目录其余 = 旁证按需读,protocol §5)
 - 若并行:H1/H2 隔离条件逐条核($SPECS 手工 cp / DB 单点 / 文件层不相交 / 号段)
 FT

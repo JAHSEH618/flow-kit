@@ -3,8 +3,9 @@
 # 病根:892 个测试里只有 69 个引到 spec 节,接收位靠人眼对;「已覆盖」是一句声明,不是一次核对。
 #   本脚本把对账做成字面匹配:plan 任务节里的 REQ-ID(带状态)vs 测试标题里的 `[REQ-ID]`,不做模糊。
 #
-# 用法: flow-trace <plan文件(仓相对或绝对)> <任务号>
+# 用法: flow-trace <plan文件(仓相对或绝对)> <任务号> [--mark-done]
 #   例: flow-trace specs/plan/p4-api-spa.md P4-T2
+#   --mark-done(0.7.0,收口用;flow-close --wrap 在对账绿之后调):open 且有测试的 REQ 原地翻成 [done],逐条印行号;RC 不因翻转改变。
 # 读的是:任务节 `## <任务号>` 内每一行 `REQ-<任务号>-NN [open|done|deferred …]`(格式见协议 §账本与 spec)。
 #   任务号可含连字符(`REQ-P4-T2-01` 与 `REQ-P4T2-01` 都认;模式单源 lib 的 flow_req_re)。
 # 测试文件 = git 看得见的 *.test.ts(x) / *.spec.ts(x),含未跟踪(测试先行:新测试在提交前就该算数)。
@@ -21,8 +22,9 @@ set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
 flow_load_config
 
-[ $# -ge 2 ] || { echo "用法: flow-trace <plan文件> <任务号,如 P4-T2>" >&2; exit 2; }
-f="$1"; t="$2"
+[ $# -ge 2 ] || { echo "用法: flow-trace <plan文件> <任务号,如 P4-T2> [--mark-done]" >&2; exit 2; }
+f="$1"; t="$2"; MARKDONE=0
+case "${3:-}" in "") ;; --mark-done) MARKDONE=1 ;; *) echo "用法: flow-trace <plan文件> <任务号> [--mark-done]" >&2; exit 2 ;; esac
 cd "$FLOW_REPO_DIR"
 [ -f "$f" ] || flow_die "文件不存在 $f"
 
@@ -61,6 +63,7 @@ rc=$?
 ntests=$(LC_ALL=C grep -c . "$tmp/tests")
 
 red=0; covered=0; deferred=0; missing=0
+: > "$tmp/flip"
 while IFS="$(printf '\t')" read -r id st; do
   [ -n "$id" ] || continue
   case "$st" in
@@ -73,6 +76,7 @@ while IFS="$(printf '\t')" read -r id st; do
   n=$(LC_ALL=C grep -c . "$tmp/hits")
   if [ "$n" -gt 0 ]; then
     covered=$((covered+1))
+    [ "$st" = open ] && printf '%s\n' "$id" >> "$tmp/flip"
     echo "ok   $id [$st] $n 处:$(cut -d: -f1,2 "$tmp/hits" | head -3 | tr '\n' ' ')"
   else
     missing=$((missing+1)); red=1
@@ -100,6 +104,21 @@ while IFS= read -r id; do
   done
   [ "$found" = 1 ] || { orphans=$((orphans+1)); echo "WARN $id 被测试引用,但 $FLOW_SPEC_DIRS 下任何 md 都没有它(spec 删了行,或标题写错号)"; }
 done < "$tmp/cited"
+
+# --mark-done(0.7.0):open 且有测试的 REQ 翻成 [done],只动任务节、每号只翻第一处;逐条印行号,不该翻的人工改回。
+#   收口每批都手工翻一遍(p4e 一次 python 改 7 行);判据与上面同源 —— 有测试背书才翻,没有的留 open 由 RED 挡。
+if [ "$MARKDONE" = 1 ]; then
+  nflip=0
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    ln=$(LC_ALL=C awk -v s="$sec_start" -v e="$sec_end" -v id="$id" 'NR>=s && NR<=e && index($0, id " [open]") {print NR; exit}' "$f")
+    [ -n "$ln" ] || { echo "WARN $id 有测试但节里找不到「$id [open]」原文,未翻"; continue; }
+    LC_ALL=C awk -v s="$sec_start" -v e="$sec_end" -v id="$id" 'NR>=s && NR<=e && !d { k=index($0, id " [open]"); if (k) { $0 = substr($0,1,k-1) id " [done]" substr($0, k+length(id)+7); d=1 } } {print}' "$f" > "$tmp/new" || flow_die "改写失败,文件未动"
+    cat "$tmp/new" > "$f"
+    nflip=$((nflip+1)); echo "mark-done: $id L$ln [open] → [done]"
+  done < "$tmp/flip"
+  echo "mark-done: 翻了 $nflip 条(open 且有测试);deferred 与无测试的不动"
+fi
 
 nostat_n=$(printf '%s\n' "$nostatus" | LC_ALL=C grep -c .)
 judged=$((covered+missing+deferred+nostat_n))

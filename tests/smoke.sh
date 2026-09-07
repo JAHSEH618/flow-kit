@@ -578,4 +578,123 @@ printf '%s' "$LAST_OUT" > "$T/rcpt.txt"
 python3 -c "import sys; open(sys.argv[1],'rb').read().decode('utf-8')" "$T/rcpt.txt" 2>/dev/null && ok "摘录截断后仍是合法 UTF-8(F-9)" || fail "摘录截出非法 UTF-8"
 rm -f "$WS/specs/plan-big.md" "$WS/specs/plan-long.md"
 
+# ── 17. 0.7.0:F-24 续轮转义 / [done] 不印 / --db 收工段 / ledger --body-file / trace --mark-done / rulebook retire / config 判死 / usage 全窗 + 中断税 ──
+cd "$WS"
+# F-24:未加引号的 heredoc 里 \\` 留下活反引号,把 flow-manifest verify / git status / ls 真跑了、输出嵌进派单
+flow-step init "$FR" ④B "装载" "主活" >/dev/null 2>&1
+expect_rc 0 "flow-dispatch --resume(F-24)" flow-dispatch --resume "$FR/01-dispatch.md" --dir "$FR" --round ④B
+printf '%s' "$LAST_OUT" | grep -qF '`flow-step done '"$FR"' ④B <N> "<一句>"`' && ok "续轮派单反引号是字面量" || fail "续轮派单反引号仍活着: $(printf '%s' "$LAST_OUT" | grep -n 'flow-step done' | head -2)"
+printf '%s' "$LAST_OUT" | grep -qE 'No such file|On branch|申报清单不存在' && fail "续轮派单嵌进了命令输出(F-24)" || ok "续轮派单零命令输出"
+# [done] REQ 行不印;--db 禁用 的收工段不给门整跑,独占的给
+printf '## T10 · 有 done 的节\n- REQ-T10-01 [done] 老判据\n- REQ-T10-02 [open] 新判据\n## T11 · 尾\n' > "$WS/specs/plan-done.md"
+expect_rc 0 "flow-dispatch ②A --db 禁用(plan 含 done)" flow-dispatch T10 --tree 快照 --db 禁用 --seq 1 --round ②A --dir "$FR" --plan "$WS/specs/plan-done.md" src/a.ts
+printf '%s' "$LAST_OUT" | grep -q '^L[0-9]*: - REQ-T10-02 \[open\]' && ok "open REQ 行印出" || fail "open REQ 行缺"
+printf '%s' "$LAST_OUT" | grep -q 'REQ-T10-01 \[done\]' && fail "[done] REQ 行仍印" || ok "[done] REQ 行不印"
+printf '%s' "$LAST_OUT" | grep -q '\[done\] 1 条不印' && ok "REQ 段头报 done 条数" || fail "REQ 段头未报 done 条数"
+printf '%s' "$LAST_OUT" | grep -q '门整跑不归你' && ok "--db 禁用:收工段不给 flow-gates(F-22)" || fail "--db 禁用 收工段错"
+printf '%s' "$LAST_OUT" | grep -q 'flow-gates --reset >' && fail "--db 禁用 仍印 flow-gates --reset(F-22)" || ok "--db 禁用 零 flow-gates 命令"
+grep -q 'flow-gates' "$FR/.steps-②A.md" && fail "②A(禁用)步骤账含门整跑" || ok "②A 步骤账无门整跑"
+expect_rc 0 "flow-dispatch ③改 --db 独占" flow-dispatch T10 --tree 活树-独占 --db 独占 --seq 1 --round ③改 --dir "$FR" --plan "$WS/specs/plan-done.md" src/a.ts
+printf '%s' "$LAST_OUT" | grep -q "flow-gates --reset > $FR/.evidence/③改-gates.txt" && ok "--db 独占:收工段连实参给门整跑" || fail "--db 独占 收工段缺门"
+grep -q '+ flow-gates --reset' "$FR/.steps-③改.md" && ok "③改 步骤账含门整跑" || fail "③改 步骤账缺门"
+printf '%s' "$LAST_OUT" | grep -q '性质 测试|探针|注释|生产' && ok "待填段:微改通道按性质 + 合计" || fail "待填段微改通道文案未更新"
+rm -f "$WS/specs/plan-done.md" "$FR/.steps-③改.md" "$FR/.steps-④B.md"
+# flow-ledger add --body-file:多行正文一次落,整块带 > 前缀也认,反引号与 $() 逐字
+printf '> #7 首行正文\n>   第二行\n>   第三行 带 `反引号` 与 $(不展开)\n' > "$T/body7.md"
+expect_rc 0 "flow-ledger add --body-file(多行、带 > 前缀)" flow-ledger add --owner T7 --due T7 --touches src/b.ts --title 多行正文 --mark '#7' --body-file "$T/body7.md"
+grep -q '^> #7 首行正文$' "$WS/specs/debts.md" && grep -q '^>   第三行 带 `反引号` 与 \$(不展开)$' "$WS/specs/debts.md" && ok "多行正文逐字落盘、前缀归一" || fail "多行正文错: $(grep -A3 'mark:#7' "$WS/specs/debts.md")"
+printf '%s' "$LAST_OUT" | grep -q '正文 3 行' && ok "add 报正文行数" || fail "add 未报行数: $(printf '%s' "$LAST_OUT" | head -1)"
+expect_rc 0 "flow-ledger add --body-file -(stdin)" sh -c "printf 'stdin 正文\n' | flow-ledger add --owner T7 --due T7 --touches src/b.ts --title stdin正文 --mark '#8' --body-file -"
+grep -q '^> #8 stdin 正文$' "$WS/specs/debts.md" && ok "stdin 正文落盘" || fail "stdin 正文缺"
+expect_rc 2 "flow-ledger add --body 与 --body-file 互斥" flow-ledger add --owner T7 --due T7 --touches src/b.ts --title x --body y --body-file "$T/body7.md"
+# flow-trace --mark-done:open 且有测试的翻 done,再跑翻 0
+expect_rc 0 "flow-trace --mark-done" flow-trace specs/plan.md T5 --mark-done
+printf '%s' "$LAST_OUT" | grep -q '^mark-done: REQ-T5-01 L3 \[open\] → \[done\]' && ok "翻了 REQ-T5-01(带行号)" || fail "mark-done 输出错: $(printf '%s' "$LAST_OUT" | grep mark-done)"
+grep -q '^- REQ-T5-01 \[done\] WHEN a THEN b$' "$WS/specs/plan.md" && ok "plan 里 [open] → [done],其余字不动" || fail "plan 未翻或翻坏: $(grep 'REQ-T5-01' "$WS/specs/plan.md")"
+expect_rc 0 "flow-trace --mark-done 幂等" flow-trace specs/plan.md T5 --mark-done
+printf '%s' "$LAST_OUT" | grep -q '翻了 0 条' && ok "第二次翻 0 条" || fail "幂等错"
+expect_rc 2 "flow-trace 未知参数 FATAL" flow-trace specs/plan.md T5 --bogus
+# flow-rulebook:逐字搬进归档件、原文件删行;标题 / 越界 FATAL
+[ -f "$WS/.claude/flow-local.md" ] || printf '# flow-local\n' > "$WS/.claude/flow-local.md"
+printf '\n## 冒烟节\n- 冒烟规矩一 带 `反引号` 与 $(不展开)\n' >> "$WS/.claude/flow-local.md"
+n0=$(wc -l < "$WS/.claude/flow-local.md" | tr -d ' ')
+hl=$(grep -n '^## 冒烟节' "$WS/.claude/flow-local.md" | cut -d: -f1)
+expect_rc 0 "flow-rulebook show" flow-rulebook show
+printf '%s' "$LAST_OUT" | grep -q "^ *$((hl+1))  - 冒烟规矩一" && ok "show 带行号" || fail "show 行号错"
+expect_rc 0 "flow-rulebook retire" flow-rulebook retire "$((hl+1))" --section "§Z · 冒烟批" --reason "做成了脚本"
+[ "$(wc -l < "$WS/.claude/flow-local.md" | tr -d ' ')" = "$((n0-1))" ] && ok "规则书少一行" || fail "规则书行数未降"
+grep -q '冒烟规矩一' "$WS/.claude/flow-local.md" && fail "原行没删" || ok "原行已删"
+grep -q '^## §Z · 冒烟批 · 退役(' "$WS/.claude/flow-local-archive.md" && grep -q '^- 冒烟规矩一 带 `反引号` 与 \$(不展开)$' "$WS/.claude/flow-local-archive.md" && grep -q '^退役理由:做成了脚本$' "$WS/.claude/flow-local-archive.md" && ok "归档件:新节 + 逐字 + 理由" || fail "归档件错: $(tail -8 "$WS/.claude/flow-local-archive.md")"
+expect_rc 2 "flow-rulebook retire 标题行 FATAL" flow-rulebook retire "$hl" --section x --reason y
+expect_rc 2 "flow-rulebook retire 越界 FATAL" flow-rulebook retire 9999 --section x --reason y
+expect_rc 2 "flow-rulebook retire 缺 --reason FATAL" flow-rulebook retire "$hl" --section x
+# flow-config --check 判死 FLOW_FIX_BY_WRITER=1(宿主无 SendMessage)
+flow-config --check >/dev/null 2>&1; base_rc=$?
+printf 'FLOW_FIX_BY_WRITER=1\n' >> "$WS/.claude/flow.config.sh"
+expect_rc 1 "flow-config --check 判死 FLOW_FIX_BY_WRITER=1" flow-config --check
+printf '%s' "$LAST_OUT" | grep -q 'FLOW_FIX_BY_WRITER=1:宿主无 SendMessage' && ok "点名 SendMessage 通路" || fail "未点名 SendMessage"
+printf 'FLOW_FIX_BY_WRITER=0\n' >> "$WS/.claude/flow.config.sh"
+expect_rc "$base_rc" "flow-config --check 设 0 后回到原读数" flow-config --check
+# flow-usage 0.7.0:窗从开工序起到收口末;生成侧断流记卡顿;中断税;固定开销三段自动;--write 保留手填段
+FL2="$WS/.flow/p2"; mkdir -p "$FL2"
+TR2="$T/transcripts/-ws-enc/sid2"; mkdir -p "$TR2/subagents"
+python3 - "$TR2" "$FL2" <<'PY'
+import json, sys, os
+tr, fl = sys.argv[1:3]
+def asst(mid, ts, blocks, out=10):
+    return json.dumps(dict(type='assistant', timestamp=ts, message=dict(id=mid, model='claude-test', usage=dict(input_tokens=5, cache_creation_input_tokens=100, cache_read_input_tokens=1000, output_tokens=out), content=blocks)), ensure_ascii=False)
+def user(ts, text):
+    return json.dumps(dict(type='user', timestamp=ts, message=dict(role='user', content=text)), ensure_ascii=False)
+def result(ts, tid, text='ok'):
+    return json.dumps(dict(type='user', timestamp=ts, message=dict(role='user', content=[dict(type='tool_result', tool_use_id=tid, content=text)])))
+def bash(tid, cmd): return dict(type='tool_use', id=tid, name='Bash', input={'command': cmd})
+D = '2026-09-05T'
+with open(os.path.join(tr, 'subagents', 'agent-s1.jsonl'), 'w') as f:      # ③改:改树后 600 s 无输出,被 watchdog 中断
+    f.write(user(D + '01:00:00.000Z', f'你是 p2 的 ③改 agent。派单:{fl}/03-dispatch.md') + '\n')
+    f.write(asst('s1m1', D + '01:00:10.000Z', [bash('s1t1', 'cat src/a.ts')]) + '\n')
+    f.write(result(D + '01:00:12.000Z', 's1t1') + '\n')
+    f.write(asst('s1m2', D + '01:00:20.000Z', [bash('s1t2', "python3 - <<'PY'\nprint(1)\nPY")]) + '\n')
+    f.write(result(D + '01:00:25.000Z', 's1t2') + '\n')
+    f.write(user(D + '01:10:25.000Z', '[Request interrupted by user]') + '\n')
+with open(os.path.join(tr, 'subagents', 'agent-s2.jsonl'), 'w') as f:      # ③改续:读 45 s 后第一个非读调用
+    f.write(user(D + '01:12:45.000Z', f'你是 p2 的 ③改续 agent。派单:{fl}/03c-dispatch.md') + '\n')
+    f.write(asst('s2m1', D + '01:13:00.000Z', [bash('s2t1', f'cat {fl}/03c-dispatch.md')]) + '\n')
+    f.write(result(D + '01:13:01.000Z', 's2t1') + '\n')
+    f.write(asst('s2m2', D + '01:13:45.000Z', [bash('s2t2', f'flow-step done {fl} ③改 2 "接上"')]) + '\n')
+    f.write(result(D + '01:13:46.000Z', 's2t2') + '\n')
+    f.write(asst('s2m3', D + '01:20:00.000Z', [dict(type='text', text='done')]) + '\n')
+with open(os.path.join(os.path.dirname(tr), 'sid2.jsonl'), 'w') as f:      # 编排方:开工序在首次提到目录之前;收口在最后一次提到目录之后
+    f.write(asst('o1', D + '00:40:00.000Z', [bash('o1t', 'flow-freshness')]) + '\n')
+    f.write(result(D + '00:40:01.000Z', 'o1t') + '\n')
+    f.write(asst('o2', D + '00:50:00.000Z', [bash('o2t', f'cat {fl}/00-ORCH-STATE.md')]) + '\n')
+    f.write(result(D + '00:50:01.000Z', 'o2t') + '\n')
+    f.write(asst('o3', D + '00:55:00.000Z', [dict(type='tool_use', id='o3t', name='Agent', input={'prompt': f'你是 p2 的 ③改 agent。派单:{fl}/03-dispatch.md'})]) + '\n')
+    f.write(result(D + '00:55:01.000Z', 'o3t') + '\n')
+    f.write(asst('o4', D + '01:12:00.000Z', [bash('o4t', f'flow-dispatch --resume {fl}/03-dispatch.md --dir {fl} --round ③改')]) + '\n')
+    f.write(result(D + '01:12:01.000Z', 'o4t') + '\n')
+    f.write(asst('o5', D + '01:12:30.000Z', [dict(type='tool_use', id='o5t', name='Agent', input={'prompt': f'你是 p2 的 ③改续 agent。派单:{fl}/03c-dispatch.md'})]) + '\n')
+    f.write(result(D + '01:12:31.000Z', 'o5t') + '\n')
+    f.write(asst('o6', D + '01:25:00.000Z', [bash('o6t', f'flow-round close {fl} ③改续')]) + '\n')
+    f.write(result(D + '01:25:01.000Z', 'o6t') + '\n')
+    f.write(asst('o7', D + '01:26:00.000Z', [bash('o7t', 'git commit -F -')]) + '\n')
+    f.write(result(D + '01:26:01.000Z', 'o7t') + '\n')
+    f.write(asst('o8', D + '01:27:00.000Z', [bash('o8t', 'flow-close --ship abc --subject x')]) + '\n')
+    f.write(result(D + '01:27:01.000Z', 'o8t') + '\n')
+    f.write(asst('o9', D + '01:50:00.000Z', [bash('o9t', 'echo 与本批无关,间隔 23 min')]) + '\n')
+    f.write(result(D + '01:50:01.000Z', 'o9t') + '\n')
+PY
+expect_rc 0 "flow-usage(0.7.0 全窗)" flow-usage "$FL2"
+printf '%s' "$LAST_OUT" | grep -q '^| 编排方 | .* 8 轮 .*开工序起 → 收口末' && ok "窗从开工标记起到收口标记止(8 轮;23 min 后那轮在窗外)" || fail "编排方窗错: $(printf '%s' "$LAST_OUT" | grep '^| 编排方')"
+printf '%s' "$LAST_OUT" | grep -q '^| 开工清账 + 派单装配 | 14m |' && ok "开工 14m 自动出(区间 = 上一事件末 → 本请求末,含 1 s 的工具结果)" || fail "开工行错: $(printf '%s' "$LAST_OUT" | grep '开工清账')"
+printf '%s' "$LAST_OUT" | grep -q '^| 收口 | 1m |' && ok "收口 1m 自动出" || fail "收口行错: $(printf '%s' "$LAST_OUT" | grep '^| 收口')"
+printf '%s' "$LAST_OUT" | grep -q '独占关键路径 17m(开工 14m · 轮间 0m · 收口 1m)' && ok "独占关键路径 = 三段之和" || fail "独占行错: $(printf '%s' "$LAST_OUT" | grep '独占关键路径' | head -1)"
+printf '%s' "$LAST_OUT" | grep -q 'WARN 卡顿 ③改:.*生成侧断流:工具结果之后无输出,以中断收场 600s' && ok "生成侧断流记卡顿" || fail "生成侧断流未记: $(printf '%s' "$LAST_OUT" | grep 卡顿)"
+printf '%s' "$LAST_OUT" | grep -q '^| ③改 | 10m | 0m | 0m | 10m | 1 |' && ok "③改 墙钟行:空等 10m · 卡顿 1" || fail "③改 墙钟行错: $(printf '%s' "$LAST_OUT" | grep -E '^\| ③改 \| 10m')"
+printf '%s' "$LAST_OUT" | grep -q '中断税 ③改→③改续:卡顿 10m00s + 编排方接手 2m20s + 续轮装载 1m00s = 13m20s' && ok "中断税 = 卡顿 + 接手 + 装载" || fail "中断税错: $(printf '%s' "$LAST_OUT" | grep 中断)"
+expect_rc 0 "flow-usage --write(带标记)" flow-usage "$FL2" --write
+grep -q '<!-- flow:gen-begin -->' "$FL2/.usage.md" && grep -q '^## 手填' "$FL2/.usage.md" && ok ".usage.md 生成段带标记 + 手填段" || fail ".usage.md 缺标记或手填段"
+printf '| 本批退役规矩数 | 1 | 冒烟 |\n' >> "$FL2/.usage.md"
+expect_rc 0 "flow-usage --write 重跑" flow-usage "$FL2" --write
+grep -q '^| 本批退役规矩数 | 1 | 冒烟 |$' "$FL2/.usage.md" && [ "$(grep -c 'flow:gen-begin' "$FL2/.usage.md")" = 1 ] && ok "重跑保留手填行、生成段只有一份" || fail "重跑丢了手填行或标记重复"
+
 [ "$red" = 0 ] && { echo "SMOKE OK"; exit 0; } || { echo "SMOKE RED"; exit 1; }

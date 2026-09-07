@@ -72,13 +72,14 @@ flow_load_config() {
   FLOW_DOC_BUDGET_RULEBOOK=250
   FLOW_DEBT_CAP=8
   FLOW_DEBT_WARN=16
-  FLOW_FIX_BY_WRITER=1
+  FLOW_FIX_BY_WRITER=0                  # 1 = ③改轮 SendMessage 回①写轮本人。Claude Code 宿主没有这条通路(p4e 实测 ToolSearch 零命中),默认另起;设 1 时 flow-config --check 判红
   FLOW_FOLD_MAX=6
   FLOW_REQ_CAP=8
   FLOW_TURN_CAP=120                     # 单会话请求数上限(flow-usage 只 WARN):携带 ∝ 轮数 × 上下文,上下文又随轮数长 ⟹ 二次;按会话判,续轮单算
   FLOW_DISPATCH_EXCERPT_BYTES=12000     # 派单里 plan 任务节选的字节封顶:超过只印 outline + REQ 行 + 节尾(本刀落位段),其余给「文件 + 行号」指针
                                         # 实测一节 42 KB 横跨三刀,八个 agent 各读一遍 ≈ 该批携带 10%;②③④ 一律不印正文
-  FLOW_MICRO_FIX_LINES=3                # ④ 判必闭且改动估计 ≤ 此行数(且在③写权限面内)⟹ 编排方落笔 + 提出轴复验,不起 ③改二(微改通道)
+  FLOW_MICRO_FIX_LINES=16               # 微改通道(0.7.0 改判合计):④ 两轴必闭里性质非生产(测试 / 探针 / 注释)的条目**合计**改动估计 ≤ 此行数、且全在③写权限面内
+                                        # ⟹ 编排方落笔 + 复跑 ④ 预先写下的复现命令对读数,不起 ③改二。p4e 实测 4 条 10–13 行走了 ③改二 + ④B定点 46 min
   FLOW_STALL_SEC=300                    # flow-usage 卡顿判据:一次工具调用 ≥ 此秒数单列 WARN(harness 卡顿实测 600 s 整、两轴同刻放行)
   FLOW_RECEIPT_MODE="section"           # plan 体例:section = `## <任务号>` 小节;table = 任务是表行
   FLOW_ROLE_MODELS=""

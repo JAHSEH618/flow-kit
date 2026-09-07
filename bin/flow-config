@@ -37,6 +37,8 @@ if [ -f "$hook" ]; then
 else
   miss "git shim 未装: $hook"
 fi
+# ③回①本人靠 SendMessage;Claude Code 宿主没有这条通路(p4e 实测 ToolSearch select:SendMessage 零命中,③ 只能另起)—— 设 1 = 声称一条不存在的通路
+[ "$FLOW_FIX_BY_WRITER" = 1 ] && miss "FLOW_FIX_BY_WRITER=1:宿主无 SendMessage,③ 只能另起 —— 设 0(确有 SendMessage 的宿主先探针拿到回音再改回)"
 if [ -n "${FLOW_KEEP_PLUGINS+x}" ] && [ -n "${FLOW_KEEP_MCP+x}" ]; then
   out=$(flow-settings --check 2>&1); src=$?
   [ "$src" = 0 ] || miss "会话未瘦身(flow-settings --check RC=$src):$(printf '%s' "$out" | grep '^RED' | head -3 | tr '\n' ';')"
@@ -44,5 +46,5 @@ else
   echo "WARN: FLOW_KEEP_PLUGINS / FLOW_KEEP_MCP 未写,跳过会话瘦身核对(填上后 flow-settings --write)"
 fi
 [ "$red" = 0 ] || { echo "RED: config 自检未过"; exit 1; }
-echo "OK: config 自检全过(账本 / 根文档 / 规格目录 / git shim / 会话瘦身)"
+echo "OK: config 自检全过(账本 / 根文档 / 规格目录 / git shim / 会话瘦身 / ③改去向)"
 exit 0
