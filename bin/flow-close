@@ -2,6 +2,7 @@
 # flow-close —— 编排方的核对与收口一键(四种模式)。
 #   默认(轮收工):§B5 冻结核对 + 非空转 + 交付态哈希 + 账本 lint + 文档预算 + 规则书棘轮。
 #   --between(轮间交接口):交付态哈希 + 冻结核对 + 非空转 + 树读数 + 路由复跑 + REQ 对账 + 文档预算。(flow-round close 按约定名调它)
+#       REQ 对账拿到 RC=3(TRACE N/A,本仓 plan 不写 REQ 行)印 info 不判红 —— 「不适用」与「不达标」不许同型(0.7.1)。
 #   --wrap(收口机械段,0.6.0):三态表 dry-run → 索引重渲 → 账本 lint → REQ 对账 → REQ 翻 done(0.7.0,对账绿才翻)→ 门整跑(收口那一次;末尾印一行可照抄的门读数)
 #       → 默认模式六项 → 轮数账 --write → 状态档事实段;末行 WRAP OK 之后印剩余手工步清单(编排方不必再读 close-block.md)。
 #       病根:收口十步里的机械步曾各占编排方一个请求(ShipLedger 收口 ≈60 min、StockSteer 20+27 min);这里一条命令、一行末行。
@@ -177,6 +178,9 @@ step_trace() {
   hdr "flow-trace REQ ↔ 测试对账"
   flow-trace "$PLAN" "$TASK" > "$TMP/trace" 2>&1; trc=$?
   tail -1 "$TMP/trace"; echo "RC=$trc"
+  # RC=3 = TRACE N/A(本仓 plan 不写 REQ 行,对账不适用)—— 印 info 不判红。
+  # 不适用与不达标不是一件事:ShipLedger P3-1 批 6 次 close 都被这条判成红,靠人眼记住「这条是假的」(protocol §5 不许)。
+  if [ "$trc" = 3 ]; then echo "info REQ 对账不适用(TRACE N/A)—— 不判红;本任务的接收位覆盖由 flow-receipts 管"; return 0; fi
   [ "$trc" = 0 ] || red=1
 }
 
@@ -246,7 +250,9 @@ step_markdone() {
   { [ -n "$TASK" ] && [ -n "$PLAN" ]; } || { echo "== (REQ 翻 done 跳过:需 --task 与 --plan)=="; return 0; }
   hdr "flow-trace --mark-done(open 且有测试的 REQ 翻 [done];逐条印行号,不该翻的手工改回;plan 须在申报清单里)"
   flow-trace "$PLAN" "$TASK" --mark-done > "$TMP/md" 2>&1; rc=$?
-  LC_ALL=C grep -E '^mark-done|^WARN|^TRACE' "$TMP/md"; echo "RC=$rc"; [ "$rc" = 0 ] || red=1
+  LC_ALL=C grep -E '^mark-done|^WARN|^TRACE' "$TMP/md"; echo "RC=$rc"
+  if [ "$rc" = 3 ]; then echo "info 无 REQ 可翻(TRACE N/A)—— 不判红;本仓 plan 的状态不由 REQ 行记"; return 0; fi
+  [ "$rc" = 0 ] || red=1
 }
 step_usage() {
   hdr "flow-usage --write(轮数账;零会话命中只 WARN,账不是门)"

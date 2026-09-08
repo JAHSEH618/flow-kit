@@ -255,6 +255,7 @@ printf "it('[REQ-T5-02] c→d', () => {})\n" >> "$WS/src/t5.test.ts"
 expect_rc 0 "flow-trace OK" flow-trace specs/plan.md T5
 printf '%s' "$LAST_OUT" | grep -q 'TRACE OK: 2/2' && ok "TRACE OK 2/2" || fail "末行不是 TRACE OK 2/2: $LAST_OUT"
 expect_rc 2 "flow-trace 零 REQ FATAL" flow-trace specs/plan.md T6
+printf '%s' "$LAST_OUT" | grep -q '整份 plan 有 .* 行带 REQ' && ok "本节漏写 ≠ 本仓不用 REQ(N/A 只对整份判)" || fail "FATAL 未把不适用与漏写分开: $LAST_OUT"
 expect_rc 1 "flow-trace 缺状态行 RED" flow-trace specs/plan.md T7
 printf '%s' "$LAST_OUT" | grep -q '没有 \[open|done|deferred\] 状态行' && ok "点名缺状态的 REQ" || fail "缺状态未点名: $LAST_OUT"
 expect_rc 2 "flow-trace 找不到节 FATAL" flow-trace specs/plan.md T9
@@ -439,6 +440,11 @@ printf 'FLOW_RECEIPT_MODE="table"\n' >> "$WS/.claude/flow.config.sh"
 expect_rc 0 "flow-receipts table 体例" flow-receipts specs/plan-table.md P1.A
 printf '%s' "$LAST_OUT" | grep -q 'RECEIPTS OK: 轴1 2 · 轴2 1' && ok "表行两轴计数" || fail "表行计数错: $(printf '%s' "$LAST_OUT" | tail -1)"
 expect_rc 2 "table 体例零命中 FATAL" flow-receipts specs/plan-table.md P9.Z
+# flow-trace 学 table 体例(0.7.1):节 = 首格恰等于任务号的表行;整份零 REQ ⟹ N/A(RC=3),不是红
+expect_rc 3 "flow-trace table 体例 · 整份零 REQ ⟹ N/A" flow-trace specs/plan-table.md P1.A
+printf '%s' "$LAST_OUT" | grep -q '^TRACE N/A' && ok "末行 TRACE N/A" || fail "末行不是 TRACE N/A: $(printf '%s' "$LAST_OUT" | tail -1)"
+printf '%s' "$LAST_OUT" | grep -q '节命中 1 行' && ok "首格严格:P1.B 那行点名 P1.A,不算进 P1.A 的节(receipts 轴1 全行匹配数 2)" || fail "首格不严格: $(printf '%s' "$LAST_OUT" | tail -1)"
+expect_rc 2 "flow-trace table 体例任务号拼错仍 FATAL" flow-trace specs/plan-table.md P9.Z
 sed -i.bak '/FLOW_RECEIPT_MODE/d' "$WS/.claude/flow.config.sh"; rm -f "$WS/.claude/flow.config.sh.bak"
 mkdir -p src/t
 cat > "$WS/specs/plan-hyphen.md" <<'EOF'
@@ -552,13 +558,20 @@ expect_rc 1 "flow-round open 重开 RED(基线已存在)" flow-round open "$FR" 
 # 模拟 agent 收工:改 a.ts、申报、冻结、回件、勾步骤
 printf 'round\n' >> src/a.ts; printf 'src/a.ts\n' > "$FR/.declared-①写.txt"
 expect_rc 0 "flow-freeze(约定名)" flow-freeze "$FR/.after-①写-hashes.txt"
-printf '# 回件\n' > "$FR/01-write-handoff.md"
+printf '# ①写 回件 · 冒烟\n' > "$FR/01-write-handoff.md"
+# glob 诱饵:同 01 前缀、mtime 更新、却是别的轮的回件 —— prefix+mtime 那套会取它(P3-1 状态档 14 行行行错就是这个机制)
+printf '# ②A 回件 · 诱饵\n' > "$FR/01-review-external.md"
 expect_rc 1 "flow-round close 步骤未全勾 RED" flow-round close "$FR" ①写 --task T1
 printf '%s' "$LAST_OUT" | grep -q '步骤账未全勾' && ok "close 点名未全勾" || fail "close 未点名步骤账"
 i=1; while [ $i -lt 4 ]; do i=$((i+1)); flow-step done "$FR" ①写 $i >/dev/null; done
 expect_rc 0 "flow-round close ①写" flow-round close "$FR" ①写 --task T1
 printf '%s' "$LAST_OUT" | grep -q 'ROUND-CLOSE OK' && ok "ROUND-CLOSE OK" || fail "ROUND-CLOSE: $(printf '%s' "$LAST_OUT" | tail -4)"
 printf '%s' "$LAST_OUT" | grep -q 'BETWEEN OK' && ok "close 内含 between" || fail "close 未跑 between"
+printf '%s' "$LAST_OUT" | grep -q '01-write-handoff.md' && ok "回件按首行「# <轮名> 回件」认领" || fail "回件认领错: $(printf '%s' "$LAST_OUT" | grep -A2 '回件')"
+printf '%s' "$LAST_OUT" | grep -q '01-review-external.md' && fail "取到了同前缀更新的诱饵件" || ok "诱饵件没被取(不按件名前缀 + mtime 猜)"
+grep -q '01-write-handoff.md' "$FR/00-ORCH-STATE.md" && ok "状态档回件列与 close 同源" || fail "状态档回件列错: $(grep '| ①写 |' "$FR/00-ORCH-STATE.md")"
+grep -q '01-review-external.md' "$FR/00-ORCH-STATE.md" && fail "状态档回件列取到诱饵件" || ok "状态档回件列没取诱饵"
+grep -q '01-dispatch.md' "$FR/00-ORCH-STATE.md" && ok "状态档派单列按「轮次 / 模型」行认领" || fail "状态档派单列错: $(grep '| ①写 |' "$FR/00-ORCH-STATE.md")"
 grep -q '已勾 4 / 共 4' "$FR/00-ORCH-STATE.md" && ok "状态档步骤账列 4/4" || fail "状态档步骤账列错: $(grep '| ①写 |' "$FR/00-ORCH-STATE.md")"
 printf '\n## 一 · 手写裁决\n保留我\n' >> "$FR/00-ORCH-STATE.md"
 expect_rc 0 "flow-round state" flow-round state "$FR"

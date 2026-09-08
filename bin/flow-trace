@@ -6,18 +6,26 @@
 # 用法: flow-trace <plan文件(仓相对或绝对)> <任务号> [--mark-done]
 #   例: flow-trace specs/plan/p4-api-spa.md P4-T2
 #   --mark-done(0.7.0,收口用;flow-close --wrap 在对账绿之后调):open 且有测试的 REQ 原地翻成 [done],逐条印行号;RC 不因翻转改变。
-# 读的是:任务节 `## <任务号>` 内每一行 `REQ-<任务号>-NN [open|done|deferred …]`(格式见协议 §账本与 spec)。
+# 读的是:任务节内每一行 `REQ-<任务号>-NN [open|done|deferred …]`(格式见协议 §账本与 spec)。
 #   任务号可含连字符(`REQ-P4-T2-01` 与 `REQ-P4T2-01` 都认;模式单源 lib 的 flow_req_re)。
+# 两种 plan 体例(FLOW_RECEIPT_MODE,与 flow-receipts 同一个开关;0.7.1):
+#   section:任务节 = `## <任务号>` 起到下一个 `## ` 前
+#   table  :任务 = **首格恰等于任务号**的表行(可多行)。不用 flow-receipts 轴1 的全行 index():
+#           ShipLedger 的 `spec/P3.md` 里 P3.D 那行正文点名 P3.B,全行匹配会把别人的行算进本任务的节。
 # 测试文件 = git 看得见的 *.test.ts(x) / *.spec.ts(x),含未跟踪(测试先行:新测试在提交前就该算数)。
 # 判定:
 #   · open / done 的 REQ 零测试 ⟹ RED(RC=1)
 #   · deferred 的 REQ 不计(它已转成欠账,由账本管)
 #   · 节里出现却没有状态行的 REQ ⟹ RED(状态不可见 = 对账盲区)
 #   · 测试里引了、任何 spec md 里都找不到的 REQ ⟹ WARN(孤儿测试:spec 删了行或标题写错号)
-#   · 任务节零条 REQ ⟹ FATAL(RC=2):「全覆盖」与「没扫到」不许同型
+#   · 任务节零条 REQ,而**整份 plan 有** REQ ⟹ FATAL(RC=2):本节漏写,「全覆盖」与「没扫到」不许同型
+#   · **整份 plan 零条 REQ-ID ⟹ RC=3,末行 `TRACE N/A`**(0.7.1):本仓 plan 不写 REQ 行,对账不适用 —— 不是绿也不是红,
+#     调用方(flow-close --between / --wrap)按 info 处理不判红。判据取**整份**不取本节:取本节就把「没扫到」做成了「不适用」(§J0)。
+#     实证:ShipLedger 的 spec/*.md 零条 REQ,P3-1 批 6 次 flow-round close 每次都红在这里,靠编排方人眼记住「这条红是假的」——
+#     protocol §5 不许这么过关,所以要么工具认这个体例,要么退役这条判据。
 #   · 零个测试文件 ⟹ FATAL(RC=2)
-# 末行固定:`TRACE OK: …` / `TRACE RED: …`。判据纪律:grep 的 RC 与命令同层,不进 && 链;计数用 LC_ALL=C。
-# 读的配置:FLOW_REPO_DIR FLOW_SPEC_DIRS
+# 末行固定:`TRACE OK: …` / `TRACE RED: …` / `TRACE N/A: …`。判据纪律:grep 的 RC 与命令同层,不进 && 链;计数用 LC_ALL=C。
+# 读的配置:FLOW_REPO_DIR FLOW_SPEC_DIRS FLOW_RECEIPT_MODE
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
 flow_load_config
@@ -27,16 +35,29 @@ f="$1"; t="$2"; MARKDONE=0
 case "${3:-}" in "") ;; --mark-done) MARKDONE=1 ;; *) echo "用法: flow-trace <plan文件> <任务号> [--mark-done]" >&2; exit 2 ;; esac
 cd "$FLOW_REPO_DIR"
 [ -f "$f" ] || flow_die "文件不存在 $f"
+MODE="${FLOW_RECEIPT_MODE:-section}"
+case "$MODE" in section|table) ;; *) flow_die "FLOW_RECEIPT_MODE 须为 section|table,得到:「$MODE」" ;; esac
 
 tmp="$(flow_tmpdir)/.flow-trace-$$"; mkdir -p "$tmp"
 trap 'rm -rf "$tmp"' EXIT
 
-sec_start=$(grep -n "^## $t " "$f" | head -1 | cut -d: -f1)
-[ -n "$sec_start" ] || sec_start=$(grep -n "^## $t" "$f" | head -1 | cut -d: -f1)
-[ -n "$sec_start" ] || flow_die "找不到节 ## $t"
-sec_end=$(awk -v s="$sec_start" 'NR>s && /^## /{print NR-1; exit}' "$f")
-[ -n "$sec_end" ] || sec_end=$(wc -l < "$f" | tr -d ' ')
-sed -n "${sec_start},${sec_end}p" "$f" > "$tmp/sec"
+# 节 → 行号集 $tmp/seclines(两种体例同一出口;--mark-done 按它判「这一行归不归本节」,不再靠 起止行区间)
+if [ "$MODE" = table ]; then
+  # 首格 = 第一个 | 之后到第二个 | 之前,剥两侧空白与粗体星号后**恰等于**任务号
+  LC_ALL=C awk -v t="$t" '/^[[:space:]]*\|/ {
+      c=$0; sub(/^[[:space:]]*\|/,"",c); sub(/\|.*$/,"",c)
+      gsub(/^[[:space:]]+|[[:space:]]+$/,"",c); sub(/^\*+/,"",c); sub(/\*+$/,"",c)
+      if (c==t) print NR }' "$f" > "$tmp/seclines"
+  [ -s "$tmp/seclines" ] || flow_die "找不到首格 = $t 的表行(体例 table)—— 核对任务号写法,或本仓其实是 section 体例"
+else
+  sec_start=$(grep -n "^## $t " "$f" | head -1 | cut -d: -f1)
+  [ -n "$sec_start" ] || sec_start=$(grep -n "^## $t" "$f" | head -1 | cut -d: -f1)
+  [ -n "$sec_start" ] || flow_die "找不到节 ## $t —— 若本仓的任务是表行不是小节,config 里设 FLOW_RECEIPT_MODE=table"
+  sec_end=$(awk -v s="$sec_start" 'NR>s && /^## /{print NR-1; exit}' "$f")
+  [ -n "$sec_end" ] || sec_end=$(wc -l < "$f" | tr -d ' ')
+  awk -v s="$sec_start" -v e="$sec_end" 'BEGIN{for(i=s;i<=e;i++) print i}' > "$tmp/seclines"
+fi
+awk 'NR==FNR{L[$1]=1;next} (FNR in L)' "$tmp/seclines" "$f" > "$tmp/sec"
 
 # 定义行 = 同一行既有 REQ-ID 又有 [状态];只提到 ID 没有状态的行单独记,后面判 RED
 REQ_RE=$(flow_req_re)
@@ -51,7 +72,13 @@ sort -u -o "$tmp/defs" "$tmp/defs"
 LC_ALL=C grep -oE "$REQ_RE" "$tmp/mentions" | sort -u > "$tmp/allids"
 nreq=$(LC_ALL=C grep -c . "$tmp/allids")
 if [ "$nreq" -eq 0 ]; then
-  echo "FATAL: 节 ## $t 里零条 REQ 行 —— 「全覆盖」与「没扫到」不许同型;先把验收写成 REQ-ID [open] 一句一行" >&2
+  # 「本仓不写 REQ」与「本节漏写 REQ」是两件事:前者不适用(N/A),后者是盲区(FATAL)。判据取整份 plan,不取本节。
+  nall=$(LC_ALL=C grep -cE "$REQ_RE" "$f")
+  if [ "$nall" -eq 0 ]; then
+    echo "TRACE N/A: $f 整份零条 REQ-ID(体例 $MODE,节命中 $(LC_ALL=C grep -c . "$tmp/seclines") 行)—— 本仓 plan 不写 REQ 行,REQ ↔ 测试对账不适用;接收位覆盖由 flow-receipts 管"
+    exit 3
+  fi
+  echo "FATAL: 节 $t 里零条 REQ 行,而整份 plan 有 $nall 行带 REQ —— 是本节漏写,不是「本仓不用 REQ」;「全覆盖」与「没扫到」不许同型,先把验收写成 REQ-ID [open] 一句一行" >&2
   exit 2
 fi
 
@@ -111,9 +138,9 @@ if [ "$MARKDONE" = 1 ]; then
   nflip=0
   while IFS= read -r id; do
     [ -n "$id" ] || continue
-    ln=$(LC_ALL=C awk -v s="$sec_start" -v e="$sec_end" -v id="$id" 'NR>=s && NR<=e && index($0, id " [open]") {print NR; exit}' "$f")
+    ln=$(LC_ALL=C awk -v id="$id" 'NR==FNR{L[$1]=1;next} (FNR in L) && index($0, id " [open]") {print FNR; exit}' "$tmp/seclines" "$f")
     [ -n "$ln" ] || { echo "WARN $id 有测试但节里找不到「$id [open]」原文,未翻"; continue; }
-    LC_ALL=C awk -v s="$sec_start" -v e="$sec_end" -v id="$id" 'NR>=s && NR<=e && !d { k=index($0, id " [open]"); if (k) { $0 = substr($0,1,k-1) id " [done]" substr($0, k+length(id)+7); d=1 } } {print}' "$f" > "$tmp/new" || flow_die "改写失败,文件未动"
+    LC_ALL=C awk -v id="$id" 'NR==FNR{L[$1]=1;next} !d && (FNR in L) { k=index($0, id " [open]"); if (k) { $0 = substr($0,1,k-1) id " [done]" substr($0, k+length(id)+7); d=1 } } {print}' "$tmp/seclines" "$f" > "$tmp/new" || flow_die "改写失败,文件未动"
     cat "$tmp/new" > "$f"
     nflip=$((nflip+1)); echo "mark-done: $id L$ln [open] → [done]"
   done < "$tmp/flip"

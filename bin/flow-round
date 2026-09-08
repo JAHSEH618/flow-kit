@@ -8,6 +8,8 @@
 #   flow-round close <流程目录(绝对)> <轮名> [--task <号>] [--plan <plan绝对>]
 #                                                                   # 收工交接口:flow-close --between(文件名按约定)+ 步骤账全勾 + 状态档事实段
 #   flow-round state <流程目录(绝对)>                             # 只刷状态档事实段(00-ORCH-STATE.md 的 <!-- flow:gen-* --> 段;段外是编排方的裁决,不动)
+# 派单 / 回件两列**按件里的内容认领**(0.7.1),不按件名前缀猜:派单看 flow-dispatch 印的「轮次 / 模型」行,回件看首行「# <轮名> 回件」。
+#   认不出才退回 glob 并标 ⚠glob猜。实测 P3-1 状态档 14 行行行取错(③改二 两行都印 03c-fix-handoff.md,实件 05b/05c)。
 # 约定文件名(flow-dispatch --dir 印进派单的就是这些;agent 与编排方两侧同源):
 #   .manifest-baseline-<轮名>.txt · .declared-<轮名>.txt · .after-<轮名>-hashes.txt · .steps-<轮名>.md · .evidence/<轮名>-*.txt
 # F-13:开工序里从没有 `flow-fact-lint verify` 这一步 —— 落位段写进 specs/ 后直接 baseline 冻结,自带的 RED 潜到①写收工才炸,
@@ -46,6 +48,33 @@ kb() { printf '%d KB' $(( ($(wc -c < "$1" | tr -d ' ') + 512) / 1024 )); }
 newest() {   # newest <glob 模式(相对 DIR)>:按 mtime 最新的一个文件名(无则空)
   ( cd "$DIR" && ls -t $1 2>/dev/null | head -1 )
 }
+# —— 认领本轮的件:按**件里的内容**认,不按件名猜(0.7.1)——
+# 病根:件名是编排方即兴起的,两批的规矩互不兼容(p4e `03b-dispatch-fix2.md` / `04c-dispatch-b-pinpoint.md`;
+#   P3-1 `05b-fix2-handoff.md` / `03b-resume-dispatch.md`),而 prefix_of 把轮名压成两位前缀再按 mtime 取最新。
+#   实测 P3-1 状态档 14 行**行行取错**:B 支印成 C 支的件,③改二 两行都印 `03c-fix-handoff.md`(实件 05b/05c),
+#   编排方只能在手写区加一句「别照那一列抄」。件名靠不住,件里的轮名靠得住 —— 两侧同源(契约 3)。
+# 认不出才退回 glob,并把格子标成 ⚠glob猜:猜错要看得见,不许静默错。
+find_handoff() {   # 回件首行逐字 `# <轮名> 回件 …`(两份回件模板的契约;P3-1 的 14 份回件 14/14 是这个形状)
+  ( cd "$DIR" 2>/dev/null || exit 0
+    for m in *.md; do
+      [ -f "$m" ] || continue
+      case "$(head -1 "$m")" in "# $1 回件"*) printf '%s\n' "$m"; break ;; esac
+    done )
+}
+find_dispatch() {  # 派单生成段里的 `- **轮次 / 模型**:<轮名> ·` —— flow-dispatch 自己印的,天然同源
+  ( cd "$DIR" 2>/dev/null || exit 0
+    for m in *.md; do
+      [ -f "$m" ] || continue
+      if LC_ALL=C grep -qF -- "**轮次 / 模型**:$1 ·" "$m"; then printf '%s\n' "$m"; break; fi
+    done )
+}
+find_resume() {    # 续轮派单头 `## 派单必带块 —— <轮名>-续(`(flow-dispatch --resume 印的)
+  ( cd "$DIR" 2>/dev/null || exit 0
+    for m in *.md; do
+      [ -f "$m" ] || continue
+      if LC_ALL=C grep -qF -- "派单必带块 —— $1-续(" "$m"; then printf '%s\n' "$m"; break; fi
+    done )
+}
 
 # —— 状态档事实段:00-ORCH-STATE.md 的 gen 段整段重生成;段外(编排方的裁决)一字不动 ——
 gen_state() {
@@ -61,9 +90,13 @@ gen_state() {
     ( cd "$DIR" && ls -tr .manifest-baseline-*.txt 2>/dev/null ) | sed -e 's/^\.manifest-baseline-//' -e 's/\.txt$//' | while IFS= read -r r; do
       [ -n "$r" ] || continue
       pfx=$(prefix_of "$r")
-      d=$(newest "${pfx}*dispatch*.md"); h=$(newest "${pfx}*handoff*.md ${pfx}*review*.md")
-      dcell="—"; [ -n "$d" ] && dcell="$d $(kb "$DIR/$d")"
-      hcell="—"; [ -n "$h" ] && hcell="$h $(kb "$DIR/$h")"
+      dg=""; d=$(find_dispatch "$r")
+      [ -n "$d" ] || { d=$(newest "${pfx}*dispatch*.md"); dg=" ⚠glob猜"; }
+      hg=""; h=$(find_handoff "$r")
+      [ -n "$h" ] || { h=$(newest "${pfx}*handoff*.md ${pfx}*review*.md"); hg=" ⚠glob猜"; }
+      dcell="—"; [ -n "$d" ] && dcell="$d $(kb "$DIR/$d")$dg"
+      rsm=$(find_resume "$r"); [ -n "$rsm" ] && dcell="$dcell · 续 $rsm"
+      hcell="—"; [ -n "$h" ] && hcell="$h $(kb "$DIR/$h")$hg"
       if [ -f "$DIR/.steps-$r.md" ]; then scell=$(flow-step show "$DIR" "$r" 2>/dev/null | tail -1 | sed -e 's/^STEPS OK: //' -e 's/^STEPS DONE: //' -e 's/ · 下一步.*//'); else scell="无"; fi
       fcell=""
       [ -f "$DIR/.after-$r-hashes.txt" ] && fcell="after ✓" || fcell="after ✗"
@@ -127,7 +160,7 @@ close)
   [ -n "$TASK" ] && set -- "$@" --task "$TASK"
   [ -n "$PLAN" ] && set -- "$@" --plan "$PLAN"
   flow-close --between "$@" > "$EV/$ROUND-close-between.txt" 2>&1; rc=$?
-  LC_ALL=C grep -E '^== |^RED|^FATAL|^BETWEEN|^OK=|RC=' "$EV/$ROUND-close-between.txt" | sed 's/^/  /'
+  LC_ALL=C grep -E '^== |^RED|^FATAL|^BETWEEN|^OK=|^info |RC=' "$EV/$ROUND-close-between.txt" | sed 's/^/  /'
   echo "RC=$rc(全量 $EV/$ROUND-close-between.txt)"; [ "$rc" = 0 ] || red=1
   hdr "步骤账全勾"
   if [ -f "$DIR/.steps-$ROUND.md" ]; then
@@ -135,8 +168,18 @@ close)
     case "$last" in "STEPS DONE"*) ;; *) echo "  RED:步骤账未全勾 —— 要么 agent 没收工,要么漏勾;先核回件再定"; red=1 ;; esac
   else echo "  WARN:无步骤账,跳过"; fi
   hdr "回件"
-  pfx=$(prefix_of "$ROUND"); h=$(newest "${pfx}*handoff*.md ${pfx}*review*.md")
-  if [ -n "$h" ]; then echo "  $DIR/$h($(kb "$DIR/$h"));编排方只读〇节 + 丙栏"; else echo "  RED:找不到 ${pfx}*handoff*.md / ${pfx}*review*.md"; red=1; fi
+  h=$(find_handoff "$ROUND")
+  if [ -n "$h" ]; then
+    echo "  $DIR/$h($(kb "$DIR/$h"));编排方只读〇节 + 丙栏"
+  else
+    pfx=$(prefix_of "$ROUND"); h=$(newest "${pfx}*handoff*.md ${pfx}*review*.md")
+    if [ -n "$h" ]; then
+      echo "  WARN 没有一份 md 的首行是「# $ROUND 回件 …」,退回 glob 猜:$DIR/$h($(kb "$DIR/$h"))"
+      echo "       猜的件名两批各错过一次(P3-1 状态档 14 行行行错)—— 回件首行照模板写成「# $ROUND 回件 · <一句>」就认得准"
+    else
+      echo "  RED:既找不到首行「# $ROUND 回件」的件,也没有 ${pfx}*handoff*.md / ${pfx}*review*.md"; red=1
+    fi
+  fi
   hdr "状态档事实段"; gen_state
   if [ "$red" = 0 ]; then echo "ROUND-CLOSE OK: $ROUND"; exit 0; else echo "ROUND-CLOSE RED: $ROUND"; exit 1; fi ;;
 state)
