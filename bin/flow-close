@@ -8,7 +8,10 @@
 #       病根:收口十步里的机械步曾各占编排方一个请求(ShipLedger 收口 ≈60 min、StockSteer 20+27 min);这里一条命令、一行末行。
 #       判断步(账本 diff 审、spec 落地记录、根文档读数、commit 消息)仍归编排方 —— 它们不是机械的。
 #       ⚠ --plan 给了就会改 plan 文件(翻 REQ 状态):它必须在编排方的申报清单里,否则后面的 verify 会红「漏申报」。
-#   --ship(收口提交后,0.6.0):clear-map-debt → push dev → gh pr create → flow-pr-merge --background,一条命令四个请求;
+#   --ship(收口提交后,0.6.0):clear-map-debt → **队列落笔** → push dev → gh pr create → flow-pr-merge --background,一条命令四个请求;
+#       队列落笔(0.8.1):clear-map-debt 只写工作树,而下一步直接 push ⟹ 中间零提交,队列的清空**按定义**进不了本批自己的 PR
+#         (P2-2 那次没暴露,只因为下一批的合并比人快)。这里按 pathspec 单独落一笔,不扫工作树里的其它脏东西,
+#         也不 amend $COMMIT —— 后面 is-ancestor 那条判据仍判的是收口 commit 本身。
 #       --dir <流程目录>(0.7.0)末尾重跑 flow-usage --write:轮数账的窗延到收口末(commit / push / PR 都进账;p4e 实测旧窗只盖住编排方 46% 的请求)。
 # 病根:轮间那套一直是手拼 5–7 条命令、每批 4 次(实测 ≈28 min/批,占编排固定开销的三分之一),
 #   而手拼时 RC 隔着管道取、判据进 && 链 —— 正是 §J 那两条硬规矩最常破的地方。
@@ -30,7 +33,7 @@ flow_load_config
 MODE=close
 case "${1:-}" in --between) MODE=between; shift ;; --wrap) MODE=wrap; shift ;; --ship) MODE=ship; shift ;; esac
 
-# —— --ship:提交之后的四步。commit 必须已存在(判据在前,动作在后)——
+# —— --ship:提交之后的五步。commit 必须已存在(判据在前,动作在后)——
 if [ "$MODE" = ship ]; then
   COMMIT="${1:-}"; [ -n "$COMMIT" ] || flow_die "用法: flow-close --ship <commit> --subject <PR 标题> [--verdicts <三态表绝对>] [--dir <流程目录绝对>]"
   shift; SUBJ=""; VERD=""; SDIR=""
@@ -50,6 +53,20 @@ if [ "$MODE" = ship ]; then
   shdr "flow-clear-map-debt"
   if [ -n "$VERD" ]; then flow-clear-map-debt --verdicts "$VERD" "$COMMIT"; rc=$?; else flow-clear-map-debt "$COMMIT"; rc=$?; fi
   echo "RC=$rc"; [ "$rc" = 0 ] || sred=1
+  shdr "map-debt 队列落笔(git commit -- $FLOW_MAP_DEBT)"
+  if [ "$rc" != 0 ]; then
+    echo "  跳过:上一步 RC=$rc —— 不拿没清干净的队列落笔"
+  elif ! git ls-files --error-unmatch -- "$FLOW_MAP_DEBT_PATH" >/dev/null 2>&1; then
+    echo "  info 队列件不在本仓的跟踪集里($FLOW_MAP_DEBT_PATH)—— 没有可落的笔,跳过"
+  elif git diff --quiet HEAD -- "$FLOW_MAP_DEBT_PATH"; then
+    echo "  info 队列件与 HEAD 逐字节相同 —— 本次一条都没勾掉,无需落笔"
+  else
+    QC="$(flow_tmpdir)/flow-ship-commit.$$"
+    git commit -q -m "flow-kit 收口:清 map-debt 队列($COMMIT)" -- "$FLOW_MAP_DEBT_PATH" > "$QC" 2>&1; qrc=$?
+    cat "$QC"; rm -f "$QC"; echo "RC=$qrc"
+    if [ "$qrc" = 0 ]; then echo "  队列落笔 $(git rev-parse --short HEAD)($COMMIT 未动;PR 里两条)"
+    else echo "  RED:队列清空没进本批 PR"; sred=1; fi
+  fi
   shdr "git push origin $FLOW_DEV_BRANCH"
   git push origin "$FLOW_DEV_BRANCH" 2>&1 | tail -3; prc=$?
   cur=$(git rev-parse --short "origin/$FLOW_DEV_BRANCH" 2>/dev/null || echo none); echo "origin/$FLOW_DEV_BRANCH=$cur"

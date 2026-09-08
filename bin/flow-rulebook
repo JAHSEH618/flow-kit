@@ -5,7 +5,9 @@
 # 用法: flow-rulebook show                                              → 带行号打印规则书(退役前找行号用)
 #       flow-rulebook retire <行号> --section "<§X · 批次>" --reason "<一句>"
 #   归档件 = FLOW_LOCAL_DOC 去掉 .md 加 -archive.md(协议 §5:退役件逐字归档到工作区 .claude/flow-local-archive.md);不存在就建。
-#   新节体例:`## <section> · 退役(<日期>)` + 「退役件(原 <文件> 第 N 行,逐字)」+ 那一行 + 「退役理由:<reason>」。
+#   新节体例:`## <section> · 退役(<日期>)` + 「退役件(原 `<文件>` 第 N 行,逐字)」+ 那一行 + 「退役理由:<reason>」。
+#   文件名进反引号(0.8.1):归档件受仓侧「纯文本指针」棘轮管,裸文件名每退役一条就多一处命中 —— 退役越勤门越红。
+#   协议 §5 既要求每批 ≥1 条退役、又禁止为过线抬阈值 ⟹ 这是结构性递增的假红源,不是偶发。
 # 末行固定:`RULEBOOK OK: 第 N 行 → <归档件> §…;规则书 a → b 行`;行号越界 / 标题行 / 空行 ⟹ FATAL RC=2(标题与空行不是规矩,退它们是空转)。
 #   棘轮读数(.rulebook-lines)不在这里动:flow-close 收口那一步量,只许降。
 # 读的配置:FLOW_LOCAL_DOC_PATH
@@ -57,8 +59,8 @@ if line.lstrip().startswith('#'):
     print(f'FATAL: 第 {n} 行是标题「{line.strip()[:40]}」,不是规矩(退标题会把整段孤儿化)', file=sys.stderr); sys.exit(2)
 today = datetime.date.today().isoformat()
 block = (f'\n## {section} · 退役({today})\n\n'
-         f'**退役件(原 {os.path.basename(doc)} 第 {n} 行,逐字)**:\n\n{line}\n\n退役理由:{reason}\n')
-old = open(arch, encoding='utf-8').read() if os.path.exists(arch) else f'# {os.path.basename(doc)} 退役件归档(逐字;由 flow-rulebook 追加)\n'
+         f'**退役件(原 `{os.path.basename(doc)}` 第 {n} 行,逐字)**:\n\n{line}\n\n退役理由:{reason}\n')
+old = open(arch, encoding='utf-8').read() if os.path.exists(arch) else f'# `{os.path.basename(doc)}` 退役件归档(逐字;由 `flow-rulebook` 追加)\n'
 if not old.endswith('\n'): old += '\n'
 tmp = arch + '.flow-rulebook.new'
 open(tmp, 'w', encoding='utf-8').write(old + block); os.replace(tmp, arch)

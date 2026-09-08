@@ -9,6 +9,8 @@
 #       ③b 等 GitHub 把 mergeStateStatus 算成 CLEAN / HAS_HOOKS 再 merge(F-19:CI 绿当刻就发 merge,GitHub 异步还没算完 ⟹ 假 BLOCKED,
 #          几十秒后同一条命令一次就过;编排方为此手工重试 + 210 s 轮询)。BLOCKED / DIRTY / BEHIND / DRAFT 才是真不可合。
 # 任一步不满足 ⟹ 不合并,RC=1,末行 `PR-MERGE BLOCKED …`。合并成功末行 `PR-MERGE DONE …`。
+#   merge 那一步的输出**不许丢**(0.8.1,§J 硬规矩①「探测器输出不截断」):只报 RC 的话,
+#   「重跑就好」(GitHub 异步没算完)与「真被分支保护挡了」在读数上完全一样,而这条失败本身是间歇性的。
 # --background:整个等待+合并循环 nohup 脱管跑,日志落 FLOW_FLOW_DIR/.pr-merge-<PR>.log,当场打印日志路径并 RC=0,
 #   让编排方把等 CI 与收工核对重叠起来;结论看日志末行(grep 'PR-MERGE \(DONE\|BLOCKED\)')。
 # 读的配置:FLOW_REPO_DIR FLOW_MAIN_BRANCH FLOW_MERGE_STRATEGY FLOW_FLOW_DIR_PATH
@@ -70,7 +72,12 @@ while :; do
 done
 echo "mergeStateStatus=$ms(等待 ${t}s)"
 # FLOW_MERGE_STRATEGY 故意不加引号:它是 gh pr merge 的策略参数(--merge / --squash / --rebase),要按词拆
-if [ -n "$SUBJ" ]; then gh pr merge "$N" $FLOW_MERGE_STRATEGY --subject "$SUBJ" > /dev/null 2>&1; mrc=$?; else gh pr merge "$N" $FLOW_MERGE_STRATEGY > /dev/null 2>&1; mrc=$?; fi
-[ "$mrc" = 0 ] || { echo "PR-MERGE BLOCKED: gh pr merge RC=$mrc"; exit 1; }
+MO="$(flow_tmpdir)/flow-pr-merge-$N.$$"
+if [ -n "$SUBJ" ]; then gh pr merge "$N" $FLOW_MERGE_STRATEGY --subject "$SUBJ" > "$MO" 2>&1; mrc=$?; else gh pr merge "$N" $FLOW_MERGE_STRATEGY > "$MO" 2>&1; mrc=$?; fi
+if [ "$mrc" != 0 ]; then
+  echo "PR-MERGE BLOCKED: gh pr merge RC=$mrc —— gh 原话(全量,不截断):"
+  cat "$MO"; rm -f "$MO"; exit 1
+fi
+rm -f "$MO"
 git fetch origin --quiet
 echo "PR-MERGE DONE: PR #$N → $FLOW_MAIN_BRANCH $(git rev-parse --short "origin/$FLOW_MAIN_BRANCH")"

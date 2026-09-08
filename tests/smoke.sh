@@ -97,6 +97,8 @@ printf '%s' "$LAST_OUT" | grep -q '证据源封闭' && ok "派单块含证据源
 printf '%s' "$LAST_OUT" | grep -q '≤40000 字节' && ok "派单块含自写字节预算" || fail "派单块缺自写字节预算"
 printf '%s' "$LAST_OUT" | grep -qF '<!-- flow:gen-begin -->' && printf '%s' "$LAST_OUT" | grep -qF '<!-- flow:gen-end -->' && ok "派单块自带生成段标记" || fail "派单块缺 flow:gen 标记"
 expect_rc 2 "flow-dispatch 绝对触面 FATAL" flow-dispatch T1 --tree 快照 --db 禁用 --seq 1 /abs
+expect_rc 0 "flow-dispatch 两条触面逐条传" flow-dispatch T1 --tree 快照 --db 禁用 --seq 1 src/a.ts src/b.ts
+expect_rc 2 "flow-dispatch 同两条塌成一个实参 FATAL" flow-dispatch T1 --tree 快照 --db 禁用 --seq 1 "src/a.ts src/b.ts"
 expect_rc 0 "flow-doc-budget" flow-doc-budget "$FL"
 head -c 48000 /dev/zero | tr '\0' x > "$FL/98-fat.md"; printf '\n' >> "$FL/98-fat.md"
 expect_rc 1 "flow-doc-budget 自写字节红线(1 行 48001 字节)" flow-doc-budget "$FL"
@@ -481,6 +483,34 @@ printf '%s' "$LAST_OUT" | grep -q '逐字节相同' && ok "点名支树没改它
 expect_rc 0 "flow-merge-lane apply" flow-merge-lane apply "$BASE" "$LANE" "$FL/.lane-list.txt"
 grep -q 'lane-side' src/a.ts && ok "apply 写进主树" || fail "apply 未写主树"
 git checkout -- src/a.ts 2>/dev/null || true
+# 0.8.1:主树缺失的两种语义分开 —— 基线也没有 = 支新增件(NEW),基线里有 = 主树删件 vs 支树改件(FATAL)
+printf 'lane-new\n' > "$LANE/src/new.ts"
+printf 'src/new.ts\n' > "$FL/.lane-new.txt"
+expect_rc 0 "flow-merge-lane plan 支新增件" flow-merge-lane plan "$BASE" "$LANE" "$FL/.lane-new.txt"
+printf '%s' "$LAST_OUT" | grep -q '^NEW   src/new.ts' && ok "支新增件 → NEW,不再 FATAL" || fail "支新增件判错: $(printf '%s' "$LAST_OUT" | head -3)"
+[ -f src/new.ts ] && fail "plan 不该在主树建件" || ok "plan 对新增件也一个字节不写"
+expect_rc 0 "flow-merge-lane apply 支新增件" flow-merge-lane apply "$BASE" "$LANE" "$FL/.lane-new.txt"
+grep -q 'lane-new' src/new.ts && ok "apply 落下新增件" || fail "apply 没落新增件"
+rm -f src/new.ts
+# 判据次序:空新增件的 hb 与 ht 都是空文件的哈希 ⟹ NEW 排在空比对守卫之后就成窄误诊(只在空件上现形)
+: > "$LANE/src/enew.ts"
+printf 'src/enew.ts\n' > "$FL/.lane-enew.txt"
+expect_rc 0 "flow-merge-lane plan 空的支新增件" flow-merge-lane plan "$BASE" "$LANE" "$FL/.lane-enew.txt"
+printf '%s' "$LAST_OUT" | grep -q '^NEW   src/enew.ts' && ok "空新增件 → NEW,不被空比对守卫误诊" || fail "空新增件判错: $(printf '%s' "$LAST_OUT" | head -3)"
+# 阴性对照:同一个空文件基线里**也**有(内容也空)⟹ 守卫照旧 FATAL,证明上一条不是把守卫关了
+: > src/eold.ts; git commit -q -m lane-empty-base -- src/eold.ts >/dev/null 2>&1
+BASE2=$(git rev-parse --short HEAD)
+: > "$LANE/src/eold.ts"
+printf 'src/eold.ts\n' > "$FL/.lane-eold.txt"
+expect_rc 2 "flow-merge-lane 空文件在基线里也有 ⟹ 仍 FATAL" flow-merge-lane plan "$BASE2" "$LANE" "$FL/.lane-eold.txt"
+printf '%s' "$LAST_OUT" | grep -q '逐字节相同' && ok "空比对守卫对空文件照样活着" || fail "阴性对照失守: $(printf '%s' "$LAST_OUT" | head -3)"
+rm -f "$LANE/src/enew.ts" "$LANE/src/eold.ts"
+mv src/b.ts "$T/b.ts.bak"
+printf 'lane-side\n' >> "$LANE/src/b.ts"
+printf 'src/b.ts\n' > "$FL/.lane-del.txt"
+expect_rc 2 "flow-merge-lane 主树删件 FATAL" flow-merge-lane plan "$BASE" "$LANE" "$FL/.lane-del.txt"
+printf '%s' "$LAST_OUT" | grep -q '主树删件 vs 支树改件' && ok "基线里有而主树没有 → 点名真冲突" || fail "未点名主树删件: $(printf '%s' "$LAST_OUT" | head -3)"
+mv "$T/b.ts.bak" src/b.ts
 
 # ── 15. FLOW_INDEX_DOC(欠账索引搬出常驻文件;43 条索引 = 5.5 KB,住根文档就是每轮重付)──
 cd "$WS"
@@ -640,6 +670,7 @@ expect_rc 0 "flow-rulebook retire" flow-rulebook retire "$((hl+1))" --section "�
 [ "$(wc -l < "$WS/.claude/flow-local.md" | tr -d ' ')" = "$((n0-1))" ] && ok "规则书少一行" || fail "规则书行数未降"
 grep -q '冒烟规矩一' "$WS/.claude/flow-local.md" && fail "原行没删" || ok "原行已删"
 grep -q '^## §Z · 冒烟批 · 退役(' "$WS/.claude/flow-local-archive.md" && grep -q '^- 冒烟规矩一 带 `反引号` 与 \$(不展开)$' "$WS/.claude/flow-local-archive.md" && grep -q '^退役理由:做成了脚本$' "$WS/.claude/flow-local-archive.md" && ok "归档件:新节 + 逐字 + 理由" || fail "归档件错: $(tail -8 "$WS/.claude/flow-local-archive.md")"
+grep -q '^\*\*退役件(原 `flow-local.md` 第 [0-9][0-9]* 行,逐字)\*\*:$' "$WS/.claude/flow-local-archive.md" && ok "归档件的文件名进反引号(仓侧纯文本指针棘轮)" || fail "归档件文件名仍是裸的: $(grep 退役件 "$WS/.claude/flow-local-archive.md" | head -2)"
 expect_rc 2 "flow-rulebook retire 标题行 FATAL" flow-rulebook retire "$hl" --section x --reason y
 expect_rc 2 "flow-rulebook retire 越界 FATAL" flow-rulebook retire 9999 --section x --reason y
 expect_rc 2 "flow-rulebook retire 缺 --reason FATAL" flow-rulebook retire "$hl" --section x
@@ -767,5 +798,44 @@ i=0; while [ $i -lt 7 ]; do i=$((i+1)); : > "$DB7/.manifest-baseline-r$i.txt"; d
 expect_rc 0 "flow-doc-budget 七轮按轮数归一" flow-doc-budget "$DB7"
 printf '%s' "$LAST_OUT" | grep -q 'WARN 目录热路径合计' && fail "七轮仍按 4000 判(线在数轮数不在数膨胀)" || ok "七轮归一后不再 WARN"
 printf '%s' "$LAST_OUT" | grep -q '轮 7 · 合计线 4666' && ok "合计线印出归一读数" || fail "归一读数错: $(printf '%s' "$LAST_OUT" | grep '^—— ')"
+
+# ── 22. flow-close --ship 的队列落笔(0.8.1;三支都在 push 之前判完 ⟹ 不需要 gh、不需要网络)──
+# 病根:clear-map-debt 只写工作树,而下一步直接 push ⟹ 中间零提交,队列的清空**按定义**进不了本批自己的 PR。
+# 冒烟仓没有 remote ⟹ push 失败 → is-ancestor 失败 → sred=1 → 在 gh 被调用之前 `SHIP RED: 未开 PR` 退出,所以三支都 RC=1。
+cd "$WS"
+printf '| 标记 | 判定 | 证据 | 落点 |\n|---|---|---|---|\n| #99 | 不动 | 冒烟:队列里没有这个标记 | — |\n' > "$FL/ship-none.md"
+# 支 a:队列件不在跟踪集(.git/info/exclude 挡着,git add -A 从没收过它)
+git ls-files --error-unmatch -- "$WS/.claude/map-debt.md" >/dev/null 2>&1 && fail "支a 夹具错:队列件本该未跟踪" || ok "支a 夹具:队列件未跟踪"
+SH0=$(git rev-parse --short HEAD)
+expect_rc 1 "flow-close --ship 支a(队列件未跟踪)" flow-close --ship "$SH0" --subject 冒烟 --verdicts "$FL/ship-none.md"
+printf '%s' "$LAST_OUT" | grep -q 'info 队列件不在本仓的跟踪集里' && ok "未跟踪 ⟹ info,不落笔" || fail "支a 读数错: $(printf '%s' "$LAST_OUT" | grep -A2 '队列落笔')"
+printf '%s' "$LAST_OUT" | grep -q 'SHIP RED: 未开 PR' && ok "无 remote ⟹ push 后短路,gh 没被调用" || fail "支a 没在 push 后短路"
+# 支 b:队列件已跟踪,但本次一条都没勾 ⟹ 与 HEAD 逐字节相同,不许落空笔
+git add -f .claude/map-debt.md >/dev/null 2>&1
+git commit -q -m ship-track-queue -- .claude/map-debt.md >/dev/null 2>&1
+TQ=$(git rev-parse --short HEAD)
+git ls-files --error-unmatch -- "$WS/.claude/map-debt.md" >/dev/null 2>&1 && ok "支b 夹具:队列件已进跟踪集" || fail "支b 夹具:队列件没跟上"
+expect_rc 1 "flow-close --ship 支b(队列与 HEAD 相同)" flow-close --ship "$TQ" --subject 冒烟 --verdicts "$FL/ship-none.md"
+printf '%s' "$LAST_OUT" | grep -q 'info 队列件与 HEAD 逐字节相同' && ok "一条都没勾 ⟹ info,不落空笔" || fail "支b 读数错: $(printf '%s' "$LAST_OUT" | grep -A2 'map-debt 队列落笔')"
+[ "$(git rev-parse --short HEAD)" = "$TQ" ] && ok "支b 零新增 commit" || fail "支b 落了空笔"
+# 支 c:真勾掉一条 ⟹ 按 pathspec 落一笔,且不 amend 收口 commit
+printf 'ship\n' >> src/a.ts
+git commit -q -m ship-touch-a -- src/a.ts >/dev/null 2>&1
+SC=$(git rev-parse --short HEAD)
+SM=$(LC_ALL=C sed -n "s/^- \[ \] [^|]*| $SC | 触欠账\(.*\) 的触面 |.*/\1/p" "$WS/.claude/map-debt.md" | head -1)
+[ -n "$SM" ] && ok "支c 夹具:post-commit 给 $SC 记了未勾行(标记 $SM)" || fail "支c 夹具:队列里没有 $SC 的未勾行"
+printf '| 标记 | 判定 | 证据 | 落点 |\n|---|---|---|---|\n| %s | 不动 | 冒烟 | — |\n' "$SM" > "$FL/ship-verdicts.md"
+printf 'dirty\n' >> src/b.ts     # 工作树里的别的脏东西:落笔只许按 pathspec 收队列件
+expect_rc 1 "flow-close --ship 支c(真勾掉一条)" flow-close --ship "$SC" --subject 冒烟 --verdicts "$FL/ship-verdicts.md"
+printf '%s' "$LAST_OUT" | grep -q '队列落笔 ' && ok "勾掉后真落一笔" || fail "支c 没落笔: $(printf '%s' "$LAST_OUT" | grep -A3 'map-debt 队列落笔')"
+[ "$(git rev-parse --short 'HEAD~1')" = "$SC" ] && ok "落笔是 $SC 之上的新 commit(没 amend 收口 commit)" || fail "落笔 amend 了收口 commit"
+[ "$(git -c core.quotepath=false diff-tree --no-commit-id --name-only -r HEAD)" = ".claude/map-debt.md" ] && ok "落笔只收队列件(pathspec 没扫脏工作树)" || fail "落笔扫进了别的件: $(git diff-tree --no-commit-id --name-only -r HEAD | tr '\n' ' ')"
+git diff --quiet -- src/b.ts && fail "落笔把 src/b.ts 的脏改动也带走了" || ok "src/b.ts 的脏改动还留在工作树里"
+# 非空转对照:同一条命令重跑,读数必须从「队列落笔」退回「逐字节相同」,且零新增 commit
+HC=$(git rev-parse --short HEAD)
+expect_rc 1 "flow-close --ship 支c 重跑(非空转对照)" flow-close --ship "$SC" --subject 冒烟 --verdicts "$FL/ship-verdicts.md"
+printf '%s' "$LAST_OUT" | grep -q 'info 队列件与 HEAD 逐字节相同' && ok "重跑退回「逐字节相同」—— 落笔那支不是恒真分支" || fail "重跑读数没变(落笔支恒真)"
+[ "$(git rev-parse --short HEAD)" = "$HC" ] && ok "重跑零新增 commit" || fail "重跑又落了一笔"
+git checkout -- src/b.ts
 
 [ "$red" = 0 ] && { echo "SMOKE OK"; exit 0; } || { echo "SMOKE RED"; exit 1; }
