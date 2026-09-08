@@ -12,7 +12,9 @@
 #     自写字节 > 红线的 90% ⟹ WARN(近线预警:实测两份 ④ 回件卡在 99%,作者是在压内容,不是在挪全量)
 #     (字节线是主判据:token 按字节计,一份 112 KB 的复验件靠长行躲过了 400 行线;行数线只挡「行多」这一种胀法)
 #   · 单件**总字节** > FLOW_DOC_BUDGET_BYTES ⟹ WARN(读取面还是它:一份派单件五个 agent 各读一遍)。总量线不 RED —— 生成段不是作者写的。
-#   · 目录热路径合计 > FLOW_DOC_BUDGET_DIR 行 ⟹ WARN(件数问题多半是轮次问题,先看 §B-severity)
+#   · 目录热路径合计 > FLOW_DOC_BUDGET_DIR 行 ⟹ WARN。**线按轮数归一**(0.8.0):轮数 > 6 时线 = DIR × 轮数 / 6,
+#     轮数取本目录 .manifest-baseline-<轮名>.txt 的份数。原线是按标准单支六轮定的,而两支批次天然是它的两倍多 ——
+#     实测 P3-1(14 轮)合计 5022 > 4000 恒 WARN 而件件绿,那条线在数轮数不在数膨胀。件数问题仍多半是轮次问题,先看 §B-severity。
 #   · `.evidence/` 子目录 = 旁证区,不设限不计入 —— 命令全量输出落这里,移交件贴摘录+路径。
 #     (与 §J 硬规矩 1「探测器输出不许截断」是配套:全量都在,判读看旁证件,热路径不背它。)
 # 标记不成对(begin 没有 end,或 end 多出来)⟹ WARN 并把 begin 之后整段算生成段:有人编辑进了生成块,要重跑 flow-dispatch。
@@ -70,10 +72,18 @@ for d in "$@"; do
     fi
   done
   [ "$n" -gt 0 ] || { echo "FATAL: $d 里零个 md —— 「没超预算」与「没扫到」不许同型(§J0)" >&2; exit 2; }
-  if [ "$total" -gt "$FLOW_DOC_BUDGET_DIR" ]; then
-    echo "WARN 目录热路径合计 $total 行 > $FLOW_DOC_BUDGET_DIR:$d(件数多半是轮次问题 —— 先看 §B-severity 分级有没有执行)"
+  # 目录合计按**轮数**归一(0.8.0):FLOW_DOC_BUDGET_DIR 是按标准单支六轮定的,而一个两支批次天然是它的两倍多。
+  # 实测 ShipLedger P3-1(两支 × 七轮 = 14 轮)合计 5022 行 > 4000 恒 WARN,单件却件件绿 —— 这条线在数轮数,不是在数膨胀。
+  # 轮数取本目录的 .manifest-baseline-<轮名>.txt 份数(与 flow-round 事实段同源);≤6 轮按原线,不放宽。
+  rounds=$(ls "$d"/.manifest-baseline-*.txt 2>/dev/null | LC_ALL=C grep -c .)
+  cap=$FLOW_DOC_BUDGET_DIR; norm=""
+  if [ "$rounds" -gt 6 ]; then
+    cap=$(( FLOW_DOC_BUDGET_DIR * rounds / 6 )); norm="(按 $rounds 轮归一:$FLOW_DOC_BUDGET_DIR × $rounds / 6)"
   fi
-  echo "—— $d:$n 件 / 自写 $stotal 行 $sbytes_sum 字节 / 总 $total 行 $tbytes 字节(贴 $n 件 / 判 $n 件;.evidence/ 旁证区不计)"
+  if [ "$total" -gt "$cap" ]; then
+    echo "WARN 目录热路径合计 $total 行 > $cap$norm:$d(件数多半是轮次问题 —— 先看 §B-severity 分级有没有执行)"
+  fi
+  echo "—— $d:$n 件 / 自写 $stotal 行 $sbytes_sum 字节 / 总 $total 行 $tbytes 字节 / 轮 $rounds · 合计线 $cap$norm(贴 $n 件 / 判 $n 件;.evidence/ 旁证区不计)"
 done
 
 for rb in "$FLOW_LOCAL_DOC_PATH" "$FLOW_ROOT_DOC_PATH"; do

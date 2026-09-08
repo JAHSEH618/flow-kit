@@ -12,7 +12,7 @@
 #   section:任务节 = `## <任务号>` 起到下一个 `## ` 前
 #   table  :任务 = **首格恰等于任务号**的表行(可多行)。不用 flow-receipts 轴1 的全行 index():
 #           ShipLedger 的 `spec/P3.md` 里 P3.D 那行正文点名 P3.B,全行匹配会把别人的行算进本任务的节。
-# 测试文件 = git 看得见的 *.test.ts(x) / *.spec.ts(x),含未跟踪(测试先行:新测试在提交前就该算数)。
+# 测试文件 = git 看得见的 FLOW_TEST_GLOBS 命中件,含未跟踪(测试先行:新测试在提交前就该算数)。
 # 判定:
 #   · open / done 的 REQ 零测试 ⟹ RED(RC=1)
 #   · deferred 的 REQ 不计(它已转成欠账,由账本管)
@@ -25,7 +25,7 @@
 #     protocol §5 不许这么过关,所以要么工具认这个体例,要么退役这条判据。
 #   · 零个测试文件 ⟹ FATAL(RC=2)
 # 末行固定:`TRACE OK: …` / `TRACE RED: …` / `TRACE N/A: …`。判据纪律:grep 的 RC 与命令同层,不进 && 链;计数用 LC_ALL=C。
-# 读的配置:FLOW_REPO_DIR FLOW_SPEC_DIRS FLOW_RECEIPT_MODE
+# 读的配置:FLOW_REPO_DIR FLOW_SPEC_DIRS FLOW_RECEIPT_MODE FLOW_TEST_GLOBS
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
 flow_load_config
@@ -83,7 +83,11 @@ if [ "$nreq" -eq 0 ]; then
 fi
 
 # 测试文件:已跟踪 + 未跟踪(测试先行的新文件),遵守 .gitignore(dist / node_modules 天然不进)
-git -c core.quotepath=false ls-files --cached --others --exclude-standard -- '*.test.ts' '*.test.tsx' '*.spec.ts' '*.spec.tsx' > "$tmp/tests"
+# 测试文件模式单源 config(flow-micro 判「性质 = 测试」用同一个变量);位置参数在这之前已全部取进变量
+set --
+for g in $FLOW_TEST_GLOBS; do set -- "$@" "$g"; done
+[ $# -gt 0 ] || flow_die "FLOW_TEST_GLOBS 为空 —— 零模式扫出零测试,会把「没扫到」判成「零覆盖」"
+git -c core.quotepath=false ls-files --cached --others --exclude-standard -- "$@" > "$tmp/tests"
 rc=$?
 [ "$rc" -eq 0 ] || flow_die "枚举测试文件失败(git ls-files RC=$rc),拒绝给结论"
 [ -s "$tmp/tests" ] || flow_die "仓里零个测试文件 —— 「全覆盖」与「没扫到」不许同型"

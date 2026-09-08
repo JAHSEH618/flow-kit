@@ -62,7 +62,9 @@ FLOW_FOLD_MAX=6                        # 不阻塞条 ≤ 此数且全在③写�
 FLOW_REQ_CAP=8                         # 任务节 open REQ 条数上限(超过 = 拆任务或 flow-dispatch --cap-ok)
 FLOW_TURN_CAP=120                      # 单会话请求数上限,flow-usage 只 WARN(REQ 条数不是长度的代理量:6 条 REQ 长出过 189 个请求);续轮单算
 FLOW_DISPATCH_EXCERPT_BYTES=12000      # 派单里 plan 任务节选封顶字节;超过只印 outline + REQ 行 + 节尾;②③④ 不印正文
-FLOW_MICRO_FIX_LINES=16                # 微改通道:④ 必闭里非生产(测试 / 探针 / 注释)条目合计改动估计 ≤ 此行数且全在③写权限面内 ⟹ 编排方落笔 + 复跑 ④ 预写的复现命令,不起 ③改二
+FLOW_MICRO_FIX_LINES=16                # 微改通道:④ 必闭里非生产条的合计**新增行**上限。0.8.0 起行数由 flow-micro 从审方附的 patch numstat 量,不由审方估
+                                       # (实测估 16 行 / 实做 55 行);没附 patch 的条目一律不算微改,落回 ③改二
+FLOW_TEST_GLOBS='*.test.ts *.test.tsx *.spec.ts *.spec.tsx'   # 测试文件模式;flow-trace 当 pathspec、flow-micro 判「性质 = 测试」。别的栈在这里改(*_test.go / test_*.py / *Test.java)
 FLOW_STALL_SEC=300                     # flow-usage 卡顿判据:单次工具调用 ≥ 此秒数单列 WARN
 FLOW_RECEIPT_MODE="section"            # plan 体例:section = 任务是 `## <任务号>` 小节;table = 任务是表行(flow-receipts 按它枚举)
 #FLOW_INDEX_DOC="docs/debts-index.md"  # 欠账索引块的落点;不设 = 跟 FLOW_ROOT_DOC。开放条目多时搬出常驻文件,根文档留一行指针

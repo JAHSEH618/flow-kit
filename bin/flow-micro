@@ -1,0 +1,177 @@
+#!/bin/sh
+# flow-micro —— 微改通道的**换量法**(0.8.0):行数不由审方估,由 patch 量。
+# 病根:0.7.0 的门槛是「④ 自报 改动估计 N 行 · 性质」,而**估计不是量**。
+#   P3-1 实测:裁决-700 审方估 16 行、③改二 实做 55 行(偏 3.4×),行数却是这条通道的唯一门槛;
+#   两支都因为「合计破线」躲过了这一刀(B 19 > 16 · C 21 > 16)—— 躲过是巧合,不是机制。
+#   同一批里估得准的,全是丙栏贴了可照抄代码块的条目(C 支四条 10 个代码块,估 11 行 / 实做约 12 行)。
+#   ⟹ **写得出 patch 就估得准,写不出就估不准**。所以把「附 patch」做成门:没 patch 的条目一律不算微改,自动落回 ③改二。
+#   这不是给审方加活:真要写 55 行测试的审方本来就不会附 patch,那条本来就该走 ③改二。
+# 判定(全部从 patch 与 config 机械取,一条不靠自陈):
+#   · `git apply --check` 失败 ⟹ FATAL RC=2 —— patch 落不到这棵树上(写在别的树 / 别的基线 / 体例错),不许猜着改。
+#   · 行数 = `git apply --numstat` 的**新增行**求和,**不含删除行**。删是安全方向(protocol §4「改法只删不写」),加才是风险;
+#     按增删合计判会让通道在所有实测批次上一次都不开(p4e 那批估 10–13 行,按合计 ≈20 > 16 恒超)。
+#   · 性质:命中 FLOW_TEST_GLOBS 或 `*.md` ⟹ 非生产;否则看 patch 的改动行 —— 全是注释行(含空行)⟹ 非生产;
+#     其余一律「生产」。判不出按生产,二进制 diff 按生产(fail-closed)。
+#     (为什么要看改动行:P3-1 裁决-675 是 `data-gap-markers.ts` 里 1 行注释 —— 只按路径判会把它误判成生产,通道对真注释条关死。)
+#   · 面内:每个路径必须在 <写权限面清单> 里(精确或目录前缀)。面外 ⟹ RED,由编排方以裁决显式扩面(P3-1 裁决-673 就是这一档)。
+#   · 有一条「生产」⟹ RED:整批走 ③改二。**这不是「改错了」,是这条通道不收生产改动。**
+#   · 非生产条**合计新增** > FLOW_MICRO_FIX_LINES ⟹ RED。
+# --apply 之前先对冻结件核树:patch 在哪棵树上量的,就必须落在哪棵树上(§J 硬规矩 4:比对前证明两侧同源)。
+# 用法:
+#   flow-micro <patch(绝对)>... --face <写权限面清单(绝对)> [--freeze <冻结件(绝对)>] [--apply]
+#     patch 由 ④ 落在 <流程目录>/.evidence/<轮名>-micro-<裁决号>.patch;写权限面清单 = flow-dispatch --dir 落的 .face-<轮名>.txt
+#     多份 patch 一起给:门判的是**合计**,而合计只有一起判才算数。
+# 末行固定:`MICRO OK: …` / `MICRO RED: …`;参数错或 patch 落不下 ⟹ FATAL RC=2。
+# 读的配置:FLOW_REPO_DIR FLOW_MICRO_FIX_LINES FLOW_TEST_GLOBS
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_load_config
+
+usage() { echo "用法: flow-micro <patch(绝对)>... --face <写权限面清单(绝对)> [--freeze <冻结件(绝对)>] [--apply]" >&2; exit 2; }
+
+FACE=""; FREEZE=""; APPLY=0
+TMP=$(mktemp -d "$(flow_tmpdir)/flow-micro.XXXXXX") || exit 2
+trap 'rm -rf "$TMP"' EXIT
+: > "$TMP/patches"
+while [ $# -gt 0 ]; do
+  case "$1" in --face|--freeze) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
+  case "$1" in
+    --face)   FACE="$2"; shift 2 ;;
+    --freeze) FREEZE="$2"; shift 2 ;;
+    --apply)  APPLY=1; shift ;;
+    -*)       flow_die "未知参数 $1" ;;
+    *)        case "$1" in /*) ;; *) flow_die "patch 须绝对路径(文件参数一律绝对): $1" ;; esac
+              [ -f "$1" ] || flow_die "patch 不存在: $1"
+              printf '%s\n' "$1" >> "$TMP/patches"; shift ;;
+  esac
+done
+[ -s "$TMP/patches" ] || usage
+[ -n "$FACE" ] || flow_die "必须给 --face:通道的第二条门槛是「全在③写权限面内」,面从 flow-dispatch --dir 落的 .face-<轮名>.txt 来,不由本命令猜"
+case "$FACE" in /*) ;; *) flow_die "--face 须绝对路径: $FACE" ;; esac
+[ -f "$FACE" ] || flow_die "写权限面清单不存在: $FACE(③改那轮的派单没带 --dir?没有面就没有通道)"
+if [ -n "$FREEZE" ]; then
+  case "$FREEZE" in /*) ;; *) flow_die "--freeze 须绝对路径: $FREEZE" ;; esac
+  [ -f "$FREEZE" ] || flow_die "冻结件不存在: $FREEZE"
+fi
+[ "$APPLY" = 0 ] || [ -n "$FREEZE" ] || flow_die "--apply 必须同给 --freeze:patch 在哪棵树上量的就必须落在哪棵树上(§J 硬规矩 4)"
+
+cd "$FLOW_REPO_DIR" || exit 2
+set --
+while IFS= read -r pf; do [ -n "$pf" ] && set -- "$@" "$pf"; done < "$TMP/patches"
+NP=$#
+
+red=0; step=0
+hdr() { step=$((step+1)); echo "== $step. $1 =="; }
+
+# —— 1. 落得下吗(判据在前,动作在后)——
+hdr "git apply --check($NP 份 patch 作一串核;落不下就不是本树的 patch)"
+git -c core.quotepath=false apply --check -- "$@" > "$TMP/check" 2>&1; rc=$?
+[ -s "$TMP/check" ] && sed 's/^/  /' "$TMP/check"
+echo "RC=$rc"
+if [ "$rc" != 0 ]; then
+  echo "FATAL: patch 落不到这棵树上 —— 写在别的树 / 别的基线,或体例错。不许猜着改:让审方在它量读数的那棵树上重出一份" >&2
+  exit 2
+fi
+
+# —— 2. 量(不估)——
+hdr "git apply --numstat(逐文件新增 / 删除;行数的唯一来源)"
+git -c core.quotepath=false apply --numstat -- "$@" > "$TMP/numstat" 2>&1; rc=$?
+[ "$rc" = 0 ] || { sed 's/^/  /' "$TMP/numstat"; echo "FATAL: git apply --numstat RC=$rc" >&2; exit 2; }
+[ -s "$TMP/numstat" ] || { echo "FATAL: numstat 零行 —— 空 patch 不是「零改动的微改」,是没东西可判(§J0)" >&2; exit 2; }
+# 八进制转义的路径(CJK 文件名遇上没关 quotepath 的生成方)会让面内比对静默失配 —— 当场判死,给修法
+if LC_ALL=C grep -q '	"' "$TMP/numstat"; then
+  echo "FATAL: numstat 里有引号包住的转义路径(CJK 路径 + 生成方没关 quotepath)—— 面内比对会静默失配;" >&2
+  echo "  让审方用 \`git -c core.quotepath=false diff …\` 重出 patch" >&2
+  exit 2
+fi
+# 同一路径被多份 patch 各改一段 ⟹ 按路径求和(门判的是合计)
+LC_ALL=C awk -F'\t' 'NF>=3 {
+    k=$3; if(!(k in seen)){seen[k]=1; ord[++n]=k}
+    if ($1=="-" || $2=="-") bin[k]=1; else { a[k]+=$1; d[k]+=$2 } }
+  END { for(i=1;i<=n;i++){ k=ord[i]
+    if (k in bin) printf "-\t-\t%s\n", k; else printf "%d\t%d\t%s\n", a[k], d[k], k } }' "$TMP/numstat" > "$TMP/sum"
+sed 's/^/  /' "$TMP/sum"
+
+# —— 3. 性质:patch 的改动行里有没有非注释行(路径判不出时的第二判据)——
+LC_ALL=C awk '
+  function iscomment(f, s,   t) {
+    t = s; sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t)
+    if (t == "") return 1
+    if (f ~ /\.(ts|tsx|js|jsx|mjs|cjs|css|scss|java|go|rs|c|h|cpp)$/) return (t ~ /^(\/\/|\/\*|\*)/)
+    if (f ~ /\.(sh|py|rb|yml|yaml|toml|ini|conf)$/ || f ~ /(^|\/)(Makefile|Dockerfile)$/) return (t ~ /^#/)
+    if (f ~ /\.md$/) return 1
+    return 0
+  }
+  /^--- / { a=$2; sub(/^a\//,"",a); next }
+  /^\+\+\+ / { b=$2; sub(/^b\//,"",b); cur = (b=="/dev/null" ? a : b); if(!(cur in seen)){seen[cur]=1; ord[++n]=cur; nc[cur]=0} next }
+  /^[+-]/ { if (cur=="") next; if (!iscomment(cur, substr($0,2))) nc[cur]++ ; next }
+  END { for(i=1;i<=n;i++) printf "%s\t%d\n", ord[i], nc[ord[i]] }' "$@" > "$TMP/nc"
+
+is_test() { for g in $FLOW_TEST_GLOBS; do case "$1" in $g) return 0 ;; esac; done; return 1; }
+in_face() {
+  while IFS= read -r e; do
+    case "$e" in ''|\#*) continue ;; esac
+    e=${e%/}
+    [ "$1" = "$e" ] && return 0
+    case "$1" in "$e"/*) return 0 ;; esac
+  done < "$FACE"
+  return 1
+}
+nc_of() { LC_ALL=C awk -F'\t' -v p="$1" '$1==p{v=$2} END{print v+0}' "$TMP/nc"; }
+
+hdr "逐文件判(性质 · 面内;上限 $FLOW_MICRO_FIX_LINES 行新增,面 $(basename "$FACE"))"
+addsum=0; nprod=0; nout=0; nfile=0
+TAB=$(printf '\t')
+while IFS="$TAB" read -r a d p; do
+  [ -n "$p" ] || continue
+  nfile=$((nfile+1))
+  if [ "$a" = "-" ]; then kind=生产; why="二进制 diff,判不出性质"
+  elif is_test "$p"; then kind=测试; why=""
+  else
+    case "$p" in
+      *.md) kind=注释; why="" ;;
+      *) if [ "$(nc_of "$p")" -eq 0 ]; then kind=注释; why="patch 里零条非注释改动行"
+         else kind=生产; why="patch 里有 $(nc_of "$p") 条非注释改动行" ; fi ;;
+    esac
+  fi
+  if in_face "$p"; then face=面内; else face=面外; nout=$((nout+1)); fi
+  [ "$kind" = 生产 ] && nprod=$((nprod+1))
+  [ "$a" = "-" ] || addsum=$((addsum + a))
+  if [ "$kind" = 生产 ] || [ "$face" = 面外 ]; then
+    printf 'RED  %s  +%s -%s  %s · %s%s\n' "$p" "$a" "$d" "$kind" "$face" "${why:+($why)}"
+    red=1
+  else
+    printf 'ok   %s  +%s -%s  %s · %s%s\n' "$p" "$a" "$d" "$kind" "$face" "${why:+($why)}"
+  fi
+done < "$TMP/sum"
+
+if [ "$addsum" -gt "$FLOW_MICRO_FIX_LINES" ]; then
+  echo "RED  合计新增 $addsum 行 > 上限 $FLOW_MICRO_FIX_LINES(通道判的是合计,不是单条)"
+  red=1
+fi
+if [ "$red" != 0 ]; then
+  echo "MICRO RED: 生产 $nprod 条 · 面外 $nout 条 · 合计新增 $addsum 行 / 上限 $FLOW_MICRO_FIX_LINES —— 不走微改通道,整批起 ③改二(面外那几条另需编排方以裁决显式扩面)"
+  exit 1
+fi
+
+# —— 4. 落笔(判据全绿之后)——
+if [ "$APPLY" = 1 ]; then
+  hdr "冻结核对 $(basename "$FREEZE")(patch 在哪棵树上量的就落在哪棵树上)"
+  flow_sha256_check "$FREEZE" > "$TMP/fz" 2>/dev/null
+  fok=$(LC_ALL=C grep -c ': OK$' "$TMP/fz"); fbad=$(LC_ALL=C grep -vc ': OK$' "$TMP/fz")
+  echo "OK=$fok FAILED=$fbad"
+  [ $((fok+fbad)) -gt 0 ] || { echo "MICRO RED: 冻结件零条结果 —— 空集不算绿(§J0)"; exit 1; }
+  if [ "$fbad" != 0 ]; then
+    LC_ALL=C grep -v ': OK$' "$TMP/fz" | sed 's/^/  /'
+    echo "MICRO RED: 树已不是 patch 量的那棵($fbad 行非 OK)—— 先弄清谁动了树,别把 patch 落在别的态上"; exit 1
+  fi
+  hdr "git apply(落笔;占裁决号归编排方)"
+  git -c core.quotepath=false apply -- "$@" > "$TMP/apply" 2>&1; rc=$?
+  [ -s "$TMP/apply" ] && sed 's/^/  /' "$TMP/apply"
+  echo "RC=$rc"
+  [ "$rc" = 0 ] || { echo "MICRO RED: git apply RC=$rc(--check 过了却落不下 —— 树在这两步之间变了)"; exit 1; }
+  echo "MICRO OK: 已落笔 · 新增 $addsum 行 / 上限 $FLOW_MICRO_FIX_LINES · 文件 $nfile(全非生产 · 全面内)—— 现在复跑④写下的复现命令对期望读数,读数不对就 git checkout 回去"
+  exit 0
+fi
+echo "MICRO OK: 新增 $addsum 行 / 上限 $FLOW_MICRO_FIX_LINES · 文件 $nfile(全非生产 · 全面内)—— 够格走微改通道;--apply 落笔(须同给 --freeze),然后复跑④写下的复现命令对期望读数"
+exit 0

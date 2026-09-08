@@ -610,8 +610,10 @@ grep -q 'flow-gates' "$FR/.steps-②A.md" && fail "②A(禁用)步骤账含门�
 expect_rc 0 "flow-dispatch ③改 --db 独占" flow-dispatch T10 --tree 活树-独占 --db 独占 --seq 1 --round ③改 --dir "$FR" --plan "$WS/specs/plan-done.md" src/a.ts
 printf '%s' "$LAST_OUT" | grep -q "flow-gates --reset > $FR/.evidence/③改-gates.txt" && ok "--db 独占:收工段连实参给门整跑" || fail "--db 独占 收工段缺门"
 grep -q '+ flow-gates --reset' "$FR/.steps-③改.md" && ok "③改 步骤账含门整跑" || fail "③改 步骤账缺门"
-printf '%s' "$LAST_OUT" | grep -q '性质 测试|探针|注释|生产' && ok "待填段:微改通道按性质 + 合计" || fail "待填段微改通道文案未更新"
-rm -f "$WS/specs/plan-done.md" "$FR/.steps-③改.md" "$FR/.steps-④B.md"
+printf '%s' "$LAST_OUT" | grep -q 'flow-micro <patch>... --face' && ok "待填段:微改通道走换量法(行数由 patch 量)" || fail "待填段微改通道文案未更新: $(printf '%s' "$LAST_OUT" | grep -c 改动估计)"
+printf '%s' "$LAST_OUT" | grep -q '改动估计 N 行' && fail "待填段还留着 0.7.0 的自报估计" || ok "待填段不再要自报估计"
+printf '%s' "$LAST_OUT" | grep -q '没附 patch 的条目一律不算微改' && ok "待填段写明没 patch 就落回 ③改二" || fail "待填段缺 patch 门槛"
+rm -f "$WS/specs/plan-done.md" "$FR/.steps-③改.md" "$FR/.steps-④B.md" "$FR/.face-③改.txt" "$FR/.face-④B.txt"
 # flow-ledger add --body-file:多行正文一次落,整块带 > 前缀也认,反引号与 $() 逐字
 printf '> #7 首行正文\n>   第二行\n>   第三行 带 `反引号` 与 $(不展开)\n' > "$T/body7.md"
 expect_rc 0 "flow-ledger add --body-file(多行、带 > 前缀)" flow-ledger add --owner T7 --due T7 --touches src/b.ts --title 多行正文 --mark '#7' --body-file "$T/body7.md"
@@ -709,5 +711,61 @@ grep -q '<!-- flow:gen-begin -->' "$FL2/.usage.md" && grep -q '^## 手填' "$FL2
 printf '| 本批退役规矩数 | 1 | 冒烟 |\n' >> "$FL2/.usage.md"
 expect_rc 0 "flow-usage --write 重跑" flow-usage "$FL2" --write
 grep -q '^| 本批退役规矩数 | 1 | 冒烟 |$' "$FL2/.usage.md" && [ "$(grep -c 'flow:gen-begin' "$FL2/.usage.md")" = 1 ] && ok "重跑保留手填行、生成段只有一份" || fail "重跑丢了手填行或标记重复"
+
+# ── 20. flow-micro(微改通道换量法:行数由 patch 量,不由审方估)──
+cd "$WS"
+git checkout -- . >/dev/null 2>&1 || true
+printf 'export const x = 1;\n' > src/x.test.ts
+git add -A >/dev/null 2>&1; git commit -qm micro-base >/dev/null 2>&1
+MC="$T/micro"; mkdir -p "$MC"
+printf '# 写权限面\nsrc\n' > "$FL/.face-③改.txt"
+mkpatch() {   # mkpatch <出件> <文件> <追加内容>;出完就还原,树保持干净
+  printf '%s\n' "$3" >> "$2"; git -c core.quotepath=false diff > "$1"; git checkout -- "$2"
+}
+mkpatch "$MC/ok.patch"      src/x.test.ts 'export const y = 2;'
+mkpatch "$MC/prod.patch"    src/a.ts      'export const prod = 3;'
+mkpatch "$MC/comment.patch" src/b.ts      '// 只加一行注释'
+mkpatch "$MC/out.patch"     CLAUDE.md     '面外一行'
+i=0; while [ $i -lt 20 ]; do i=$((i+1)); printf 'export const n%d = %d;\n' "$i" "$i" >> src/x.test.ts; done
+git -c core.quotepath=false diff > "$MC/big.patch"; git checkout -- src/x.test.ts
+printf 'diff --git a/src/nope.ts b/src/nope.ts\n--- a/src/nope.ts\n+++ b/src/nope.ts\n@@ -1 +1 @@\n-x\n+y\n' > "$MC/bad.patch"
+
+expect_rc 0 "flow-micro 测试文件 · 面内 · 1 行 ⟹ MICRO OK" flow-micro "$MC/ok.patch" --face "$FL/.face-③改.txt"
+printf '%s' "$LAST_OUT" | grep -q '^MICRO OK: 新增 1 行 / 上限 16' && ok "行数从 numstat 来,不从自陈来" || fail "MICRO OK 读数错: $(printf '%s' "$LAST_OUT" | tail -1)"
+expect_rc 0 "flow-micro .ts 里只加注释行 ⟹ 非生产(只按路径判会误杀真注释条)" flow-micro "$MC/comment.patch" --face "$FL/.face-③改.txt"
+printf '%s' "$LAST_OUT" | grep -q 'src/b.ts.*注释 · 面内' && ok "改动行核性质:零非注释行 ⟹ 注释" || fail "性质判错: $(printf '%s' "$LAST_OUT" | grep 'src/b.ts')"
+expect_rc 1 "flow-micro 生产文件 ⟹ RED(整批走 ③改二)" flow-micro "$MC/prod.patch" --face "$FL/.face-③改.txt"
+printf '%s' "$LAST_OUT" | grep -q '生产 · 面内(patch 里有 1 条非注释改动行)' && ok "点名非注释行数" || fail "生产判据未点名: $(printf '%s' "$LAST_OUT" | grep 'src/a.ts')"
+printf '%s' "$LAST_OUT" | grep -q '整批起 ③改二' && ok "RED 说清是「通道不收」不是「改错了」" || fail "RED 措辞缺去向"
+expect_rc 1 "flow-micro 面外 ⟹ RED(注释也不行)" flow-micro "$MC/out.patch" --face "$FL/.face-③改.txt"
+printf '%s' "$LAST_OUT" | grep -q 'CLAUDE.md.*注释 · 面外' && ok "面外与性质分开判" || fail "面外未点名: $(printf '%s' "$LAST_OUT" | grep CLAUDE)"
+expect_rc 1 "flow-micro 合计新增 20 > 上限 16 ⟹ RED" flow-micro "$MC/big.patch" --face "$FL/.face-③改.txt"
+printf '%s' "$LAST_OUT" | grep -q '合计新增 20 行 > 上限 16' && ok "判的是合计不是单条" || fail "合计判错: $(printf '%s' "$LAST_OUT" | grep 合计)"
+expect_rc 2 "flow-micro patch 落不下 ⟹ FATAL(不许猜着改)" flow-micro "$MC/bad.patch" --face "$FL/.face-③改.txt"
+expect_rc 2 "flow-micro --apply 不给 --freeze ⟹ FATAL" flow-micro "$MC/ok.patch" --face "$FL/.face-③改.txt" --apply
+expect_rc 2 "flow-micro 不给 --face ⟹ FATAL" flow-micro "$MC/ok.patch"
+# --apply:先对冻结件核树(patch 在哪棵树上量的就落在哪棵树上)
+printf 'dirty\n' >> src/b.ts
+expect_rc 0 "flow-freeze(微改前的交付态)" flow-freeze "$FL/.after-micro-hashes.txt"
+printf 'tamper\n' >> src/b.ts
+expect_rc 1 "flow-micro --apply 树已不是量它的那棵 ⟹ RED,不落笔" flow-micro "$MC/ok.patch" --face "$FL/.face-③改.txt" --freeze "$FL/.after-micro-hashes.txt" --apply
+grep -q 'export const y = 2;' src/x.test.ts && fail "冻结不符却落了笔" || ok "冻结不符时零落笔"
+git checkout -- src/b.ts; printf 'dirty\n' >> src/b.ts
+expect_rc 0 "flow-micro --apply 落笔" flow-micro "$MC/ok.patch" --face "$FL/.face-③改.txt" --freeze "$FL/.after-micro-hashes.txt" --apply
+grep -q 'export const y = 2;' src/x.test.ts && ok "patch 真落到了树上" || fail "patch 没落"
+git checkout -- src/x.test.ts src/b.ts
+# flow-dispatch --dir 落写权限面清单(与 flow-micro --face 两侧同源)
+expect_rc 0 "flow-dispatch --dir 落 .face-<轮名>.txt" flow-dispatch T1 --tree 活树-独占 --db 独占 --seq 1 --round ③改 --dir "$FR" src/a.ts src/b.ts
+grep -qx 'src/a.ts' "$FR/.face-③改.txt" && grep -qx 'src/b.ts' "$FR/.face-③改.txt" && ok "面清单 = 派单触面,一行一条" || fail "面清单错: $(cat "$FR/.face-③改.txt")"
+
+# ── 21. flow-doc-budget 目录合计按轮数归一 ──
+DB7="$T/dirnorm"; mkdir -p "$DB7"
+{ echo "# 冒烟件"; echo "budget-ok: 冒烟造的长件,单件线不是本例要判的"; awk 'BEGIN{for(i=1;i<=4100;i++) print "行 " i}'; } > "$DB7/01-dispatch.md"
+expect_rc 0 "flow-doc-budget 六轮以内仍按原线" flow-doc-budget "$DB7"
+printf '%s' "$LAST_OUT" | grep -q 'WARN 目录热路径合计' && ok "0 轮 → 线仍是 4000,合计超线照 WARN" || fail "未按原线判: $(printf '%s' "$LAST_OUT" | tail -2)"
+i=0; while [ $i -lt 7 ]; do i=$((i+1)); : > "$DB7/.manifest-baseline-r$i.txt"; done
+expect_rc 0 "flow-doc-budget 七轮按轮数归一" flow-doc-budget "$DB7"
+printf '%s' "$LAST_OUT" | grep -q 'WARN 目录热路径合计' && fail "七轮仍按 4000 判(线在数轮数不在数膨胀)" || ok "七轮归一后不再 WARN"
+printf '%s' "$LAST_OUT" | grep -q '轮 7 · 合计线 4666' && ok "合计线印出归一读数" || fail "归一读数错: $(printf '%s' "$LAST_OUT" | grep '^—— ')"
 
 [ "$red" = 0 ] && { echo "SMOKE OK"; exit 0; } || { echo "SMOKE RED"; exit 1; }

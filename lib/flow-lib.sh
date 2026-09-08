@@ -78,10 +78,13 @@ flow_load_config() {
   FLOW_TURN_CAP=120                     # 单会话请求数上限(flow-usage 只 WARN):携带 ∝ 轮数 × 上下文,上下文又随轮数长 ⟹ 二次;按会话判,续轮单算
   FLOW_DISPATCH_EXCERPT_BYTES=12000     # 派单里 plan 任务节选的字节封顶:超过只印 outline + REQ 行 + 节尾(本刀落位段),其余给「文件 + 行号」指针
                                         # 实测一节 42 KB 横跨三刀,八个 agent 各读一遍 ≈ 该批携带 10%;②③④ 一律不印正文
-  FLOW_MICRO_FIX_LINES=16               # 微改通道(0.7.0 改判合计):④ 两轴必闭里性质非生产(测试 / 探针 / 注释)的条目**合计**改动估计 ≤ 此行数、且全在③写权限面内
-                                        # ⟹ 编排方落笔 + 复跑 ④ 预先写下的复现命令对读数,不起 ③改二。p4e 实测 4 条 10–13 行走了 ③改二 + ④B定点 46 min
+  FLOW_MICRO_FIX_LINES=16               # 微改通道:④ 必闭里非生产条的**合计新增行**上限。0.8.0 改判 —— 行数由 `flow-micro` 从审方附的 patch
+                                        # `git apply --numstat` 求和(**只数新增行**),不再由审方估:P3-1 实测裁决-700 估 16 行 / 实做 55 行(偏 3.4×),
+                                        # 而行数是这条通道唯一的门槛。没附 patch 的条目一律不算微改,自动落回 ③改二
   FLOW_STALL_SEC=300                    # flow-usage 卡顿判据:一次工具调用 ≥ 此秒数单列 WARN(harness 卡顿实测 600 s 整、两轴同刻放行)
   FLOW_RECEIPT_MODE="section"           # plan 体例:section = `## <任务号>` 小节;table = 任务是表行
+  FLOW_TEST_GLOBS='*.test.ts *.test.tsx *.spec.ts *.spec.tsx'   # 测试文件模式(空格分隔的 glob)。两处共用:flow-trace 拿它当 git ls-files 的 pathspec、
+                                        # flow-micro 拿它判「性质 = 测试」。别的栈(*_test.go / test_*.py / *Test.java)在 config 里覆盖
   FLOW_ROLE_MODELS=""
   FLOW_TRANSCRIPTS_DIR="$HOME/.claude/projects"
   FLOW_MERGE_STRATEGY="--merge"
@@ -109,7 +112,7 @@ flow_load_config() {
          FLOW_MAP_DEBT FLOW_MAP_DEBT_PATH FLOW_LOCAL_DOC FLOW_LOCAL_DOC_PATH \
          FLOW_FACT_LINT_BASELINE FLOW_FACT_LINT_BASELINE_PATH FLOW_FACT_LINT_ROOTS FLOW_FACT_LINT_EXCLUDE \
          FLOW_GATE_SUMMARY_RE FLOW_INFRA_FAIL_RE FLOW_INFRA_FAIL_GATES FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_BYTES FLOW_DOC_BUDGET_SELF FLOW_DOC_BUDGET_DIR FLOW_DOC_BUDGET_RULEBOOK \
-         FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_FIX_BY_WRITER FLOW_FOLD_MAX FLOW_MERGE_STRATEGY FLOW_REQ_CAP FLOW_TURN_CAP FLOW_DISPATCH_EXCERPT_BYTES FLOW_MICRO_FIX_LINES FLOW_STALL_SEC FLOW_ROLE_MODELS FLOW_TRANSCRIPTS_DIR \
+         FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_FIX_BY_WRITER FLOW_FOLD_MAX FLOW_MERGE_STRATEGY FLOW_REQ_CAP FLOW_TURN_CAP FLOW_DISPATCH_EXCERPT_BYTES FLOW_MICRO_FIX_LINES FLOW_TEST_GLOBS FLOW_STALL_SEC FLOW_ROLE_MODELS FLOW_TRANSCRIPTS_DIR \
          FLOW_KEEP_PLUGINS FLOW_KEEP_MCP
 }
 

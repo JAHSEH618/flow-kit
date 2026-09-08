@@ -132,6 +132,16 @@ for p in "$@"; do
   [ -e "$FLOW_REPO_DIR/$p" ] || flow_warn "触面在树里不存在(允许:计划中的新文件): $p"
 done
 
+# 写权限面清单 .face-<轮名>.txt(0.8.0):微改通道的「全在③写权限面内」这条门槛要有机器可读的面。
+# 面 = 本轮触面路径,一行一条;flow-micro --face 按它判 patch 的每个路径(精确或目录前缀)。
+# ⚠ 必须写在任何 `set --` 之前:后面建步骤账那段会把 "$@" 冲掉。
+if [ -n "$DIR" ]; then
+  { echo "# 写权限面 · $ROUND(flow-dispatch 生成 $(date +%F);= 派单里的触面路径,一行一条)"
+    echo "# flow-micro --face 按它判微改 patch 的路径是否面内;编排方要扩面得以裁决显式扩,别在这里手加"
+    for p in "$@"; do printf '%s\n' "$p"; done
+  } > "$DIR/.face-$ROUND.txt"
+fi
+
 # 命令行的逐字重建先于一切会动 "$@" 的段(给复审按 review-template 逐字重跑;参数与执行同一数组,同源 by construction)
 CMD="flow-route-debts $TASK"
 for p in "$@"; do CMD="$CMD $p"; done
@@ -354,8 +364,10 @@ cat <<FT
 ### 编排方待填(生成器管不到的判断项)
 - 交付判据与任务书之外的裁决(任务书正文已在节选段,不再抄;①写不跑变异电池,变异归 ②B 与 ④B)
 - 自报三处「最没把握」的要求(①写轮)
-- ④ 的必闭每条带「改动估计 N 行 · 性质 测试|探针|注释|生产」+ 可原样重跑的复现命令 + 期望读数;非生产条合计 ≤ $FLOW_MICRO_FIX_LINES 行且全在③写权限面内 ⟹ 微改通道:
-  编排方落笔(占裁决号)+ 复跑那些复现命令对读数,不起 ③改二、不 SendMessage(oracle 由审方在改动之前写下,写≠审仍守);有一条「生产」就整批走 ③改二
+- ④ 的必闭每条带:可原样重跑的复现命令 + 期望读数 + **一份可 \`git apply\` 的 patch**(落 \`$DIR/.evidence/$ROUND-micro-<裁决号>.patch\`,生成用 \`git -c core.quotepath=false diff\`)。
+  行数与性质**不由审方估**,由 \`flow-micro <patch>... --face $DIR/.face-<③改轮名>.txt\` 从 patch 量(新增行求和 · 路径与改动行核性质 · 面内);
+  末行 MICRO OK ⟹ 编排方 \`--apply --freeze <③改的 .after-*-hashes.txt>\` 落笔(占裁决号)+ 复跑④写下的复现命令对读数,不起 ③改二;
+  MICRO RED(有生产 / 面外 / 合计新增 > $FLOW_MICRO_FIX_LINES)⟹ 整批走 ③改二。**没附 patch 的条目一律不算微改。**
 - 本轮**必读清单**(移交件按件点名;目录其余 = 旁证按需读,protocol §5)
 - 若并行:H1/H2 隔离条件逐条核($SPECS 手工 cp / DB 单点 / 文件层不相交 / 号段)
 FT
