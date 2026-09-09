@@ -40,6 +40,10 @@ if [ "${1:-}" = "--lint" ]; then
 fi
 
 [ $# -ge 1 ] || { echo "用法: flow-route-debts <任务号或触面路径>... | --lint" >&2; exit 2; }
+# 词分割守卫(0.8.2,库函数;flow-dispatch 共用同一条):把整份实改集塞进一个变量喂进来,zsh 不分词 ⟹ N 条塌成 1 条,
+#   而下面每条都做前缀匹配 —— 塌了就只剩最长公共前缀那几条命中,输出照样成行、RC 照样 0。
+#   ShipLedger P3-3 的 ④A / ④B 各踩一次:实改集 15 条路由出 3 条,复审轴拿它 diff 派单必读,漏路由整条判据静默失效。
+flow_check_ws_args "任务号或触面" "$@"
 for a in "$@"; do
   case "$a" in /*) flow_die "触面参数必须仓库相对,不许绝对路径(绝对路径让路径轴整条静默失效): $a" ;; esac
 done

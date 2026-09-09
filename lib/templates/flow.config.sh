@@ -54,6 +54,8 @@ FLOW_DOC_BUDGET_FILE=400
 FLOW_DOC_BUDGET_SELF=40000             # 自写字节红线(RED):总字节减去 <!-- flow:gen-* --> 段。模型逐字打的那部分才是墙钟
 FLOW_DOC_BUDGET_BYTES=40000            # 总字节 WARN 线:读取面还是它(一份派单件五个 agent 各读一遍)
 FLOW_DOC_BUDGET_DIR=4000
+FLOW_DOC_BUDGET_HOTPATH=8000           # 回件**热路径节**(〇 索引 / 正面结论 + 丙栏)字节上限,RED;flow-round close 只判本轮自己那份件
+                                       # 下游每一轮重读的就这两节;甲栏的证据只有复审轴读一次,不进这条线
 FLOW_DOC_BUDGET_RULEBOOK=250
 FLOW_DEBT_CAP=8
 FLOW_DEBT_WARN=16

@@ -94,17 +94,33 @@ write_file "$REPO_DIR/$LEDGER" "$KIT/lib/templates/debts.md"
 # 5. git shim
 HOOK="$REPO_DIR/.git/hooks/post-commit"
 ABS="$KIT/bin/flow-post-commit"
+# 0.8.2:把**本树的物理路径**烙进 shim。快照是 rsync 副本(连 .git 一起),副本里有它自己的 config,
+#   flow-post-commit 的「pwd == FLOW_REPO_DIR」守卫在副本里照样成立 —— 在快照里 commit 一笔基线就会改掉刚冻结的树。
+#   烙死路径之后,副本 / worktree 上的 commit 静默跳过(hook 永不挡 commit)。
+REPO_PHYS=$(cd "$REPO_DIR" && pwd -P)
 if [ -f "$HOOK" ]; then
   if grep -q 'flow-post-commit' "$HOOK"; then
-    say "已有  $HOOK(已含 flow-post-commit)"
+    if grep -qF "$REPO_PHYS" "$HOOK"; then
+      say "已有  $HOOK(已含 flow-post-commit + 快照守卫)"
+    elif grep -q 'flow-kit shim' "$HOOK"; then
+      # 整份 hook 就是我们自己生成的 shim(有标记行),0.8.2 升级直接重写它 —— 不是别人的 hook,不必让人手改
+      sed -e "s|@ABS@|$ABS|g" -e "s|@REPO@|$REPO_PHYS|g" "$KIT/lib/templates/post-commit.shim" > "$TMP"
+      if [ "$DRY" = 1 ]; then say "将重写 $HOOK(旧 shim 无快照守卫,0.8.2 补上)"; else
+        cp "$TMP" "$HOOK" && chmod +x "$HOOK" && say "已重写 $HOOK(旧 shim 无快照守卫,0.8.2 补上:pwd 不是 $REPO_PHYS 就静默退出)"
+      fi
+    else
+      say "已有  $HOOK(是别人的 hook,里面追加过 flow-post-commit,但**没有快照守卫**)"
+      say "      手工在那几行之前加一行:if [ \"\$(pwd -P)\" != \"$REPO_PHYS\" ]; then exit 0; fi"
+      say "      为什么:变异轴的快照连 .git 一起拷,副本里 commit 一笔会把队列写进快照、改掉刚冻结的树"
+    fi
   else
     if [ "$DRY" = 1 ]; then say "将追加 flow-post-commit 一行到已有 hook: $HOOK"; else
-      printf '\n# flow-kit(flow-init 追加,不覆盖原 hook)\nif command -v flow-post-commit >/dev/null 2>&1; then flow-post-commit "$@"; elif [ -x "%s" ]; then "%s" "$@"; fi\n' "$ABS" "$ABS" >> "$HOOK"
+      printf '\n# flow-kit(flow-init 追加,不覆盖原 hook);快照守卫见 0.8.2:副本 / worktree 上静默跳过\nif [ "$(pwd -P)" = "%s" ]; then\n  if command -v flow-post-commit >/dev/null 2>&1; then flow-post-commit "$@"; elif [ -x "%s" ]; then "%s" "$@"; fi\nfi\n' "$REPO_PHYS" "$ABS" "$ABS" >> "$HOOK"
       say "已追加 $HOOK(原 hook 保留;若原 hook 提前 exit,追加行不会执行 —— 自己看一眼)"
     fi
   fi
 else
-  sed -e "s|@ABS@|$ABS|g" "$KIT/lib/templates/post-commit.shim" > "$TMP"
+  sed -e "s|@ABS@|$ABS|g" -e "s|@REPO@|$REPO_PHYS|g" "$KIT/lib/templates/post-commit.shim" > "$TMP"
   if [ "$DRY" = 1 ]; then say "将写  $HOOK"; else
     mkdir -p "$(dirname "$HOOK")" && cp "$TMP" "$HOOK" && chmod +x "$HOOK" && say "已写  $HOOK(shim)"
   fi

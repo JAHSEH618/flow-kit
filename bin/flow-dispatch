@@ -9,7 +9,9 @@
 # 用法:
 #   flow-dispatch <任务号> --tree <快照|活树-独占|禁入> --db <独占|只读|禁用> --seq <N> [--round <①写|②A|②B|③改|④A|④B>] \
 #       [--dir <流程目录绝对路径>] [--core <core写权限面>] [--plan <plan文件绝对路径>] [--cap-ok <理由>] <触面路径(仓库相对)...>
-#   flow-dispatch --resume <原派单件绝对路径> --dir <流程目录> --round <轮名>     # 续轮派单:从步骤账机械生成(0.6.0)
+#   flow-dispatch --resume <原派单件绝对路径> --dir <流程目录> [--round <原轮名>]  # 续轮派单:从步骤账机械生成(0.6.0)
+#     轮名默认从原派单的「轮次 / 模型」行取(0.8.2);--round 给了必须与它一致,且**不许带 `-续`** —— 续轮不是新轮,
+#     它沿用原轮的基线 / 步骤账 / 申报清单,轮名只有一个。原派单件本身是续轮派单 ⟹ FATAL(续轮不接续轮,仍指最初那份)。
 #   --dir 给了才能:① 把冻结 / 收工 / 门 / 预算的命令**连实参**印进块(agent 不必学用法,编排方不必读 kit 源码);
 #              ② 建步骤账 .steps-<轮名>.md(①写按 open REQ 一条一步;其余轮 装载 / 主活 / 回件 / 收工核对),agent 每步 flow-step done;
 #              ③ 建 .evidence/。与 flow-round open|close 同一套约定文件名。--dir 必须与 --round 同给。
@@ -42,8 +44,24 @@ if [ "${1:-}" = "--resume" ]; then
   done
   case "$ORIG" in /*) ;; *) flow_die "原派单件须绝对路径: $ORIG" ;; esac
   [ -f "$ORIG" ] || flow_die "原派单件不存在: $ORIG"
-  [ -n "$RDIR" ] && [ -n "$RROUND" ] || flow_die "--resume 必须同给 --dir 与 --round"
+  [ -n "$RDIR" ] || flow_die "--resume 必须给 --dir"
   case "$RDIR" in /*) ;; *) flow_die "--dir 须绝对路径: $RDIR" ;; esac
+  # —— 0.8.2:轮名从**原派单里**取,不由 --round 说了算(契约 3 两侧同源)——
+  # 病根:编排方把上一次生成的续轮名(`①写-续`)又喂回 --round,下面那行无条件再拼一层 ⟹ `①写-续-续`。
+  #   回件首行照它写,flow-round 认领不到,状态档那两格退回 ⚠glob猜;门读数还顺着 `①写-*gates*` 串进了 ①写 行(F-2 同一次实测)。
+  #   续轮**不是新轮**:它沿用原轮的基线 / 步骤账 / 申报清单 / 交付态哈希,所以轮名只能有一个,就是原派单里那个。
+  if LC_ALL=C grep -q -- '派单必带块 —— .*-续(' "$ORIG"; then
+    flow_die "原派单件本身就是一份续轮派单($ORIG)—— 续轮不接续轮:同一轮再中断一次,仍拿**最初那份**派单跑 --resume(进度记在步骤账里,已勾的步骤不会重做)"
+  fi
+  ORIGROUND=$(LC_ALL=C sed -n 's/^- \*\*轮次 \/ 模型\*\*:\([^ ]*\).*/\1/p' "$ORIG" | head -1)
+  case "$RROUND" in
+    *-续) flow_die "--round 不许带 -续(得到「$RROUND」)—— 续轮不是新轮,给**原轮名**即可,`-续` 由本命令拼。轮名翻倍会让 flow-round 认不出回件与门读数" ;;
+  esac
+  if [ -n "$RROUND" ] && [ -n "$ORIGROUND" ] && [ "$RROUND" != "$ORIGROUND" ]; then
+    flow_die "--round「$RROUND」与原派单的「轮次 / 模型」行「$ORIGROUND」对不上($ORIG)—— 两侧同源:要么改 --round,要么换原派单件"
+  fi
+  [ -n "$RROUND" ] || RROUND="$ORIGROUND"
+  [ -n "$RROUND" ] || flow_die "原派单里没有「轮次 / 模型」行,取不到轮名($ORIG)—— 显式给 --round <原轮名>(不带 -续)"
   STEPS="$RDIR/.steps-$RROUND.md"
   [ -f "$STEPS" ] || flow_die "步骤账不存在: $STEPS —— 没有步骤账就没有断点;先从回件重建(flow-step init $RDIR $RROUND <步骤…>,已做的 flow-step done)再来"
   LAST=$(flow-step show "$RDIR" "$RROUND" | tail -1)
@@ -60,7 +78,9 @@ if [ "${1:-}" = "--resume" ]; then
   每完成一步:\`flow-step done $RDIR $RROUND <N> "<一句>"\`;续轮之外别的 agent 也可能接手,勾在文件里不在你脑子里
 - **先对树核,再动手**(通知里的 result 只带首句;watchdog 判 failed 也不代表没干活 —— 两批实测两次中断都停在「差最后一步」):
   \`flow-manifest verify $RDIR/.manifest-baseline-$RROUND.txt $RDIR/.declared-$RROUND.txt\`(申报清单还没落就先按回件索引表 / \`git status\` 补一份)
-  \`ls -t $RDIR/.evidence | head\` 看最后一条落盘;回件已有的节**只追加不重写**
+  \`ls -t $RDIR/.evidence | head\` 看最后一条落盘;回件已有的节**只追加不重写**,
+  **唯一例外是〇节**:它若还是 \`(待收工填)\` 之类的占位,就**在原位补全**,别把结论补在末尾另起一节。
+  〇 是下游整轮唯一的跳读入口 —— 占位留着,下一轮只能整读你这份件(实测 ④A 的〇节 52 字节占位 ⟹ ③改二 整读 33 KB)
 - **收工件**:同原派单(.after-$RROUND-hashes.txt · .declared-$RROUND.txt · 回件);回件末尾加一行「续轮从步骤 N 接手,N 之前的内容出自上一个 agent」
 <!-- flow:gen-end -->
 
@@ -124,11 +144,12 @@ if [ -n "$LANE" ]; then
   while IFS= read -r l; do set -- "$@" "$l"; done < "$TMP/lane"
 fi
 
-# 触面纪律:仓库相对,绝对路径当场 FATAL;不存在的路径 WARN(计划中的新文件合法)
+# 触面纪律:仓库相对,绝对路径当场 FATAL;含空白的单个实参 FATAL(守卫在库里,flow-route-debts 共用同一条);
+#   不存在的路径只 WARN(计划中的新文件合法)
+flow_check_ws_args 触面 "$@"
 for p in "$@"; do
   case "$p" in
     /*) flow_die "触面参数必须仓库相对,不许绝对路径(绝对路径让路径轴整条静默失效): $p" ;;
-    *[[:space:]]*) flow_die "单个触面实参含空白 —— 多半是把整份清单塞进一个变量喂进来了(zsh 不对 \$VAR 做词分割),于是 N 条触面塌成 1 条、欠账必读跟着静默塌:改用数组或 xargs 逐条传: $p" ;;
   esac
   [ -e "$FLOW_REPO_DIR/$p" ] || flow_warn "触面在树里不存在(允许:计划中的新文件): $p"
 done

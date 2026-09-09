@@ -69,6 +69,10 @@ flow_load_config() {
   FLOW_DOC_BUDGET_BYTES=40000
   FLOW_DOC_BUDGET_SELF=40000            # 自写字节红线(总字节减去 flow:gen 标记段);回件 100% 自写,派单几乎全是生成段
   FLOW_DOC_BUDGET_DIR=4000
+  FLOW_DOC_BUDGET_HOTPATH=8000          # 回件**热路径节**(〇 索引 / 正面结论 + 丙栏)的字节上限,flow-round close 按本轮自己那份判(0.8.2)
+                                        # 为什么不判全文:实测九份回件全文 16–37 KB,按申报件归一落在 609–1498 B/件,排序跟着「这轮要证多少」走,
+                                        # 不跟着写作风格走 —— 全文线在数交付面,和 0.8.0 修掉的目录合计线同一种病。真正被下游每一轮重付的只有 〇+丙
+                                        # (占全文 9%–35%),甲栏的证据只有复审轴读一次。实测这条线只有 04a 回件破线(11996;它的 〇 节是 `(待收工填)` 占位)
   FLOW_DOC_BUDGET_RULEBOOK=250
   FLOW_DEBT_CAP=8
   FLOW_DEBT_WARN=16
@@ -111,7 +115,7 @@ flow_load_config() {
          FLOW_INDEX_DOC FLOW_INDEX_DOC_PATH FLOW_RECEIPT_MODE \
          FLOW_MAP_DEBT FLOW_MAP_DEBT_PATH FLOW_LOCAL_DOC FLOW_LOCAL_DOC_PATH \
          FLOW_FACT_LINT_BASELINE FLOW_FACT_LINT_BASELINE_PATH FLOW_FACT_LINT_ROOTS FLOW_FACT_LINT_EXCLUDE \
-         FLOW_GATE_SUMMARY_RE FLOW_INFRA_FAIL_RE FLOW_INFRA_FAIL_GATES FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_BYTES FLOW_DOC_BUDGET_SELF FLOW_DOC_BUDGET_DIR FLOW_DOC_BUDGET_RULEBOOK \
+         FLOW_GATE_SUMMARY_RE FLOW_INFRA_FAIL_RE FLOW_INFRA_FAIL_GATES FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_BYTES FLOW_DOC_BUDGET_SELF FLOW_DOC_BUDGET_DIR FLOW_DOC_BUDGET_HOTPATH FLOW_DOC_BUDGET_RULEBOOK \
          FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_FIX_BY_WRITER FLOW_FOLD_MAX FLOW_MERGE_STRATEGY FLOW_REQ_CAP FLOW_TURN_CAP FLOW_DISPATCH_EXCERPT_BYTES FLOW_MICRO_FIX_LINES FLOW_TEST_GLOBS FLOW_STALL_SEC FLOW_ROLE_MODELS FLOW_TRANSCRIPTS_DIR \
          FLOW_KEEP_PLUGINS FLOW_KEEP_MCP
 }
@@ -139,6 +143,23 @@ flow_filter_kit_owned() {   # stdin 一行一路径 → 去掉 kit 自有件(精
 #   枚举失败吐的是空集,而空集在三个调用方那里都是绿 —— 调用方必须按 §J 同层捕获,RC≠0 不许当空集用。
 flow_changed_paths() {
   git -C "$FLOW_REPO_DIR" -c core.quotepath=false status --porcelain -uall | sed 's/^...//' | sed 's/.* -> //' | flow_filter_kit_owned
+}
+
+# —— 路径实参的词分割守卫(0.8.2):单个实参含空白 ⟹ 多半是把整份清单塞进一个变量喂进来了 ——
+#   zsh 不对 `$VAR` 做词分割(bash 的 IFS 分词在 zsh 里默认关着),于是 `cmd $PATHS` 把 N 条路径塌成 1 条实参,
+#   而每个消费者都拿它做前缀 / 精确匹配 ⟹ 路径轴静默失效、命令照样 RC=0。两处实测:
+#     · flow-dispatch 触面 N 条塌成 1 条,派单块照样生成(StockSteer P4-T4-2G,0.8.1 已在本地挡下)
+#     · flow-route-debts 实改集 15 条塌成 3 条(ShipLedger P3-3 的 ④A / ④B 各踩一次)
+#   让路径轴静默失效的输入,要在入口红,不能靠人记得 —— 所以守卫归库,不归某一个脚本。
+#   ⚠ flow-manifest 的扫描区**故意不用**这条:那批实参在每一个消费者那里都是不带引号展开的
+#   (`sha_scan $areas` / 基线头 `areas:` / flow-close 的 `for a in $areas`),塌成一条再分开是等价的,加守卫会把能用的用法判死。
+flow_check_ws_args() {   # 用法: flow_check_ws_args <参数名(报错用)> <实参>...
+  _flow_ws_name="$1"; shift
+  for _flow_ws_a in "$@"; do
+    case "$_flow_ws_a" in
+      *[[:space:]]*) flow_die "单个${_flow_ws_name}实参含空白 —— 多半是把整份清单塞进一个变量喂进来了(zsh 不对 \$VAR 做词分割),于是 N 条塌成 1 条、按它走的路径轴跟着静默塌:改用数组或 xargs 逐条传: $_flow_ws_a" ;;
+    esac
+  done
 }
 
 # —— UTF-8 字边界截断(awk 函数源码;调用方 `LC_ALL=C awk "$(flow_awk_utrunc)"'… utrunc($0, N) …'`,length/substr 按字节)——

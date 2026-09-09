@@ -15,7 +15,11 @@
 # F-13:开工序里从没有 `flow-fact-lint verify` 这一步 —— 落位段写进 specs/ 后直接 baseline 冻结,自带的 RED 潜到①写收工才炸,
 #   而那时 specs/ 已在所有 agent 的禁写面。open 先 verify,新增 RED > 0 即红(门定义刚改过就先 `flow-fact-lint baseline` 重打)。
 # 末行固定:`ROUND-OPEN OK|RED` / `ROUND-CLOSE OK|RED` / `ROUND-STATE OK`;参数错 FATAL RC=2。
-# 读的配置:FLOW_REPO_DIR FLOW_FACT_LINT_ROOTS FLOW_FACT_LINT_BASELINE_PATH;子命令 flow-close / flow-manifest / flow-fact-lint / flow-doc-budget / flow-step 按名调用。
+# 收工另判本轮**自己那份**回件(0.8.2):首行认不出 ⟹ RED(从前退回 glob 猜,猜错会进状态档的每一次刷新);
+#   〇节是占位 ⟹ RED;热路径节(〇 + 丙栏)> FLOW_DOC_BUDGET_HOTPATH 字节 ⟹ RED。
+#   为什么判这三条而不是判全文:全文长度是交付面的函数(九份回件按申报件归一 609–1498 B/件),而下游每一轮重付的只有 〇+丙。
+#   doc-budget 的全文自写线仍在,做绝对上限;它的「近线 90%」从 WARN 降成 info —— 那条 WARN 在一个批次里对同一份件喊了 11 次,没人动。
+# 读的配置:FLOW_REPO_DIR FLOW_FACT_LINT_ROOTS FLOW_FACT_LINT_BASELINE_PATH FLOW_DOC_BUDGET_HOTPATH;子命令 flow-close / flow-manifest / flow-fact-lint / flow-doc-budget / flow-step 按名调用。
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
 flow_load_config
@@ -101,9 +105,15 @@ gen_state() {
       fcell=""
       [ -f "$DIR/.after-$r-hashes.txt" ] && fcell="after ✓" || fcell="after ✗"
       [ -f "$DIR/.declared-$r.txt" ] && fcell="$fcell declared ✓" || fcell="$fcell declared ✗"
-      g=$(ls -t "$EV"/"$r"-*gates*.txt 2>/dev/null | head -1)
-      gcell="—"; [ -n "$g" ] && gcell=$(LC_ALL=C grep -E '^FLOW-GATES' "$g" | tail -1 | cut -c1-60)
-      [ -n "$gcell" ] || gcell="(无 FLOW-GATES 行)"
+      # 门读数只认**约定的那一个**件名(0.8.2)。从前是 glob `"$r"-*gates*.txt`:`①写-` 前缀吃到了 `①写-续-gates.txt`,
+      # 于是 ①写 那行印着一次它根本没跑过的 PASS(该轮门整跑 0 次)。派单印进去的名字就是 `<轮名>-gates.txt`,按名取,取不到就是「没跑」。
+      # 末行也不再 `cut -c1-60`:那一刀把 out= 路径切成半截,既没用也违 §J 硬规矩①;要短就整段去掉 out=,别切字节。
+      g="$EV/$r-gates.txt"
+      gcell="—"
+      if [ -f "$g" ]; then
+        gcell=$(LC_ALL=C grep -E '^FLOW-GATES' "$g" | tail -1 | sed 's/ out=.*//')
+        [ -n "$gcell" ] || gcell="(无 FLOW-GATES 行)"
+      fi
       echo "| $r | $dcell | $scell | $hcell | $fcell | $gcell |"
     done
     echo ""
@@ -129,6 +139,12 @@ gen_state() {
 
 case "$CMD" in
 open)
+  # 0.8.2:续轮**不是新轮** —— 它沿用原轮的基线 / 步骤账 / 申报清单 / 交付态哈希,开新基线就把一轮劈成两半:
+  #   状态档多出一行、交付态哈希按半轮算、门读数按半轮记。ShipLedger P3-3 的 ①写 就是这样劈开的,
+  #   再叠上 flow-dispatch 又拼一层 `-续`,轮名成了 `①写-续-续`,两格退回 ⚠glob猜。中断后只要 flow-dispatch --resume,不要再 open。
+  case "$ROUND" in
+    *-续) flow_die "轮名不许带 -续(得到「$ROUND」)—— 续轮不开新轮:直接 flow-dispatch --resume <原派单> --dir $DIR(轮名它自己从原派单取),收工时仍 flow-round close <原轮名>" ;;
+  esac
   BASE="$DIR/.manifest-baseline-$ROUND.txt"
   hdr "flow-fact-lint verify(F-13:落位段自带的 RED 在这里炸,不潜到写轮)"
   if [ -z "$FLOW_FACT_LINT_ROOTS" ]; then echo "  跳过:FLOW_FACT_LINT_ROOTS 未配置"
@@ -153,6 +169,9 @@ open)
   hdr "状态档事实段"; gen_state
   if [ "$red" = 0 ]; then echo "ROUND-OPEN OK: $ROUND(基线 $(basename "$BASE");此后编排方对仓内文件零编辑)"; exit 0; else echo "ROUND-OPEN RED: $ROUND"; exit 1; fi ;;
 close)
+  case "$ROUND" in
+    *-续) flow_warn "轮名带 -续(「$ROUND」):续轮本不该单开一轮(0.8.2 起 flow-round open 判死)。这里照收,只是这一轮的读数是半轮的" ;;
+  esac
   BASE="$DIR/.manifest-baseline-$ROUND.txt"; DECL="$DIR/.declared-$ROUND.txt"; AFTER="$DIR/.after-$ROUND-hashes.txt"
   for f in "$BASE" "$DECL" "$AFTER"; do [ -f "$f" ] || flow_die "收工件缺失: $f(约定名;agent 收工件没落全,先补,别绕过)"; done
   hdr "flow-close --between(交付态哈希 + 冻结 verify + 非空转 + 树读数 + 路由复跑 + REQ 对账 + 预算)"
@@ -167,17 +186,38 @@ close)
     last=$(flow-step show "$DIR" "$ROUND" | tail -1); echo "  $last"
     case "$last" in "STEPS DONE"*) ;; *) echo "  RED:步骤账未全勾 —— 要么 agent 没收工,要么漏勾;先核回件再定"; red=1 ;; esac
   else echo "  WARN:无步骤账,跳过"; fi
-  hdr "回件"
+  hdr "回件(首行认领 · 〇节实心 · 热路径节 ≤ $FLOW_DOC_BUDGET_HOTPATH 字节)"
   h=$(find_handoff "$ROUND")
-  if [ -n "$h" ]; then
-    echo "  $DIR/$h($(kb "$DIR/$h"));编排方只读〇节 + 丙栏"
+  if [ -z "$h" ]; then
+    # 0.8.2 改 RED(从前退回 glob 猜):猜错的件名不会停在这里,它进状态档的**每一次**刷新,
+    #   而状态档是中断后重建的唯一入口(实测两批各猜错一次,P3-1 那次 14 行行行错,编排方只能在手写区加一句「别照那一列抄」)。
+    #   修法是一行首行,比事后发现哪一列是假的便宜得多。
+    echo "  RED:没有一份 md 的首行是「# $ROUND 回件 …」—— 件名归编排方随手起,认领只认首行(两份回件模板都写死了这个形状)"
+    echo "       改法:把那份回件的首行写成「# $ROUND 回件 · <一句话>」,再重跑本命令"
+    pfx=$(prefix_of "$ROUND"); cand=$(newest "${pfx}*handoff*.md ${pfx}*review*.md")
+    [ -n "$cand" ] && echo "       目录里最像的一份:$cand(它的首行现在是「$(head -1 "$DIR/$cand")」)"
+    red=1
   else
-    pfx=$(prefix_of "$ROUND"); h=$(newest "${pfx}*handoff*.md ${pfx}*review*.md")
-    if [ -n "$h" ]; then
-      echo "  WARN 没有一份 md 的首行是「# $ROUND 回件 …」,退回 glob 猜:$DIR/$h($(kb "$DIR/$h"))"
-      echo "       猜的件名两批各错过一次(P3-1 状态档 14 行行行错)—— 回件首行照模板写成「# $ROUND 回件 · <一句>」就认得准"
-    else
-      echo "  RED:既找不到首行「# $ROUND 回件」的件,也没有 ${pfx}*handoff*.md / ${pfx}*review*.md"; red=1
+    echo "  $DIR/$h($(kb "$DIR/$h"));下游只读〇节 + 丙栏"
+    # 热路径节 = 〇(改动索引表 / 正面结论)+ 丙栏(自报三处最没把握 / 必闭)。下游**每一轮**都重读这两节;
+    # 甲栏的证据只有复审轴读一次,不进这条线 —— 全文线在数交付面(实测九份回件按申报件归一是 609–1498 B/件,
+    # 排序跟着「这轮要证多少」走),把它当膨胀判,就是 0.8.0 在目录合计线上修过的同一种病。
+    hot=$(LC_ALL=C awk '
+      /^## /{ sec=""; if ($0 ~ /^## 〇/) sec="z"; else if ($0 ~ /^## 丙栏/) sec="c"; next }
+      sec=="z"{ zb += length($0)+1 }
+      sec=="c"{ cb += length($0)+1 }
+      END{ printf "%d %d\n", zb+0, cb+0 }' "$DIR/$h")
+    zb=${hot%% *}; cb=${hot##* }; tot=$((zb+cb))
+    echo "  热路径节:〇 $zb + 丙 $cb = $tot 字节(线 $FLOW_DOC_BUDGET_HOTPATH)"
+    if [ "$zb" = 0 ]; then
+      echo "  RED:回件没有〇节 —— 它是下游整轮唯一的跳读入口,没有它下一轮只能整读这份件"; red=1
+    elif LC_ALL=C awk '/^## /{ on = ($0 ~ /^## 〇/); next } on' "$DIR/$h" | LC_ALL=C grep -qE '待收工填|待填|待补|TODO'; then
+      echo "  RED:〇节还是占位(待收工填 / 待填 / TODO)—— 被判停的 agent 留下占位、续轮把结论补在末尾另起一节,"
+      echo "       下一轮就没有索引可跳、只能整读(实测 ④A 的〇节 52 字节占位 ⟹ ③改二 整读 33 KB)。在**原位**补全它"; red=1
+    fi
+    if [ "$tot" -gt "$FLOW_DOC_BUDGET_HOTPATH" ]; then
+      echo "  RED:热路径节 $tot 字节 > $FLOW_DOC_BUDGET_HOTPATH —— 细节挪进甲栏与 .evidence/,〇 与丙只留判据与指针"
+      echo "       (判的不是你写了多少,是下游每一轮要重读多少;全文多长不在这条线上)"; red=1
     fi
   fi
   hdr "状态档事实段"; gen_state

@@ -9,7 +9,9 @@
 #   ⟹ 生成段用 `<!-- flow:gen-begin -->` / `<!-- flow:gen-end -->` 括起(flow-dispatch 自动打),预算按总字节减去它来判。
 # 三条结构规矩(§D)由本脚本机械执行其可数的那部分:
 #   · 单件**自写** > FLOW_DOC_BUDGET_FILE 行 **或** > FLOW_DOC_BUDGET_SELF 字节,且首 5 行无 `budget-ok:<理由>` ⟹ RED(RC=1)
-#     自写字节 > 红线的 90% ⟹ WARN(近线预警:实测两份 ④ 回件卡在 99%,作者是在压内容,不是在挪全量)
+#     自写字节 > 红线的 90% ⟹ **info**(0.8.2 从 WARN 降级:同一份件在一个批次里被喊了 11 次、一次都没被处置 ——
+#       喊的时刻不对(件是上一轮的产出,作者早已下线)、对象也不对(全文长度是交付面的函数,不是写作浪费的函数)。
+#       该判的是热路径节,由 flow-round close 在收工那一刻只判本轮自己那份件:FLOW_DOC_BUDGET_HOTPATH,RED)
 #     (字节线是主判据:token 按字节计,一份 112 KB 的复验件靠长行躲过了 400 行线;行数线只挡「行多」这一种胀法)
 #   · 单件**总字节** > FLOW_DOC_BUDGET_BYTES ⟹ WARN(读取面还是它:一份派单件五个 agent 各读一遍)。总量线不 RED —— 生成段不是作者写的。
 #   · 目录热路径合计 > FLOW_DOC_BUDGET_DIR 行 ⟹ WARN。**线按轮数归一**(0.8.0):轮数 > 6 时线 = DIR × 轮数 / 6,
@@ -64,7 +66,13 @@ for d in "$@"; do
         red=1
       fi
     elif [ $((sb * 10)) -gt $((FLOW_DOC_BUDGET_SELF * 9)) ]; then
-      echo "WARN $size $f(自写 > 字节线的 90%:贴线时作者会去压内容而不是把全量挪进 .evidence/ —— 先挪再写)"
+      # 0.8.2 从 WARN 降成 info。这条近线预警在一个批次里对**同一份件**喊了 11 次(每次 flow-round open 重扫全目录),
+      # 一次都没被处置 —— 因为它喊的时刻和对象都不对:件是上一轮的产出,作者早已下线,而编排方既不能替它重写、
+      # 也不该动别人的证据记录。更要紧的是它判错了对象:实测九份回件全文 16–37 KB,按申报件归一落在 609–1498 B/件,
+      # 排序跟着「这轮要证多少」走,不跟着写作风格走 —— 全文线在数交付面,和 0.8.0 修掉的目录合计线同一种病。
+      # 真正被下游每一轮重付的只有热路径节(〇 + 丙栏,占全文 9%–35%),那条线改由 `flow-round close` 在收工那一刻
+      # 只判本轮自己那份件、判 RED(FLOW_DOC_BUDGET_HOTPATH)—— 那时作者还在,而且改法是挪位置不是删内容。
+      echo "info $size $f(自写 > 字节线的 90%;热路径节那条线在 flow-round close 上判,本行只做仪表盘)"
     elif [ "$bytes" -gt "$FLOW_DOC_BUDGET_BYTES" ]; then
       echo "WARN $size $f(总字节 > $FLOW_DOC_BUDGET_BYTES:自写没超,读取面还是它 —— 五个 agent 每人读一遍)"
     else
