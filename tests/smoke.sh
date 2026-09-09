@@ -125,6 +125,17 @@ printf '%s' "$LAST_OUT" | grep -q 'ROUND-CLOSE OK' && ok "ROUND-CLOSE OK" || fai
 for i in 1 2 3; do printf -- '- 新规矩 %s\n' "$i" >> "$WS/.claude/flow-local.md"; done
 expect_rc 1 "flow-close 规则书变长 RED" flow-close "$FL" "$FL/.manifest-baseline.txt" "$FL/.declared.txt"
 printf '%s' "$LAST_OUT" | grep -q '规则书变长' && ok "棘轮点名规则书变长" || fail "棘轮未点名"
+[ -f "$WS/.flow/.rulebook-bytes" ] && ok "棘轮件是 .rulebook-bytes(0.8.3 量字节)" || fail "棘轮件没换成字节"
+# 0.8.3 换单位:旧 .rulebook-lines 在 ⟹ 先按**旧单位**判一次(换单位不许洗掉一次变长),不红才打字节新基线并删旧件
+cur_l=$(wc -l < "$WS/.claude/flow-local.md" | tr -d ' ')
+rm -f "$WS/.flow/.rulebook-bytes"; printf '%s\n' "$((cur_l-1))" > "$WS/.flow/.rulebook-lines"
+expect_rc 1 "换单位不洗欠账:旧单位已变长仍 RED" flow-close "$FL" "$FL/.manifest-baseline.txt" "$FL/.declared.txt"
+printf '%s' "$LAST_OUT" | grep -q '旧单位 行' && ok "换单位那步按旧单位判" || fail "未按旧单位判"
+[ -f "$WS/.flow/.rulebook-lines" ] && [ ! -f "$WS/.flow/.rulebook-bytes" ] && ok "旧单位红 ⟹ 不打新基线" || fail "红了还是换了单位(等于洗掉一次变长)"
+printf '%s\n' "$cur_l" > "$WS/.flow/.rulebook-lines"
+out=$(flow-close "$FL" "$FL/.manifest-baseline.txt" "$FL/.declared.txt" 2>&1)
+printf '%s' "$out" | grep -q '规则书棘轮换单位(0.8.3 行 → 字节)' && ok "换单位印新旧两个方向的读数" || fail "未印换单位: $(printf '%s' "$out" | grep 规则书 | head -2)"
+[ -f "$WS/.flow/.rulebook-bytes" ] && [ ! -f "$WS/.flow/.rulebook-lines" ] && ok "换单位后旧棘轮件已删" || fail "旧棘轮件还在"
 
 # ── 5. 门缓存 ──
 git add -A >/dev/null 2>&1; git commit -qm work
@@ -198,7 +209,7 @@ expect_rc 0 "flow-pr-merge --help" flow-pr-merge --help
 out=$(flow-freshness 2>&1); [ -n "$out" ] && ok "freshness 有事就响: $out" || fail "freshness 在有未勾队列时应响"
 sed -i.bak 's/^- \[ \]/- [x]/' "$WS/.claude/map-debt.md"; rm -f "$WS/.claude/map-debt.md.bak"
 flow-render-index --write >/dev/null 2>&1
-head -n "$(cat "$WS/.flow/.rulebook-lines")" "$WS/.claude/flow-local.md" > "$T/fl" && cp "$T/fl" "$WS/.claude/flow-local.md"
+head -c "$(cat "$WS/.flow/.rulebook-bytes")" "$WS/.claude/flow-local.md" > "$T/fl" && cp "$T/fl" "$WS/.claude/flow-local.md"
 out=$(flow-freshness 2>&1); [ -z "$out" ] && ok "freshness 全绿静默" || fail "freshness 应静默,却说: $out"
 out=$(cd "$T" && flow-freshness 2>&1); [ -z "$out" ] && ok "freshness 无配置静默" || fail "freshness 无配置应静默"
 
@@ -676,6 +687,26 @@ grep -q '^\*\*退役件(原 `flow-local.md` 第 [0-9][0-9]* 行,逐字)\*\*:$' "
 expect_rc 2 "flow-rulebook retire 标题行 FATAL" flow-rulebook retire "$hl" --section x --reason y
 expect_rc 2 "flow-rulebook retire 越界 FATAL" flow-rulebook retire 9999 --section x --reason y
 expect_rc 2 "flow-rulebook retire 缺 --reason FATAL" flow-rulebook retire "$hl" --section x
+# flow-rulebook 0.8.3:子句模式 —— 按 ` · ` 切且只切括号深度 0;行数不动、字节降;标题 / 单子句 / 越界 FATAL
+printf -- '- **族标题**:子句甲 · 子句乙(枚举 a · b 不切) · 子句丙\n- 独条规矩\n' >> "$WS/.claude/flow-local.md"
+cl=$(grep -n '^- \*\*族标题\*\*' "$WS/.claude/flow-local.md" | cut -d: -f1)
+sl=$(grep -n '^- 独条规矩$' "$WS/.claude/flow-local.md" | cut -d: -f1)
+expect_rc 0 "flow-rulebook show <行号>" flow-rulebook show "$cl"
+printf '%s' "$LAST_OUT" | grep -qF "$cl.0  (标题,不可退)  - **族标题**:" && ok "show 把列表符与标题印成 k=0" || fail "show 未识别标题: $LAST_OUT"
+printf '%s' "$LAST_OUT" | grep -qF '子句乙(枚举 a · b 不切)' && ok "括号里的 · 不切(第 8 行号段那一形)" || fail "括号内被切开: $LAST_OUT"
+printf '%s' "$LAST_OUT" | grep -q "^  $cl\.3  " && ok "show 印子句号 N.k" || fail "子句号错: $LAST_OUT"
+nb=$(wc -l < "$WS/.claude/flow-local.md" | tr -d ' '); bb=$(wc -c < "$WS/.claude/flow-local.md" | tr -d ' ')
+expect_rc 0 "flow-rulebook retire N.k" flow-rulebook retire "$cl.2" --section "§Z · 子句" --reason "并入按根因写的一条"
+na=$(wc -l < "$WS/.claude/flow-local.md" | tr -d ' '); ba=$(wc -c < "$WS/.claude/flow-local.md" | tr -d ' ')
+[ "$na" = "$nb" ] && ok "子句退役行数不动" || fail "子句退役动了行数: $nb → $na"
+[ "$ba" -lt "$bb" ] && ok "子句退役字节降 $bb → $ba(棘轮量得到)" || fail "字节没降: $bb → $ba"
+[ "$(sed -n "${cl}p" "$WS/.claude/flow-local.md")" = '- **族标题**:子句甲 · 子句丙' ] && ok "剩下的子句原样拼回、标题留在原地" || fail "拼回错: $(sed -n "${cl}p" "$WS/.claude/flow-local.md")"
+grep -qF '子句乙(枚举 a · b 不切)' "$WS/.claude/flow-local-archive.md" && ok "退役子句逐字进归档件" || fail "归档件没有逐字子句"
+grep -q "^\*\*退役件(原 \`flow-local.md\` 第 $cl 行第 2 子句,逐字)\*\*:$" "$WS/.claude/flow-local-archive.md" && ok "归档标签点名行号与子句号" || fail "归档标签错: $(grep 子句 "$WS/.claude/flow-local-archive.md" | tail -2)"
+expect_rc 2 "flow-rulebook retire N.0(标题)FATAL" flow-rulebook retire "$cl.0" --section x --reason y
+expect_rc 2 "flow-rulebook retire 子句号越界 FATAL" flow-rulebook retire "$cl.99" --section x --reason y
+expect_rc 2 "flow-rulebook retire 非数子句号 FATAL" flow-rulebook retire "$cl.a" --section x --reason y
+expect_rc 2 "flow-rulebook retire 单子句行 N.1 FATAL(该走整行)" flow-rulebook retire "$sl.1" --section x --reason y
 # flow-config --check 判死 FLOW_FIX_BY_WRITER=1(宿主无 SendMessage)
 flow-config --check >/dev/null 2>&1; base_rc=$?
 printf 'FLOW_FIX_BY_WRITER=1\n' >> "$WS/.claude/flow.config.sh"
@@ -873,7 +904,7 @@ expect_rc 0 "同样两条路径逐条传则照跑(守卫不误伤)" flow-route-d
 cd "$WS"
 git add -A >/dev/null 2>&1; git commit -qm 'r82 起点' >/dev/null 2>&1
 flow-fact-lint baseline >/dev/null 2>&1
-rm -f "$WS/.flow/.rulebook-lines"          # 规则书棘轮重新记账:本节判的是步序,不是规则书长短
+rm -f "$WS/.flow/.rulebook-lines" "$WS/.flow/.rulebook-bytes"   # 规则书棘轮重新记账:本节判的是步序,不是规则书长短
 expect_rc 0 "flow-round open(0.8.2 用轮)" flow-round open "$F82" ①写
 printf 'r82\n' >> src/a.ts
 printf 'src/a.ts\n' > "$F82/.declared-①写.txt"

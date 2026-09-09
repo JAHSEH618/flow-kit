@@ -84,7 +84,7 @@ description: 四轮制(写 / 双轴审 / 改 / 复审)多 agent 工作流的编�
 - **轮数账每批照填**:轮次行与固定开销行(开工 / 轮间 / 收口 / 门整跑 / 独占合计)都由 `flow-usage <流程目录> --write` 从 transcripts 生成(窗从开工序起到收口末;手填曾把开工 11 min 估成 35、收口 16 估成 40),手填段只剩退役规矩数;token 当量批间只比不涨。**输出列是唯一指向墙钟的那一列**:实测 延迟(s) ≈ 1.5 + 1.4×(上下文/100k) + 1.3×(输出/100 token),输出的杠杆是上下文的十倍 —— 先瘦要写的字,再谈瘦上下文。
 - **检验判据**:编排方独占关键路径 = 开工 + 轮间 + 收口 ≤ 30 min(`flow-usage` 全窗算;p4e 实测 35 = 9 + 11 + 13,旧窗曾报 14 ✅ —— 切窗产物)、**轮内门整跑每轮 ≤ 1 次 + 收口 1 次**、不起独立收尾轮、**单会话请求 ≤ `FLOW_TURN_CAP`**(按会话,续轮单算)、**读批量 ≥ 2 路径/读调用**、卡顿(单次工具 ≥ `FLOW_STALL_SEC`,或 sub-agent 拿到工具结果后 ≥ 它无输出)从账上扣掉再比(实测一次 harness 卡顿 15 min 两轴同刻放行、一次 600 s 无输出被 watchdog 中断,不看见就记到 flow 头上;中断的轮另看「中断税」行)。不达标只许退役规矩或修工具,不许加规矩。
   「门整跑 ≤3」曾是判据,但结构下限就是 4(①1 + 变异轴各 1 + 收口 1):判据本身错了就改判据,别让它每批红一次教人耸肩。
-- **规矩棘轮反向**:`flow-local.md` 行数只许降(`flow-close` 量,变长即 RED);每批退役 ≥ 1 条散文规矩成脚本或门,轮数账记「本批退役数」。规则书 7 天从 5 条长到 600 行时,同体量批次时长翻了一倍。退役走 `flow-rulebook retire <行号> --section "<§X · 批次>" --reason "<一句>"`:逐字搬进工作区 `.claude/flow-local-archive.md`、原文件删那一行,不经 shell(p4e 手做时自己的 `$(...)` 污染过归档件)。
+- **规矩棘轮反向**:`flow-local.md` **字节**只许降(0.8.3;`flow-close` 量,变长即 RED),行数只剩「族数」上限。每批退役 ≥ 1 条散文规矩成脚本或门,轮数账记「本批退役数」。规则书 7 天从 5 条长到 600 行时,同体量批次时长翻了一倍。退役走 `flow-rulebook retire <行号>[.<子句号>] --section "<§X · 批次>" --reason "<一句>"`:逐字搬进工作区 `.claude/flow-local-archive.md`、原处删掉,不经 shell(p4e 手做时自己的 `$(...)` 污染过归档件)。**实录一族一行、族内用 ` · ` 串子句**,所以退役多半是 `retire N.k`(先 `show N` 看子句号);量行数会让「退了一条」与「没退」同读数 —— 单位就是这么换的。
 
 ## 6 · 中断、恢复、影子时间
 
@@ -119,7 +119,7 @@ description: 四轮制(写 / 双轴审 / 改 / 复审)多 agent 工作流的编�
 | `flow-close` | `--wrap <流程目录> <基线> <申报> [after] [--task] [--plan] [--verdicts <表>]` · `--ship <commit> --subject <标题> [--verdicts] --dir <流程目录>` · `<流程目录> <基线> <申报> [after]` · `--between …` | 收口机械段(含 REQ 翻 done、门读数行、手工步清单)/ 提交后四步 + 轮数账重跑 / 核对 |
 | `flow-ledger` | `flow-ledger apply <三态表> [--write]` · `close <标记> [--note]` · `append <标记> <行>` · `add --owner --due --touches --title [--body-file <正文文件\|->]` · `verdicts <三态表>` | 收口改账本;三态表的唯一解析器 |
 | `flow-usage` | `flow-usage <流程目录> [--write]`(轮次行 + 墙钟归因 + 固定开销三段 + 输出去向 + 卡顿 / 中断税 WARN;重跑保留手填段) | 收口(`--wrap` 与 `--ship --dir` 自动跑) |
-| `flow-rulebook` | `flow-rulebook show` · `retire <行号> --section "<§X · 批次>" --reason "<一句>"` | 收口退役规矩(每批 ≥ 1) |
+| `flow-rulebook` | `flow-rulebook show [行号]` · `retire <行号>[.<子句号>] --section "<§X · 批次>" --reason "<一句>"` | 收口退役规矩(每批 ≥ 1;子句退役 `show N` 看号) |
 | `flow-review-diff` | `flow-review-diff <原版回件> <影子回件>` | 改任一轴的模型前 |
 | `flow-trace` | `flow-trace <plan> <任务号> [--mark-done]`(任务号可带连字符;`--mark-done` 收口翻 open→done) | 任务书覆盖声明前;复审;收口(`--wrap` 自动跑) |
 | `flow-render-index` | `flow-render-index [--write [文件]] [--touches]` | 改账本后 |

@@ -6,7 +6,8 @@
 #       (2) git shim 未装:仓 .git/hooks/post-commit 不存在或不含 flow-post-commit
 #       (3) 索引漂移:FLOW_INDEX_DOC_PATH 里 `<!-- debts-index hash:XXXXXXXX` ≠ 账本开放集 hash(与 flow-render-index 同一条流水线);
 #           索引搬出根文档后根文档还留着旧块 ⟹ 也报(两处索引 = 其中一处必然会漂,而读的人不知道读的是哪处)
-#       (4) 规则书变长:FLOW_FLOW_DIR_PATH/.rulebook-lines 在,而 FLOW_LOCAL_DOC_PATH 现行数 > 它(棘轮只许降)
+#       (4) 规则书变长:FLOW_FLOW_DIR_PATH/.rulebook-bytes 在,而 FLOW_LOCAL_DOC_PATH 现字节 > 它(棘轮只许降;0.8.3 起量字节,
+#           只剩旧 .rulebook-lines 的工作区仍按行判,下次 flow-close --wrap 自动换单位)
 #       (5) 会话未瘦身:FLOW_KEEP_* 都写了,而 flow-settings --check 有漂移(新装了插件 / MCP 没关);没写 FLOW_KEEP_* 则不提(装的时候没选,不在这里催)
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
@@ -38,10 +39,13 @@ check() {
     fi
   fi
 
-  rl="$FLOW_FLOW_DIR_PATH/.rulebook-lines"
-  if [ -f "$rl" ] && [ -f "$FLOW_LOCAL_DOC_PATH" ]; then
+  rb="$FLOW_FLOW_DIR_PATH/.rulebook-bytes"; rl="$FLOW_FLOW_DIR_PATH/.rulebook-lines"
+  if [ -f "$rb" ] && [ -f "$FLOW_LOCAL_DOC_PATH" ]; then
+    was=$(tr -dc '0-9' < "$rb"); now=$(wc -c < "$FLOW_LOCAL_DOC_PATH" | tr -d ' ')
+    if [ -n "$was" ] && [ "$now" -gt "$was" ]; then add "规则书变长($FLOW_LOCAL_DOC $now 字节 > 棘轮 $was)"; fi
+  elif [ -f "$rl" ] && [ -f "$FLOW_LOCAL_DOC_PATH" ]; then
     was=$(tr -dc '0-9' < "$rl"); now=$(wc -l < "$FLOW_LOCAL_DOC_PATH" | tr -d ' ')
-    if [ -n "$was" ] && [ "$now" -gt "$was" ]; then add "规则书变长($FLOW_LOCAL_DOC $now 行 > 棘轮 $was)"; fi
+    if [ -n "$was" ] && [ "$now" -gt "$was" ]; then add "规则书变长($FLOW_LOCAL_DOC $now 行 > 棘轮 $was;单位待换,下次 flow-close --wrap 自动换成字节)"; fi
   fi
 
   if [ -n "${FLOW_KEEP_PLUGINS+x}" ] && [ -n "${FLOW_KEEP_MCP+x}" ]; then

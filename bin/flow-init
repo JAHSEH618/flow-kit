@@ -77,12 +77,12 @@ if [ -f "$WS/.claude/flow.config.sh" ]; then
   [ -n "$FLOWDIR" ] || FLOWDIR=".flow"
 fi
 
-# 3. 流程目录 + 规则书棘轮起点(已有就不动)
+# 3. 流程目录 + 规则书棘轮起点(已有就不动;0.8.3 起量字节,旧 .rulebook-lines 由 flow-close 换单位)
 if [ "$DRY" = 0 ]; then
   mkdir -p "$WS/$FLOWDIR"
-  if [ ! -f "$WS/$FLOWDIR/.rulebook-lines" ] && [ -f "$WS/.claude/flow-local.md" ]; then
-    wc -l < "$WS/.claude/flow-local.md" | tr -d ' ' > "$WS/$FLOWDIR/.rulebook-lines"
-    say "已写  $WS/$FLOWDIR/.rulebook-lines(规则书棘轮起点 = $(cat "$WS/$FLOWDIR/.rulebook-lines") 行)"
+  if [ ! -f "$WS/$FLOWDIR/.rulebook-bytes" ] && [ ! -f "$WS/$FLOWDIR/.rulebook-lines" ] && [ -f "$WS/.claude/flow-local.md" ]; then
+    wc -c < "$WS/.claude/flow-local.md" | tr -d ' ' > "$WS/$FLOWDIR/.rulebook-bytes"
+    say "已写  $WS/$FLOWDIR/.rulebook-bytes(规则书棘轮起点 = $(cat "$WS/$FLOWDIR/.rulebook-bytes") 字节)"
   else
     say "已有  $WS/$FLOWDIR/"
   fi

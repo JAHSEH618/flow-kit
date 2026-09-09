@@ -25,7 +25,9 @@
 # 逐项打印 RC;任一红 ⟹ 末行 `ROUND-CLOSE RED` / `BETWEEN RED` / `WRAP RED` 且 RC=1;全绿 ⟹ `… OK`。--ship 末行 `SHIP OK: PR #N …` / `SHIP RED`。
 #   flow-doc-budget 的 WARN 不算红(它是仪表盘)。
 # 非空转:抽的行必须真在实改集里(先 tracked 轴,空则 ignored 轴与基线比 sha);抽不在实改集里的行永远不红 —— 那不是非空转,是空转。
-# 规则书棘轮:FLOW_LOCAL_DOC 行数记在 FLOW_FLOW_DIR/.rulebook-lines,只许降(变长 = RED);超 FLOW_DOC_BUDGET_RULEBOOK 也 RED。
+# 规则书棘轮:FLOW_LOCAL_DOC **字节**记在 FLOW_FLOW_DIR/.rulebook-bytes,只许降(变长 = RED);行数超 FLOW_DOC_BUDGET_RULEBOOK 也 RED。
+#   0.8.3 把单位从行换成字节:实录一族一行、族内用 ` · ` 串子句(flow-rulebook retire N.k),退一条子句行数纹丝不动 ⟹ 旧单位量不到退役,退与不退同读数。
+#   遇到旧的 .rulebook-lines:先按**旧单位**判一次(换单位不许洗掉一次变长),不红才打字节新基线并删旧件,两个方向的读数都印出来(协议 §J 门定义变了要重打基线)。
 # 读的配置:FLOW_REPO_DIR FLOW_LOCAL_DOC_PATH FLOW_FLOW_DIR_PATH FLOW_DOC_BUDGET_RULEBOOK;
 #   子命令 flow-manifest / flow-route-debts / flow-doc-budget / flow-trace 按名调用(PATH)。
 set -u
@@ -216,24 +218,35 @@ step_budget() {
 }
 
 step_rulebook() {
-  hdr "规则书棘轮 $FLOW_LOCAL_DOC(上限 $FLOW_DOC_BUDGET_RULEBOOK 行;只许降)"
+  hdr "规则书棘轮 $FLOW_LOCAL_DOC(字节只许降;行数上限 $FLOW_DOC_BUDGET_RULEBOOK)"
   if [ -f "$FLOW_LOCAL_DOC_PATH" ]; then
-    cur=$(wc -l < "$FLOW_LOCAL_DOC_PATH" | tr -d ' ')
+    cur=$(wc -c < "$FLOW_LOCAL_DOC_PATH" | tr -d ' ')
+    curl=$(wc -l < "$FLOW_LOCAL_DOC_PATH" | tr -d ' ')
+    rb="$FLOW_FLOW_DIR_PATH/.rulebook-bytes"
     rl="$FLOW_FLOW_DIR_PATH/.rulebook-lines"
-    if [ -f "$rl" ]; then
+    if [ ! -f "$rb" ] && [ -f "$rl" ]; then
       stored=$(tr -d ' \n' < "$rl")
       case "$stored" in ''|*[!0-9]*) flow_die "棘轮记录不是数字,拒绝比对: $rl 内容「$stored」" ;; esac
-      if [ "$cur" -gt "$stored" ]; then
-        echo "RED 规则书变长: $stored → $cur(棘轮只许降;退役规矩后重跑)"; red=1
+      if [ "$curl" -gt "$stored" ]; then
+        echo "RED 规则书变长(旧单位 行): $stored → $curl —— 换单位不洗欠账,先退役再换"; red=1
       else
-        printf '%s\n' "$cur" > "$rl"; echo "OK 规则书棘轮: $stored → $cur"
+        mkdir -p "$FLOW_FLOW_DIR_PATH"; printf '%s\n' "$cur" > "$rb"; rm -f "$rl"
+        echo "OK 规则书棘轮换单位(0.8.3 行 → 字节):旧读数 $stored → $curl 行(未变长);新基线 $cur 字节 → $rb"
+      fi
+    elif [ -f "$rb" ]; then
+      stored=$(tr -d ' \n' < "$rb")
+      case "$stored" in ''|*[!0-9]*) flow_die "棘轮记录不是数字,拒绝比对: $rb 内容「$stored」" ;; esac
+      if [ "$cur" -gt "$stored" ]; then
+        echo "RED 规则书变长: $stored → $cur 字节(棘轮只许降;退役子句 flow-rulebook retire N.k 后重跑)"; red=1
+      else
+        printf '%s\n' "$cur" > "$rb"; echo "OK 规则书棘轮: $stored → $cur 字节($curl 行)"
       fi
     else
-      mkdir -p "$FLOW_FLOW_DIR_PATH"; printf '%s\n' "$cur" > "$rl"
-      echo "OK 规则书棘轮首次记账: $cur 行 → $rl"
+      mkdir -p "$FLOW_FLOW_DIR_PATH"; printf '%s\n' "$cur" > "$rb"
+      echo "OK 规则书棘轮首次记账: $cur 字节($curl 行)→ $rb"
     fi
-    if [ "$cur" -gt "$FLOW_DOC_BUDGET_RULEBOOK" ]; then
-      echo "RED 规则书 $cur 行 > 上限 $FLOW_DOC_BUDGET_RULEBOOK:$FLOW_LOCAL_DOC_PATH"; red=1
+    if [ "$curl" -gt "$FLOW_DOC_BUDGET_RULEBOOK" ]; then
+      echo "RED 规则书 $curl 行 > 上限 $FLOW_DOC_BUDGET_RULEBOOK:$FLOW_LOCAL_DOC_PATH"; red=1
     fi
   else
     echo "  规则书不存在,跳过: $FLOW_LOCAL_DOC_PATH"

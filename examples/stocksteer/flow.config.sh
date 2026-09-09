@@ -80,7 +80,7 @@ FLOW_DOC_BUDGET_HOTPATH=8000           # 回件**热路径节**(〇 索引表 / 
                                        # 为什么不判全文:实测九份回件全文 16–37 KB,按申报件归一是 609–1498 B/件,
                                        # 排序跟着「这轮要证多少」走,不跟着写作风格走。真正被下游每一轮重付的只有 〇+丙(占全文 9%–35%)。
                                        # 实测这条线只有一份破线(11996 B):它的 〇 节是 `(待收工填)` 占位,丙栏 11.9 KB 没有索引可跳。
-FLOW_DOC_BUDGET_RULEBOOK=250           # 规则书(flow-local.md)行数上限;棘轮:只许降
+FLOW_DOC_BUDGET_RULEBOOK=250           # 规则书(flow-local.md)行数上限 = 族数上限;棘轮量字节(.rulebook-bytes,只许降)
 FLOW_DEBT_CAP=8                        # owner 归本任务的欠账条数上限(超过 = 拆任务或 --cap-ok)
 FLOW_DEBT_WARN=16                      # 必读总条数只 WARN 的线
 FLOW_FIX_BY_WRITER=0                   # 0 = ③改轮另起 agent(派单自带上一轮回件索引表,按表跳读);1 = SendMessage 回①写轮本人 —— Claude Code 宿主没有这条通路

@@ -56,7 +56,7 @@ FLOW_DOC_BUDGET_BYTES=40000            # 总字节 WARN 线:读取面还是它(�
 FLOW_DOC_BUDGET_DIR=4000
 FLOW_DOC_BUDGET_HOTPATH=8000           # 回件**热路径节**(〇 索引 / 正面结论 + 丙栏)字节上限,RED;flow-round close 只判本轮自己那份件
                                        # 下游每一轮重读的就这两节;甲栏的证据只有复审轴读一次,不进这条线
-FLOW_DOC_BUDGET_RULEBOOK=250
+FLOW_DOC_BUDGET_RULEBOOK=250           # 规则书(flow-local.md)**行数**上限 = 族数上限;棘轮量的是字节(.rulebook-bytes,只许降)
 FLOW_DEBT_CAP=8
 FLOW_DEBT_WARN=16
 FLOW_FIX_BY_WRITER=0                   # 0 = ③改轮另起 agent(派单自带上一轮回件索引表);1 = SendMessage 回①本人 —— Claude Code 宿主没有这条通路,flow-config --check 判红

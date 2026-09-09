@@ -512,7 +512,7 @@ if write == '--write':
             kk = old.find('\n## 固定开销行(手填')      # 0.6.0 的旧件:手填段从这个标题起,原样保留
             if kk >= 0: tail = '\n' + old[kk + 1:]
     if not tail.strip():
-        tail = '\n\n## 手填(生成段之外;重跑 --write 保留本段)\n\n| 项 | 读数 | 备注 |\n|---|---|---|\n| 本批退役规矩数 | | ≥ 1;退役了哪条、做成了什么(flow-rulebook retire) |\n'
+        tail = '\n\n## 手填(生成段之外;重跑 --write 保留本段)\n\n| 项 | 读数 | 备注 |\n|---|---|---|\n| 本批退役规矩数 | | ≥ 1;退役了哪条、做成了什么(flow-rulebook retire N 或 N.k) |\n'
     with open(p, 'w', encoding='utf-8') as fh:
         fh.write(f'# 轮数账(flow-usage 生成 {datetime.date.today().isoformat()};当量权重 input 1 · cache_creation 1.25 · cache_read 0.1 · output 5)\n\n<!-- flow:gen-begin -->\n{out}\n<!-- flow:gen-end -->' + tail)
     print(f'写入 {p}')

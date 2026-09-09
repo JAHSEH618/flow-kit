@@ -20,7 +20,7 @@
 #   · `.evidence/` 子目录 = 旁证区,不设限不计入 —— 命令全量输出落这里,移交件贴摘录+路径。
 #     (与 §J 硬规矩 1「探测器输出不许截断」是配套:全量都在,判读看旁证件,热路径不背它。)
 # 标记不成对(begin 没有 end,或 end 多出来)⟹ WARN 并把 begin 之后整段算生成段:有人编辑进了生成块,要重跑 flow-dispatch。
-# 另报两份规则书自身的体积(退役纪律的仪表盘):FLOW_LOCAL_DOC > FLOW_DOC_BUDGET_RULEBOOK 行 ⟹ WARN;FLOW_ROOT_DOC 只报 info。
+# 另报两份规则书自身的体积(退役纪律的仪表盘):FLOW_LOCAL_DOC > FLOW_DOC_BUDGET_RULEBOOK 行 ⟹ WARN;FLOW_ROOT_DOC 只报 info。行与字节都印 —— 棘轮判的是字节(0.8.3)。
 # 空目录守卫(§J0):目录里零个 md ⟹ FATAL RC=2 —— 「没超预算」与「没扫到东西」不许长一个样。
 #
 # 用法: flow-doc-budget <流程目录>...        每件逐行给判定(贴 N 件 / 判 N 件),RC: 0 绿 / 1 有 RED / 2 FATAL
@@ -96,11 +96,12 @@ done
 
 for rb in "$FLOW_LOCAL_DOC_PATH" "$FLOW_ROOT_DOC_PATH"; do
   [ -f "$rb" ] || continue
-  rl=$(wc -l < "$rb" | tr -d ' ')
+  rl=$(wc -l < "$rb" | tr -d ' '); rby=$(wc -c < "$rb" | tr -d ' ')
   if [ "$rb" = "$FLOW_LOCAL_DOC_PATH" ] && [ "$rl" -gt "$FLOW_DOC_BUDGET_RULEBOOK" ]; then
-    echo "WARN 规则书 $rl 行 > $FLOW_DOC_BUDGET_RULEBOOK:$rb —— 退役纪律该干活了(散文做成工具后降一行指针)"
+    echo "WARN 规则书 $rl 行 / $rby 字节 > $FLOW_DOC_BUDGET_RULEBOOK 行:$rb —— 退役纪律该干活了(散文做成工具后降一行指针)"
   else
-    echo "info 规则书 $rl 行:$rb"
+    note=""; [ "$rb" = "$FLOW_LOCAL_DOC_PATH" ] && note="(棘轮量字节)"
+    echo "info 规则书 $rl 行 / $rby 字节:$rb$note"
   fi
 done
 

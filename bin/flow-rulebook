@@ -1,72 +1,171 @@
 #!/bin/sh
-# flow-rulebook —— 规则书(FLOW_LOCAL_DOC)的退役:把第 N 行逐字搬进同目录 <名>-archive.md 的一个新节,原文件删那一行。
+# flow-rulebook —— 规则书(FLOW_LOCAL_DOC)的退役:把第 N 行、或第 N 行的第 k 个子句,逐字搬进同目录 <名>-archive.md 的一个新节,原处删掉。
 # 病根:退役是每批 ≥1 次的机械动作(协议 §5 棘轮),p4e 实测编排方手做 3 个请求,其中一次自己 heredoc 里的 $(...) 把归档件污染了一回。
 #   逐字归档 = 拿到的字节原样落盘,不经 shell 展开;这里用 python 搬,行内容不进任何 shell 字符串。
-# 用法: flow-rulebook show                                              → 带行号打印规则书(退役前找行号用)
-#       flow-rulebook retire <行号> --section "<§X · 批次>" --reason "<一句>"
+# 用法: flow-rulebook show [行号]                                       → 不给行号 = 带行号打印全书;给行号 = 打印那行的子句号(退子句前用)
+#       flow-rulebook retire <行号>     --section "<§X · 批次>" --reason "<一句>"   → 整行退役
+#       flow-rulebook retire <行号>.<k> --section "<§X · 批次>" --reason "<一句>"   → 子句退役(0.8.3)
+# 子句(0.8.3):实录一族一行、族内用 ` · ` 串子句,于是「退一条规矩」在行数上量不到 —— 退役与不退役读数同为 N 行,是结构性假绿。
+#   切分按 ` · ` 且**只切括号深度 0**(()（）「」『』《》[]【】,反引号内不切):第 8 行那种号段枚举 `(P0-1 占 1–50 · P1-1 …)` 整体是一条,
+#   括号里的 ` · ` 切开就把一条规矩劈成两半。落盘前断言「子句拼回去 == 原行逐字」,拼不回就 FATAL(切分器错了不许写树)。
+#   行首的列表符与**标题**(到首个深度 0 的冒号为止,半角全角都认,`://` 不算)是 k=0,不可退:退第 1 个子句时标题留在原地,`retire N` 才是整行走。
+#   子句退役不动行数,只降字节 ⟹ 棘轮 0.8.3 起量**字节**(flow-close / flow-freshness),行数只剩「族数」上限那一道。
 #   归档件 = FLOW_LOCAL_DOC 去掉 .md 加 -archive.md(协议 §5:退役件逐字归档到工作区 .claude/flow-local-archive.md);不存在就建。
-#   新节体例:`## <section> · 退役(<日期>)` + 「退役件(原 `<文件>` 第 N 行,逐字)」+ 那一行 + 「退役理由:<reason>」。
+#   新节体例:`## <section> · 退役(<日期>)` + 「退役件(原 `<文件>` 第 N 行[第 k 子句],逐字)」+ 那一行/那一子句 + 「退役理由:<reason>」。
 #   文件名进反引号(0.8.1):归档件受仓侧「纯文本指针」棘轮管,裸文件名每退役一条就多一处命中 —— 退役越勤门越红。
 #   协议 §5 既要求每批 ≥1 条退役、又禁止为过线抬阈值 ⟹ 这是结构性递增的假红源,不是偶发。
-# 末行固定:`RULEBOOK OK: 第 N 行 → <归档件> §…;规则书 a → b 行`;行号越界 / 标题行 / 空行 ⟹ FATAL RC=2(标题与空行不是规矩,退它们是空转)。
-#   棘轮读数(.rulebook-lines)不在这里动:flow-close 收口那一步量,只许降。
+# 末行固定:`RULEBOOK OK: <退的是谁> → <归档件> §…;规则书 a → b 行 / c → d 字节`
+#   行号越界 / 标题行 / 空行 ⟹ FATAL RC=2(标题与空行不是规矩,退它们是空转);子句号越界、k=0、整行只有 1 个子句 ⟹ 同。
+#   棘轮读数(.rulebook-bytes)不在这里动:flow-close 收口那一步量,只许降。
 # 读的配置:FLOW_LOCAL_DOC_PATH
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
 flow_load_config
 
-usage() { echo "用法: flow-rulebook show | retire <行号> --section \"<§X · 批次>\" --reason \"<一句>\"" >&2; exit 2; }
+usage() { echo "用法: flow-rulebook show [行号] | retire <行号>[.<子句号>] --section \"<§X · 批次>\" --reason \"<一句>\"" >&2; exit 2; }
 CMD="${1:-}"; [ -n "$CMD" ] || usage; shift
 [ -f "$FLOW_LOCAL_DOC_PATH" ] || flow_die "规则书不存在: $FLOW_LOCAL_DOC_PATH(FLOW_LOCAL_DOC=$FLOW_LOCAL_DOC)"
 ARCH="${FLOW_LOCAL_DOC_PATH%.md}-archive.md"
 
+SHOWLINE=""
 case "$CMD" in
   show)
-    [ $# -eq 0 ] || usage
-    awk '{printf "%4d  %s\n", NR, $0}' "$FLOW_LOCAL_DOC_PATH"
-    echo "RULEBOOK OK: $(wc -l < "$FLOW_LOCAL_DOC_PATH" | tr -d ' ') 行;归档件 $ARCH"
-    exit 0 ;;
+    [ $# -le 1 ] || usage
+    if [ $# -eq 1 ]; then
+      SHOWLINE="$1"
+      case "$SHOWLINE" in ''|*[!0-9]*) flow_die "行号须为正整数: $SHOWLINE" ;; esac
+    else
+      awk '{printf "%4d  %s\n", NR, $0}' "$FLOW_LOCAL_DOC_PATH"
+      echo "RULEBOOK OK: $(wc -l < "$FLOW_LOCAL_DOC_PATH" | tr -d ' ') 行 / $(wc -c < "$FLOW_LOCAL_DOC_PATH" | tr -d ' ') 字节;归档件 $ARCH"
+      exit 0
+    fi ;;
   retire) ;;
   *) usage ;;
 esac
 
-N="${1:-}"; [ -n "$N" ] || usage; shift
-case "$N" in ''|*[!0-9]*) flow_die "行号须为正整数: $N" ;; esac
-SECTION=""; REASON=""
-while [ $# -gt 0 ]; do
-  case "$1" in --section|--reason) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
-  case "$1" in
-    --section) SECTION="$2"; shift 2 ;;
-    --reason) REASON="$2"; shift 2 ;;
-    *) usage ;;
+if [ -n "$SHOWLINE" ]; then
+  N="$SHOWLINE"; K=""; SECTION=""; REASON=""; MODE=show
+else
+  MODE=retire
+  TARGET="${1:-}"; [ -n "$TARGET" ] || usage; shift
+  case "$TARGET" in
+    *.*) N="${TARGET%%.*}"; K="${TARGET#*.}"
+         case "$K" in ''|*[!0-9]*) flow_die "子句号须为非负整数: $TARGET(先跑 flow-rulebook show <行号> 看子句号)" ;; esac ;;
+    *)   N="$TARGET"; K="" ;;
   esac
-done
-[ -n "$SECTION" ] && [ -n "$REASON" ] || flow_die "retire 必填:--section 与 --reason(退役理由是判断,不由脚本编)"
+  case "$N" in ''|*[!0-9]*) flow_die "行号须为正整数: $TARGET" ;; esac
+  SECTION=""; REASON=""
+  while [ $# -gt 0 ]; do
+    case "$1" in --section|--reason) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
+    case "$1" in
+      --section) SECTION="$2"; shift 2 ;;
+      --reason) REASON="$2"; shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  [ -n "$SECTION" ] && [ -n "$REASON" ] || flow_die "retire 必填:--section 与 --reason(退役理由是判断,不由脚本编)"
+fi
 
-python3 - "$FLOW_LOCAL_DOC_PATH" "$ARCH" "$N" "$SECTION" "$REASON" <<'PY'
-import sys, os, datetime
-doc, arch, n, section, reason = sys.argv[1:6]
-n = int(n)
+python3 - "$FLOW_LOCAL_DOC_PATH" "$ARCH" "$N" "$K" "$SECTION" "$REASON" "$MODE" <<'PY'
+import sys, os, re, datetime
+doc, arch, n, k, section, reason, mode = sys.argv[1:8]
+n = int(n); k = int(k) if k != '' else None
+
+SEP = ' · '
+PAIRS = {'(': ')', '（': '）', '「': '」', '『': '』', '《': '》', '[': ']', '【': '】'}
+CLOSERS = set(PAIRS.values())
+
+def die(msg):
+    print('FATAL: ' + msg, file=sys.stderr); sys.exit(2)
+
+def split_clauses(line):
+    """按 SEP 切,只在括号深度 0 且不在反引号内处切。拼回去逐字等于原行(调用方断言)。"""
+    depth = 0; incode = False; out = []; start = 0; i = 0; L = len(line)
+    while i < L:
+        ch = line[i]
+        if ch == '`':
+            incode = not incode; i += 1; continue
+        if not incode:
+            if ch in PAIRS: depth += 1
+            elif ch in CLOSERS and depth > 0: depth -= 1
+            if depth == 0 and line.startswith(SEP, i):
+                out.append(line[start:i]); i += len(SEP); start = i; continue
+        i += 1
+    out.append(line[start:])
+    return out
+
+def split_head(first):
+    """列表符 + 标题(到首个深度 0 的全角冒号为止)= 不可退的 k=0;其余是第 1 个子句的正文。"""
+    m = re.match(r'^(\s*(?:[-*+]\s+|\d+[.)]\s+)?)', first)
+    marker = m.group(1); rest = first[len(marker):]
+    depth = 0; incode = False
+    for i, ch in enumerate(rest):
+        if ch == '`':
+            incode = not incode; continue
+        if incode: continue
+        if ch in PAIRS: depth += 1
+        elif ch in CLOSERS and depth > 0: depth -= 1
+        elif ch in ':：' and depth == 0 and rest[i+1:i+3] != '//':
+            return marker + rest[:i+1], rest[i+1:]
+    return marker, rest
+
 lines = open(doc, encoding='utf-8').read().split('\n')
 if lines and lines[-1] == '': lines.pop()          # 尾换行不算一行
 total = len(lines)
+bytes0 = sum(len(l.encode('utf-8')) + 1 for l in lines)
 if not (1 <= n <= total):
-    print(f'FATAL: 行号 {n} 越界(规则书共 {total} 行;flow-rulebook show 看行号)', file=sys.stderr); sys.exit(2)
+    die(f'行号 {n} 越界(规则书共 {total} 行;flow-rulebook show 看行号)')
 line = lines[n - 1]
 if not line.strip():
-    print(f'FATAL: 第 {n} 行是空行,不是规矩', file=sys.stderr); sys.exit(2)
+    die(f'第 {n} 行是空行,不是规矩')
 if line.lstrip().startswith('#'):
-    print(f'FATAL: 第 {n} 行是标题「{line.strip()[:40]}」,不是规矩(退标题会把整段孤儿化)', file=sys.stderr); sys.exit(2)
+    die(f'第 {n} 行是标题「{line.strip()[:40]}」,不是规矩(退标题会把整段孤儿化)')
+
+parts = split_clauses(line)
+if SEP.join(parts) != line:
+    die(f'切分器自检未过:第 {n} 行的子句拼不回原行,拒绝写树')
+head, first_body = split_head(parts[0])
+bodies = [first_body] + parts[1:]
+if head + SEP.join(bodies) != line:
+    die(f'切分器自检未过:第 {n} 行的标题 + 子句拼不回原行,拒绝写树')
+
+if mode == 'show':
+    print(f'第 {n} 行:{len(bodies)} 个子句 / {len(line.encode("utf-8"))} 字节')
+    if head:
+        print(f'  {n}.0  (标题,不可退)  {head}')
+    for i, b in enumerate(bodies, 1):
+        print(f'  {n}.{i}  [{len(b.encode("utf-8")):5d} B]  {b}')
+    print(f'RULEBOOK OK: 第 {n} 行 {len(bodies)} 个子句;规则书 {total} 行 / {bytes0} 字节;归档件 {arch}')
+    sys.exit(0)
+
+if k is None:
+    retired = line
+    what = f'第 {n} 行'
+    arch_label = f'原 `{os.path.basename(doc)}` 第 {n} 行,逐字'
+    del lines[n - 1]
+else:
+    if k == 0:
+        die(f'{n}.0 是列表符与标题「{head}」,不是规矩;整行退役用 flow-rulebook retire {n}')
+    if len(bodies) == 1:
+        die(f'第 {n} 行只有 1 个子句,子句退役等于整行退役 —— 用 flow-rulebook retire {n}')
+    if not (1 <= k <= len(bodies)):
+        die(f'子句号 {k} 越界(第 {n} 行共 {len(bodies)} 个子句;flow-rulebook show {n} 看子句号)')
+    retired = bodies[k - 1]
+    what = f'第 {n} 行第 {k} 子句'
+    arch_label = f'原 `{os.path.basename(doc)}` 第 {n} 行第 {k} 子句,逐字'
+    rest = bodies[:k - 1] + bodies[k:]
+    lines[n - 1] = head + SEP.join(rest)
+
 today = datetime.date.today().isoformat()
 block = (f'\n## {section} · 退役({today})\n\n'
-         f'**退役件(原 `{os.path.basename(doc)}` 第 {n} 行,逐字)**:\n\n{line}\n\n退役理由:{reason}\n')
+         f'**退役件({arch_label})**:\n\n{retired}\n\n退役理由:{reason}\n')
 old = open(arch, encoding='utf-8').read() if os.path.exists(arch) else f'# `{os.path.basename(doc)}` 退役件归档(逐字;由 `flow-rulebook` 追加)\n'
 if not old.endswith('\n'): old += '\n'
 tmp = arch + '.flow-rulebook.new'
 open(tmp, 'w', encoding='utf-8').write(old + block); os.replace(tmp, arch)
-del lines[n - 1]
 tmp = doc + '.flow-rulebook.new'
 open(tmp, 'w', encoding='utf-8').write('\n'.join(lines) + '\n'); os.replace(tmp, doc)
-print(f'归档:{line[:80]}')
-print(f'RULEBOOK OK: 第 {n} 行 → {arch} §「{section}」;规则书 {total} → {total - 1} 行')
+bytes1 = sum(len(l.encode('utf-8')) + 1 for l in lines)
+print(f'归档:{retired[:80]}')
+print(f'RULEBOOK OK: {what} → {arch} §「{section}」;规则书 {total} → {len(lines)} 行 / {bytes0} → {bytes1} 字节')
 PY
