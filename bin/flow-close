@@ -3,11 +3,13 @@
 #   默认(轮收工):§B5 冻结核对 + 非空转 + 交付态哈希 + 账本 lint + 文档预算 + 规则书棘轮。
 #   --between(轮间交接口):交付态哈希 + 冻结核对 + 非空转 + 树读数 + 路由复跑 + REQ 对账 + 文档预算。(flow-round close 按约定名调它)
 #       REQ 对账拿到 RC=3(TRACE N/A,本仓 plan 不写 REQ 行)印 info 不判红 —— 「不适用」与「不达标」不许同型(0.7.1)。
-#   --wrap(收口机械段,0.6.0):三态表 dry-run → 索引重渲 → 账本 lint → REQ 对账 → REQ 翻 done(0.7.0,对账绿才翻)→ 门整跑(收口那一次;末尾印一行可照抄的门读数)
-#       → 默认模式六项 → 轮数账 --write → 状态档事实段;末行 WRAP OK 之后印剩余手工步清单(编排方不必再读 close-block.md)。
+#   --wrap(收口机械段,0.6.0;步序 0.8.2 调过):交付态哈希 → manifest verify → 非空转(**以上三条先核树**)
+#       → 三态表 dry-run → 账本 lint → REQ 对账 →(对账绿才动树)索引重渲 + REQ 翻 done → 门整跑(收口那一次;末尾印一行可照抄的门读数)
+#       → 文档预算 → 规则书棘轮 → 轮数账 --write → 状态档事实段;末行 WRAP OK 之后印剩余手工步清单(编排方不必再读 close-block.md)。
 #       病根:收口十步里的机械步曾各占编排方一个请求(ShipLedger 收口 ≈60 min、StockSteer 20+27 min);这里一条命令、一行末行。
 #       判断步(账本 diff 审、spec 落地记录、根文档读数、commit 消息)仍归编排方 —— 它们不是机械的。
-#       ⚠ --plan 给了就会改 plan 文件(翻 REQ 状态):它必须在编排方的申报清单里,否则后面的 verify 会红「漏申报」。
+#       ⚠ --plan 给了就会改 plan 文件(翻 REQ 状态):它必须在编排方的申报清单里,否则 verify 会红「漏申报」;
+#         而它在清单里**也会**因为被改而让交付态哈希红 —— 所以 0.8.2 起交付态三条排在两个写手之前,核完树再动树。
 #   --ship(收口提交后,0.6.0):clear-map-debt → **队列落笔** → push dev → gh pr create → flow-pr-merge --background,一条命令四个请求;
 #       队列落笔(0.8.1):clear-map-debt 只写工作树,而下一步直接 push ⟹ 中间零提交,队列的清空**按定义**进不了本批自己的 PR
 #         (P2-2 那次没暴露,只因为下一批的合并比人快)。这里按 pathspec 单独落一笔,不扫工作树里的其它脏东西,
@@ -287,9 +289,17 @@ if [ "$MODE" = between ]; then
   if [ "$red" = 0 ]; then echo "BETWEEN OK"; exit 0; else echo "BETWEEN RED"; exit 1; fi
 fi
 if [ "$MODE" = wrap ]; then
-  step_verdicts; step_index; step_lint; step_trace
-  if [ "$red" = 0 ]; then step_markdone; else echo "== (REQ 翻 done 跳过:前面已红,先修)=="; fi
-  step_gates; step_manifest; step_hollow; step_after; step_budget; step_rulebook; step_usage; step_state
+  # —— 0.8.2 调步序:先核交付态,再让 kit 自己动树 ——
+  # 这一段里有两个写手:step_index(`flow-render-index --write` 改索引文档)与 step_markdone(`flow-trace --mark-done` 改 plan)。
+  # 它们原本排在 step_after / step_manifest / step_hollow **之前**,而 plan 与索引文档都在编排方的申报清单里
+  # ⟹ 交付态哈希核的是 kit 刚改过的树,`--plan` 一旦真翻了 REQ 状态,after 那条必红。
+  # ShipLedger P3-3 没炸,只因为它的 plan 零 REQ 行(TRACE N/A ⟹ 零翻转);换到写 REQ 行的仓,收口第一次就红在最贵的时刻。
+  # 头注原先只想到「plan 要在申报清单里,否则 verify 报漏申报」,漏了「在清单里也会因为被改而红」这半边。
+  # 两个写手另外都挪到 red=0 之后:树已经红了就别再往里写,修完重跑即可(两者都幂等)。
+  step_after; step_manifest; step_hollow
+  step_verdicts; step_lint; step_trace
+  if [ "$red" = 0 ]; then step_index; step_markdone; else echo "== (索引重渲 与 REQ 翻 done 跳过:前面已红,先修完再让 kit 动树)=="; fi
+  step_gates; step_budget; step_rulebook; step_usage; step_state
   if [ "$red" = 0 ]; then
     cat <<WOK
 WRAP OK: 机械段全绿。剩下的归编排方(判断步,照这个顺序;不必再读 close-block.md):

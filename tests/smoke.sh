@@ -105,7 +105,8 @@ expect_rc 1 "flow-doc-budget 自写字节红线(1 行 48001 字节)" flow-doc-bu
 printf '%s' "$LAST_OUT" | grep -q 'RED .*自写 48001 字节 > 40000' && ok "自写超限点名" || fail "自写超限未点名: $LAST_OUT"
 head -c 38000 /dev/zero | tr '\0' y > "$FL/97-near.md"; printf '\n' >> "$FL/97-near.md"
 expect_rc 1 "近线件不改红绿(同目录仍有 RED 件)" flow-doc-budget "$FL"
-printf '%s' "$LAST_OUT" | grep -q 'WARN 自写 1 行 38001 字节.*97-near.md(自写 > 字节线的 90%' && ok "90% 近线 WARN" || fail "近线未 WARN: $(printf '%s' "$LAST_OUT" | grep 97-near)"
+printf '%s' "$LAST_OUT" | grep -q 'info 自写 1 行 38001 字节.*97-near.md(自写 > 字节线的 90%' && ok "90% 近线降成 info(0.8.2:该判的是热路径节,由 flow-round close 判)" || fail "近线行体例错: $(printf '%s' "$LAST_OUT" | grep 97-near)"
+printf '%s' "$LAST_OUT" | grep -q 'WARN.*97-near.md' && fail "近线仍是 WARN(它会在每次 flow-round open 重喊一遍)" || ok "近线不再进 WARN 面"
 rm -f "$FL/97-near.md"
 # 生成段豁免:48 KB 全在 flow:gen 里 ⟹ 自写 0,只按总字节 WARN,不 RED(派单件从前每批都要一句 budget-ok 带过)
 { printf '<!-- flow:gen-begin -->\n'; head -c 48000 /dev/zero | tr '\0' g; printf '\n<!-- flow:gen-end -->\n'; } > "$FL/96-gen.md"
@@ -573,7 +574,8 @@ expect_rc 0 "flow-step done 1(为续轮)" flow-step done "$FR" ①写 1 "写完"
 expect_rc 0 "flow-dispatch --resume" flow-dispatch --resume "$FR/01-dispatch.md" --dir "$FR" --round ①写
 printf '%s' "$LAST_OUT" | grep -q '①写-续' && ok "续轮派单头" || fail "续轮派单头缺"
 printf '%s' "$LAST_OUT" | grep -q '已勾 1 / 共 4 · 下一步 2' && ok "续轮从第 2 步接手" || fail "续轮接手点错: $(printf '%s' "$LAST_OUT" | grep 已勾)"
-expect_rc 2 "flow-dispatch --resume 无步骤账 FATAL" flow-dispatch --resume "$FR/01-dispatch.md" --dir "$FR" --round ④B
+flow-dispatch T1 --tree 活树-独占 --db 禁用 --seq 1 --round ④B src/a.ts > "$FR/04b-dispatch.md" 2>/dev/null   # 不带 --dir ⟹ 不建步骤账
+expect_rc 2 "flow-dispatch --resume 无步骤账 FATAL" flow-dispatch --resume "$FR/04b-dispatch.md" --dir "$FR"
 # flow-round open / close / state
 git add -A >/dev/null 2>&1; git commit -qm pre-round >/dev/null 2>&1
 expect_rc 1 "flow-round open 撞 fact-lint 新增 RED 先红、不打基线(F-13)" flow-round open "$FR" ①写
@@ -588,7 +590,7 @@ expect_rc 1 "flow-round open 重开 RED(基线已存在)" flow-round open "$FR" 
 # 模拟 agent 收工:改 a.ts、申报、冻结、回件、勾步骤
 printf 'round\n' >> src/a.ts; printf 'src/a.ts\n' > "$FR/.declared-①写.txt"
 expect_rc 0 "flow-freeze(约定名)" flow-freeze "$FR/.after-①写-hashes.txt"
-printf '# ①写 回件 · 冒烟\n' > "$FR/01-write-handoff.md"
+printf '# ①写 回件 · 冒烟\n\n## 〇 · 改动索引表\n| src/a.ts | 1-2 | 改 | REQ-T1-01 |\n\n## 丙栏 · 自报三处最没把握\n- a.ts 那行\n' > "$FR/01-write-handoff.md"
 # glob 诱饵:同 01 前缀、mtime 更新、却是别的轮的回件 —— prefix+mtime 那套会取它(P3-1 状态档 14 行行行错就是这个机制)
 printf '# ②A 回件 · 诱饵\n' > "$FR/01-review-external.md"
 expect_rc 1 "flow-round close 步骤未全勾 RED" flow-round close "$FR" ①写 --task T1
@@ -625,7 +627,7 @@ rm -f "$WS/specs/plan-big.md" "$WS/specs/plan-long.md"
 cd "$WS"
 # F-24:未加引号的 heredoc 里 \\` 留下活反引号,把 flow-manifest verify / git status / ls 真跑了、输出嵌进派单
 flow-step init "$FR" ④B "装载" "主活" >/dev/null 2>&1
-expect_rc 0 "flow-dispatch --resume(F-24)" flow-dispatch --resume "$FR/01-dispatch.md" --dir "$FR" --round ④B
+expect_rc 0 "flow-dispatch --resume(F-24)" flow-dispatch --resume "$FR/04b-dispatch.md" --dir "$FR" --round ④B
 printf '%s' "$LAST_OUT" | grep -qF '`flow-step done '"$FR"' ④B <N> "<一句>"`' && ok "续轮派单反引号是字面量" || fail "续轮派单反引号仍活着: $(printf '%s' "$LAST_OUT" | grep -n 'flow-step done' | head -2)"
 printf '%s' "$LAST_OUT" | grep -qE 'No such file|On branch|申报清单不存在' && fail "续轮派单嵌进了命令输出(F-24)" || ok "续轮派单零命令输出"
 # [done] REQ 行不印;--db 禁用 的收工段不给门整跑,独占的给
@@ -837,5 +839,124 @@ expect_rc 1 "flow-close --ship 支c 重跑(非空转对照)" flow-close --ship "
 printf '%s' "$LAST_OUT" | grep -q 'info 队列件与 HEAD 逐字节相同' && ok "重跑退回「逐字节相同」—— 落笔那支不是恒真分支" || fail "重跑读数没变(落笔支恒真)"
 [ "$(git rev-parse --short HEAD)" = "$HC" ] && ok "重跑零新增 commit" || fail "重跑又落了一笔"
 git checkout -- src/b.ts
+
+# ── 23. 0.8.2:续轮轮名 / 门读数串轮 / 词分割守卫 / 回件三判 / wrap 步序 / 快照守卫 / 门整跑计数 / 角色表 ──
+cd "$WS"
+F82="$WS/.flow/r82"; mkdir -p "$F82/.evidence"
+
+# (1) 续轮轮名同源:--round 带 -续 判死 · --round 可省 · 续轮不接续轮 · 与原派单对不上判死
+flow-dispatch T1 --tree 活树-独占 --db 禁用 --seq 1 --round ①写 --dir "$F82" src/a.ts > "$F82/01-dispatch.md" 2>/dev/null
+flow-step done "$F82" ①写 1 x >/dev/null 2>&1
+expect_rc 2 "--resume --round 带 -续 判死(轮名翻倍的入口)" flow-dispatch --resume "$F82/01-dispatch.md" --dir "$F82" --round ①写-续
+expect_rc 0 "--resume 省 --round:轮名自原派单「轮次 / 模型」行取" flow-dispatch --resume "$F82/01-dispatch.md" --dir "$F82"
+printf '%s' "$LAST_OUT" | grep -q '派单必带块 —— ①写-续(' && ok "续轮名恰好一层 -续" || fail "续轮名错: $(printf '%s' "$LAST_OUT" | grep 派单必带块)"
+printf '%s' "$LAST_OUT" | grep -q '①写-续-续' && fail "轮名仍翻倍" || ok "轮名没翻倍(①写-续-续 不出现)"
+flow-dispatch --resume "$F82/01-dispatch.md" --dir "$F82" > "$F82/01r-dispatch.md" 2>/dev/null
+expect_rc 2 "续轮不接续轮(原派单本身是续轮派单)" flow-dispatch --resume "$F82/01r-dispatch.md" --dir "$F82"
+expect_rc 2 "--resume --round 与原派单对不上判死" flow-dispatch --resume "$F82/01-dispatch.md" --dir "$F82" --round ②A
+expect_rc 2 "flow-round open 轮名带 -续 判死(续轮不开新轮)" flow-round open "$F82" ①写-续
+
+# (2) 门读数不串轮:前缀相邻的两轮,只有 ③改二 跑过门 —— ③改 那格必须空
+printf 'x\n' > "$F82/.manifest-baseline-③改.txt"; printf 'x\n' > "$F82/.manifest-baseline-③改二.txt"
+printf 'FLOW-GATES PASS key=deadbeefcafe1234 out=/tmp/gateout\n' > "$F82/.evidence/③改二-gates.txt"
+expect_rc 0 "flow-round state(前缀相邻两轮)" flow-round state "$F82"
+grep -E '^\| ③改 \|' "$F82/00-ORCH-STATE.md" | grep -q 'deadbeefcafe1234' && fail "③改 行吃到了 ③改二 的门读数(glob 串轮)" || ok "门读数不串轮(按约定件名精确取)"
+grep -E '^\| ③改二 \|' "$F82/00-ORCH-STATE.md" | grep -q 'FLOW-GATES PASS key=deadbeefcafe1234' && ok "③改二 行有自己的整条 key(不再 cut -c1-60 切半截)" || fail "③改二 门读数错: $(grep -E '^\| ③改二 \|' "$F82/00-ORCH-STATE.md")"
+grep -E '^\| ③改二 \|' "$F82/00-ORCH-STATE.md" | grep -q 'out=' && fail "门读数仍带 out= 半截路径" || ok "门读数去掉 out=,不切字节"
+
+# (3) 词分割守卫(库函数,两处共用):整份清单塞进一个实参当场 FATAL
+expect_rc 2 "flow-route-debts 单实参含空白 FATAL(zsh 不对变量分词)" flow-route-debts T1 "src/a.ts src/b.ts"
+expect_rc 2 "flow-dispatch 触面含空白 FATAL" flow-dispatch T1 --tree 快照 --db 禁用 --seq 1 "src/a.ts src/b.ts"
+expect_rc 0 "同样两条路径逐条传则照跑(守卫不误伤)" flow-route-debts T1 src/a.ts src/b.ts
+
+# (4)(5) 起一轮真的:回件三判与 wrap 步序都要一棵与基线对得上的树 —— 借用前面几节留下的旧轮,红的会是「树早就变了」而不是判据
+cd "$WS"
+git add -A >/dev/null 2>&1; git commit -qm 'r82 起点' >/dev/null 2>&1
+flow-fact-lint baseline >/dev/null 2>&1
+rm -f "$WS/.flow/.rulebook-lines"          # 规则书棘轮重新记账:本节判的是步序,不是规则书长短
+expect_rc 0 "flow-round open(0.8.2 用轮)" flow-round open "$F82" ①写
+printf 'r82\n' >> src/a.ts
+printf 'src/a.ts\n' > "$F82/.declared-①写.txt"
+flow-freeze "$F82/.after-①写-hashes.txt" >/dev/null 2>&1
+i=0; while [ $i -lt 12 ]; do i=$((i+1)); flow-step done "$F82" ①写 $i >/dev/null 2>&1; done
+H82="$F82/01-write-handoff.md"
+GOOD82='# ①写 回件 · 冒烟\n\n## 〇 · 改动索引表\n| src/a.ts | 1-2 | 改 | REQ-T1-01 |\n\n## 丙栏 · 自报三处最没把握\n- a.ts 那行\n'
+printf "$GOOD82" > "$H82"
+expect_rc 0 "flow-round close(基准绿:下面三条 RED 才有意义)" flow-round close "$F82" ①写 --task T1
+
+# (4) 回件三判:〇节占位 RED · 热路径节破线 RED · 首行认不出 RED(不再 glob 猜)
+printf '# ①写 回件 · 冒烟\n\n## 〇 · 改动索引表\n(待收工填)\n\n## 丙栏 · 自报三处最没把握\n- 一\n' > "$H82"
+expect_rc 1 "flow-round close:〇节留占位 RED" flow-round close "$F82" ①写 --task T1
+printf '%s' "$LAST_OUT" | grep -q '〇节还是占位' && ok "点名〇节占位(下游没索引可跳)" || fail "未点名占位: $(printf '%s' "$LAST_OUT" | grep -A2 热路径)"
+{ printf '# ①写 回件 · 冒烟\n\n## 〇 · 改动索引表\n'; i=0; while [ $i -lt 300 ]; do i=$((i+1)); printf '| src/a.ts | %s | 改 | REQ-T1-01 |\n' "$i"; done; printf '\n## 丙栏 · 自报三处最没把握\n- 一\n'; } > "$H82"
+expect_rc 1 "flow-round close:热路径节破线 RED" flow-round close "$F82" ①写 --task T1
+printf '%s' "$LAST_OUT" | grep -qE '热路径节 [0-9]+ 字节 > ' && ok "热路径节(〇+丙)按字节判红" || fail "热路径未判红: $(printf '%s' "$LAST_OUT" | grep 热路径)"
+printf '# 我随手起的标题\n\n## 〇 · 索引\n- 有内容\n\n## 丙栏\n- 一\n' > "$H82"
+expect_rc 1 "flow-round close:回件首行认不出 RED(0.8.2 不再 glob 猜)" flow-round close "$F82" ①写 --task T1
+printf '%s' "$LAST_OUT" | grep -q '没有一份 md 的首行是' && ok "认不出直接 RED 并给改法" || fail "认不出未 RED: $(printf '%s' "$LAST_OUT" | grep -A2 回件)"
+printf '%s' "$LAST_OUT" | grep -q '退回 glob 猜' && fail "仍退回 glob 猜" || ok "不再退回 glob 猜"
+printf "$GOOD82" > "$H82"
+expect_rc 0 "flow-round close 复原后仍绿(上面三条不是恒红)" flow-round close "$F82" ①写 --task T1
+
+# (5) wrap 步序:交付态三条必须排在两个写手(索引重渲 / REQ 翻 done)之前。
+#     申报清单**只报 src/a.ts**:旧步序下 flow-render-index --write 会先把索引文档弄脏,verify 当场报「漏申报 CLAUDE.md」
+expect_rc 0 "flow-close --wrap(步序;申报只报实改件)" flow-close --wrap "$F82" "$F82/.manifest-baseline-①写.txt" "$F82/.declared-①写.txt" "$F82/.after-①写-hashes.txt" --task T1
+printf '%s\n' "$LAST_OUT" > "$T/wrap82.txt"
+a82=$(grep -n '^== [0-9]*\. 交付态哈希' "$T/wrap82.txt" | head -1 | cut -d: -f1)
+m82=$(grep -n '^== [0-9]*\. flow-manifest verify' "$T/wrap82.txt" | head -1 | cut -d: -f1)
+h82=$(grep -n '^== [0-9]*\. 非空转' "$T/wrap82.txt" | head -1 | cut -d: -f1)
+b82=$(grep -n '^== [0-9]*\. flow-render-index' "$T/wrap82.txt" | head -1 | cut -d: -f1)
+if [ -n "$a82" ] && [ -n "$m82" ] && [ -n "$h82" ] && [ -n "$b82" ] && [ "$a82" -lt "$b82" ] && [ "$m82" -lt "$b82" ] && [ "$h82" -lt "$b82" ]; then
+  ok "wrap 步序:交付态哈希 $a82 · verify $m82 · 非空转 $h82 全在索引重渲 $b82 之前(先核树再动树)"
+else fail "wrap 步序错:交付态 $a82 · verify $m82 · 非空转 $h82 · 索引重渲 $b82"; fi
+grep -q '^== 1\. 交付态哈希' "$T/wrap82.txt" && ok "交付态哈希是 wrap 的第 1 步" || fail "第 1 步不是交付态哈希: $(head -1 "$T/wrap82.txt")"
+
+# (6) 快照守卫。先立阳性对照:同一笔改动在**本树**上 hook 必记账,否则下面那条守卫是空转(§J0)
+printf '<!-- debt:82 mark:#82 status:open owner:T9 due:T9 touches:src/b.ts title:守卫用 -->\n> #82 正文\n' >> "$WS/specs/debts.md"
+: > "$WS/.claude/map-debt.md"
+printf 'guard-pos\n' >> src/b.ts; git add -A >/dev/null 2>&1; git commit -qm 'hook 阳性对照' >/dev/null 2>&1
+n_pos=$(grep -c '^- \[ \]' "$WS/.claude/map-debt.md" 2>/dev/null || echo 0)
+[ "$n_pos" -ge 1 ] && ok "阳性对照:本树 commit 记了队列($n_pos 条)—— 下面那条守卫不是空转" || fail "hook 在本树上都没记账,守卫测试作废"
+SNAP="$T/snap82"; rm -rf "$SNAP"; cp -R "$WS" "$SNAP"
+n_before=$(grep -c '^- \[ \]' "$SNAP/.claude/map-debt.md" 2>/dev/null || echo 0)
+( cd "$SNAP" && printf 'guard-snap\n' >> src/b.ts && git add -A && git commit -qm '快照里的基线提交' ) >/dev/null 2>&1
+n_after=$(grep -c '^- \[ \]' "$SNAP/.claude/map-debt.md" 2>/dev/null || echo 0)
+[ "$n_after" = "$n_before" ] && ok "快照副本里提交没往快照写队列($n_before → $n_after;冻结的树没被 hook 改)" || fail "快照被 post-commit 改了:$n_before → $n_after"
+grep -qF "$(cd "$WS" && pwd -P)" "$WS/.git/hooks/post-commit" && ok "shim 烙了本树物理路径" || fail "shim 无快照守卫"
+
+# (7) 门整跑次数数 cache.tsv(同一轮跑两次会覆盖同名证据件,旧口径只算一次)
+mkdir -p "$WS/.claude/flow-gates"
+python3 - "$WS/.claude/flow-gates/cache.tsv" <<'PY82'
+import sys, datetime
+def loc(u): return datetime.datetime.fromisoformat(u).astimezone().replace(tzinfo=None).strftime('%Y-%m-%dT%H:%M:%S')
+with open(sys.argv[1], 'a', encoding='utf-8') as f:
+    for k, u in (('k1','2026-09-03T01:01:00+00:00'), ('k2','2026-09-03T01:15:00+00:00'), ('k9','2026-09-04T09:00:00+00:00')):
+        f.write('\t'.join((k, 'reset', loc(u), '/tmp/o', 'PASS')) + '\n')   # 前两条窗内(同一轮第二次整跑)、末条窗外
+PY82
+expect_rc 0 "flow-usage(门整跑数自 cache.tsv)" flow-usage "$FL"
+printf '%s' "$LAST_OUT" | grep -q '| 门整跑次数 | 整跑 2 ' && ok "窗内两次整跑都数到(同名证据件覆盖不再吞掉第二次),窗外那次不数" || fail "门整跑计数错: $(printf '%s' "$LAST_OUT" | grep 门整跑)"
+printf '%s' "$LAST_OUT" | grep -q 'cache.tsv 窗内 recipe=reset 行' && ok "口径写在备注里(读数可溯源)" || fail "备注未写口径"
+
+# (8) 角色表:③改二 / 定点变异 各自成行,不再并进 ③改
+python3 - "$TR" "$FL" <<'PY82R'
+import json, sys, os
+tr, fl = sys.argv[1:3]
+def asst(mid, ts, blocks, out=10):
+    return json.dumps(dict(type='assistant', timestamp=ts, message=dict(id=mid, model='claude-test', usage=dict(input_tokens=5, cache_creation_input_tokens=100, cache_read_input_tokens=1000, output_tokens=out), content=blocks)))
+def user(ts, text):
+    return json.dumps(dict(type='user', timestamp=ts, message=dict(role='user', content=text)), ensure_ascii=False)
+# 真实写法:定点变异 那份 prompt 里也提到 ③改二 —— 旧代码在 ROLE_RE 里找不到「定点变异」,退到全文扫就撞上 ③改
+for name, txt, mid in (
+    ('agent-4.jsonl', f'你是 p1 的 ③改二 agent(按 ④A/④B 并集落 patch)。派单:{fl}/05-dispatch.md', 'ma'),
+    ('agent-5.jsonl', f'你是 p1 的 定点变异 轴,复核 ③改二 的五份顶回。派单:{fl}/06-dispatch.md', 'mb'),
+):
+    with open(os.path.join(tr, 'subagents', name), 'w') as f:
+        f.write(user('2026-09-03T01:12:00.000Z', txt) + '\n')
+        f.write(asst(mid, '2026-09-03T01:12:30.000Z', [dict(type='text', text='done')], out=10) + '\n')
+PY82R
+expect_rc 0 "flow-usage(角色表)" flow-usage "$FL"
+printf '%s' "$LAST_OUT" | grep -q '^| ③改二 |' && ok "③改二 单独成行" || fail "③改二 未成行: $(printf '%s' "$LAST_OUT" | grep -E '^\| ③')"
+printf '%s' "$LAST_OUT" | grep -q '^| 定点变异 |' && ok "定点变异 单独成行(复审轴不再记成改轮时间)" || fail "定点变异 未成行: $(printf '%s' "$LAST_OUT" | grep -E '^\| ')"
+printf '%s' "$LAST_OUT" | grep -q '^| ③改 |' && fail "仍有 ③改 行(两轴又被并进去了)" || ok "没有 ③改 行:两轴各归各的"
 
 [ "$red" = 0 ] && { echo "SMOKE OK"; exit 0; } || { echo "SMOKE RED"; exit 1; }

@@ -1,5 +1,12 @@
 #!/bin/sh
 # flow-kit shim(flow-init 生成,幂等):逻辑在 plugin 的 bin/flow-post-commit;plugin 升级即生效。
+# 快照守卫(0.8.2):这份 shim 属于 @REPO@ 这一棵树,别的树上一律静默退出。
+#   病根:变异轴的快照是 rsync 副本(连 .git 一起拷),副本里有它自己的 .claude/flow.config.sh,
+#   于是 flow-post-commit 那条「pwd == FLOW_REPO_DIR」守卫在副本里**照样成立** —— 在快照里 commit 一笔基线
+#   (对 HEAD 出 patch 的正解就是先 commit 一笔)就会把 map-debt 队列写进快照,当场改掉刚冻结的树。
+#   并行支 worktree 同理:账本归主树支,支里的 commit 不该记账。
+#   路径不是本树就 exit 0 —— hook 永不挡 commit(§「hook 不许挡会话 / 挡提交」)。
+if [ "$(pwd -P)" != "@REPO@" ]; then exit 0; fi
 if command -v flow-post-commit >/dev/null 2>&1; then exec flow-post-commit "$@"; fi
 [ -x "@ABS@" ] && exec "@ABS@" "$@"
 echo "[flow-kit] flow-post-commit 不在 PATH 且 @ABS@ 失效 —— 重跑 flow-init(本次提交不受影响)" >&2
