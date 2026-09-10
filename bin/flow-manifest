@@ -3,6 +3,16 @@
 # 根因:git status 看不见 gitignore 区(规格目录可能刻意只活本机),靠它枚举必漏。
 # 枚举走两条轴:git(tracked + 未跟踪)+ 基线 shasum 扫描(ignored 区,只在 FLOW_SPEC_UNTRACKED=1 时开)。
 # 仓根取自 FLOW_REPO_DIR(脚本自己 cd,不依赖调用方 cwd);默认扫描区取自 FLOW_SPEC_DIRS。
+# 0.9.0 两条新判据,都记在基线里、verify 时核:
+#   · 树身份:基线头记 `root: <git rev-parse --show-toplevel>`,verify 的树 root 不同 ⟹ FATAL(两侧不同源,§J 硬规矩 4)。
+#     病根:FLOW_SPEC_UNTRACKED=0 时 git 轴根本不读基线(见 verify 注释),主树与 worktree / rsync 快照同 HEAD 就同基线,
+#     verify 量哪棵树全凭 cwd 找到的 config —— P3-4 四条 A 轴在副本里跑 verify 报 git 12,读数与主树同型,没人分得出。
+#     快照 / 副本里**不该跑 verify**:它判的是活树,归编排方 flow-round close;证副本没被动用 shasum -c <上一轮 .after>。
+#   · 测试锁:基线逐件记 FLOW_TEST_GLOBS 命中件的哈希(`test <hash>  <path>`);verify 时已有测试件哈希变了 / 被删,
+#     而申报行尾没有 `# 裁决-N` ⟹ RED;本轮改过或新增的测试件含 FLOW_TEST_SKIP_RE(.only / .skip / xit …)⟹ 同样 RED。
+#     病根:测试文件在写轮的写权限面内,削断言 / 跳过 / 改期望值一个字都没人看(flow-trace 只判「REQ 有没有测试」);
+#     2026 年的 reward-hacking 实证(SpecBench / BAITBENCH)一致:靠 prompt 说「别改测试」>50% 照改,锁住才归零。
+#     例外走裁决:申报行写成 `path  # 裁决-N 为什么改` —— 与 flow-close 的越面例外同一条通道。
 #
 # 用法:
 #   flow-manifest baseline <基线输出文件(绝对路径)> [扫描区(仓相对)...]   # 批次开工时打基线
@@ -26,6 +36,12 @@ git rev-parse --git-dir >/dev/null 2>&1 || flow_die "FLOW_REPO_DIR 不是 git �
 cmd="${1:-}"
 [ -n "$cmd" ] || { echo "用法: flow-manifest baseline|verify ..." >&2; exit 2; }
 
+# 测试件枚举(与 flow-trace 同源:git 看得见的 FLOW_TEST_GLOBS 命中件,含未跟踪;set -f 防 shell 先把 glob 展开成仓根的文件名)
+test_files() {
+  set -f; set -- ; for g in $FLOW_TEST_GLOBS; do set -- "$@" "$g"; done; set +f
+  [ $# -gt 0 ] || return 0
+  git -c core.quotepath=false ls-files --cached --others --exclude-standard -- "$@" | sort -u
+}
 # 扫描区逐文件出 `hash  path`(哈希只经 flow_sha256;find -exec 调不了 sh 函数,故用 while)
 sha_scan() {
   for a in "$@"; do
@@ -40,22 +56,29 @@ baseline)
   case "$out" in /*) ;; *) flow_die "基线输出文件必须绝对路径(脚本会 cd 到仓根): $out" ;; esac
   shift 2
   areas="${*:-$FLOW_SPEC_DIRS}"
+  tlb=$(mktemp "$(flow_tmpdir)/flow-manifest.XXXXXX")
   {
     # 头行记下扫描区:verify 按它复扫,两侧同源(嵌套目录不能靠 cut -d/ 猜回来)
-    echo "# freeze-baseline $(date +%FT%T) @ $(git rev-parse --short HEAD 2>/dev/null || echo none) areas: $areas"
+    echo "# freeze-baseline $(date +%FT%T) @ $(git rev-parse --short HEAD 2>/dev/null || echo none) root: $(git rev-parse --show-toplevel) areas: $areas"
     # F-14:这份文件与 `.after-*-hashes.txt` 肉眼极像、消费者不同(行首 git/sha 前缀)—— 喂给 shasum -c 恒空转恒绿。头行第二句写死消费者。
     echo "# ⚠ 只能喂 flow-manifest verify;不是 shasum -c 体例(行首带 git/sha 前缀),喂给 shasum -c 一行都对不上 = 恒绿"
     # -uall:不带它 git 把未跟踪**目录**折成一行目录名,整目录的新文件从此不在基线里
     # (实测:未申报文件藏进未跟踪目录,verify 照绿)
     git -c core.quotepath=false status --porcelain -uall | sed 's/^/git /'   # 关 quotepath:中文路径否则成八进制转义
+    # 测试锁(0.9.0):已有测试件逐个记哈希;基线时点已删的(索引里有、树上没有)不记 —— 它不是本轮删的
+    test_files | while IFS= read -r f; do [ -f "$f" ] && flow_sha256 "$f"; done | sed 's/^/test /' > "$tlb"
+    echo "# test-lock $(grep -c . "$tlb" || true)"   # 零件与「旧基线没这一轴」要分得开(§J0)
+    cat "$tlb"
     if [ "$FLOW_SPEC_UNTRACKED" = 1 ]; then sha_scan $areas | sed 's/^/sha /'; fi
   } > "$out"
+  rm -f "$tlb"
+  nt=$(grep -c '^test ' "$out" || true)
   if [ "$FLOW_SPEC_UNTRACKED" = 1 ]; then
     n=$(grep -c '^sha ' "$out" || true)
-    echo "baseline → $out (ignored 区 $n 个文件入基线;扫描区: $areas)"
+    echo "baseline → $out (ignored 区 $n 个文件入基线;扫描区: $areas;测试锁 $nt 件;root $(git rev-parse --show-toplevel))"
   else
     [ $# -gt 0 ] && flow_warn "扫描区参数被忽略(FLOW_SPEC_UNTRACKED=0): $*"
-    echo "baseline → $out (shasum 轴关闭:FLOW_SPEC_UNTRACKED=0,只走 git 轴)"
+    echo "baseline → $out (shasum 轴关闭:FLOW_SPEC_UNTRACKED=0,只走 git 轴;测试锁 $nt 件;root $(git rev-parse --show-toplevel))"
   fi
   ;;
 
@@ -67,6 +90,15 @@ verify)
   case "$declared" in /*) ;; *) flow_die "申报清单必须绝对路径(脚本会 cd 到仓根): $declared" ;; esac
   [ -f "$base" ] || flow_die "基线不存在 $base"
   [ -f "$declared" ] || flow_die "申报清单不存在 $declared"
+
+  # 轴0 树身份(0.9.0):基线打在哪棵树就只许在哪棵树 verify。两侧都走 git 取物理路径(/tmp 与 /private/tmp 之类的假不等由 git 归一)
+  broot=$(sed -n '1s/^# freeze-baseline .* root: \(.*\) areas: .*$/\1/p' "$base")
+  here=$(git rev-parse --show-toplevel)
+  if [ -z "$broot" ]; then
+    echo "树身份:基线无 root 行(0.9.0 前打的),本次未核"
+  elif [ "$broot" != "$here" ]; then
+    flow_die "基线打在 $broot,本次 verify 量的是 $here —— 两侧不同源,拒绝给出红/绿结论。verify 判的是活树,归编排方在活树跑(flow-round close);快照 / worktree 副本里要证「没被动」,跑 shasum -a 256 -c <上一轮 .after-*-hashes.txt>"
+  fi
 
   # 轴1 tracked:当前 git status(与基线时点的 status 无关,收工态即实改集)。枚举只经 flow_changed_paths
   #   (-uall / 剥状态位 / quotepath / kit 自有件过滤(契约 8)都在 lib 里,三条命令同源;为什么见 lib 注释)。
@@ -127,15 +159,57 @@ verify)
     exit 2
   fi
 
+  # 申报行尾带 `# 裁决-N` 的路径:测试锁与越面(flow-close)的例外通道 —— 例外要有号,能追到裁决
+  declared_verdict=$(grep -v '^[[:space:]]*#' "$declared" | LC_ALL=C grep -E '#[^#]*裁决[- ]*[0-9]+' \
+                     | sed -e 's/^[0-9a-f]\{40,\}  //' -e 's/^git \(..\) //' -e 's/^git //' | sed 's/.* -> //' | sed 's/^[[:space:]]*//' \
+                     | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' | grep . | sort -u)
+
   red=0
   for p in $tracked $ig_changed; do
-    printf '%s\n' "$declared_paths" | grep -qxF -- "$p" || { echo "RED 漏申报: $p"; red=1; }
+    printf '%s\n' "$declared_paths" | grep -qxF -- "$p" || { echo "RED 漏申报: $p —— 申报清单补这一行,或还原它(它确实被改了)"; red=1; }
   done
   for p in $ig_gone; do
-    printf '%s\n' "$declared_paths" | grep -qxF -- "$p" || { echo "RED 漏申报(被删): $p"; red=1; }
+    printf '%s\n' "$declared_paths" | grep -qxF -- "$p" || { echo "RED 漏申报(被删): $p —— 申报清单补这一行,或还原它"; red=1; }
   done
+
+  # 轴3 测试锁(0.9.0):已有测试件动了要有裁决号;本轮改过 / 新增的测试件不许带跳过标记
+  nlock=0; nlockok=0; nlocktxt=""
+  if ! grep -q '^# test-lock ' "$base"; then
+    echo "测试锁:基线无 test-lock 行(0.9.0 前打的),本次未核"; nlocktxt="未核(旧基线)"
+  elif [ "$(sed -n 's/^# test-lock //p' "$base")" = 0 ] && [ -z "$(test_files)" ]; then
+    echo "测试锁:仓内零测试件(FLOW_TEST_GLOBS=$FLOW_TEST_GLOBS)"; nlocktxt="零测试件"
+  else
+    tl=$(mktemp "$(flow_tmpdir)/flow-manifest.XXXXXX")
+    sed -n 's/^test //p' "$base" | while IFS= read -r line; do
+      h=${line%%  *}; p=${line#*  }
+      if [ -f "$p" ]; then cur=$(flow_sha256 "$p"); cur=${cur%%  *}; else cur=gone; fi
+      [ "$cur" = "$h" ] && continue
+      if printf '%s\n' "$declared_verdict" | grep -qxF -- "$p"; then echo "ok   测试锁: $p 改动带裁决号(申报行)"
+      else echo "RED 测试锁: $p 已有测试被$([ "$cur" = gone ] && echo 删 || echo 改),申报行无裁决号 —— 还原它,或申报行写成「$p  # 裁决-N <为什么改>」"; fi
+    done > "$tl"
+    cat "$tl"
+    grep -q '^RED 测试锁' "$tl" && red=1
+    nlock=$(grep -c '^test ' "$base" || true)
+    nlockok=$(grep -c '^ok   测试锁' "$tl" || true)
+    # 跳过 / 独跑标记:只扫本轮动过的测试件(棘轮:没动的不追溯),命中且申报行无裁决号 ⟹ RED
+    test_files | while IFS= read -r p; do
+      [ -f "$p" ] || continue
+      bh=$(sed -n 's/^test //p' "$base" | LC_ALL=C awk -v p="$p" 'substr($0, length($0) - length(p) + 1) == p && substr($0, length($0) - length(p) - 1, 2) == "  " { print substr($0, 1, length($0) - length(p) - 2); exit }')
+      cur=$(flow_sha256 "$p"); cur=${cur%%  *}
+      [ "$bh" = "$cur" ] && continue
+      hit=$(LC_ALL=C grep -nE "$FLOW_TEST_SKIP_RE" "$p" | head -3)
+      [ -n "$hit" ] || continue
+      if printf '%s\n' "$declared_verdict" | grep -qxF -- "$p"; then echo "ok   测试锁: $p 含跳过标记但申报行带裁决号"
+      else echo "RED 测试锁: $p 含跳过 / 独跑标记(FLOW_TEST_SKIP_RE)—— 去掉它,或申报行写成「$p  # 裁决-N <为什么>」:"; printf '%s\n' "$hit" | sed 's/^/       /'; fi
+    done > "$tl"
+    cat "$tl"
+    grep -q '^RED 测试锁' "$tl" && red=1
+    rm -f "$tl"
+    nlocktxt="$nlock 件($nlockok 件改动带裁决)"
+  fi
+
   if [ "$red" = 0 ]; then
-    echo "verify OK: 实改集(git $(printf '%s\n' $tracked | grep -c . || true) + ignored $(printf '%s\n' $ig_changed | grep -c . || true)) 全部在申报清单内"
+    echo "verify OK: 实改集(git $(printf '%s\n' $tracked | grep -c . || true) + ignored $(printf '%s\n' $ig_changed | grep -c . || true)) 全部在申报清单内 · 测试锁 $nlocktxt"
   fi
   exit $red
   ;;

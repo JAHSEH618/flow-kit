@@ -28,6 +28,6 @@
 ## 戊栏 · 给 flow-local.md 的新实录(踩到就写)
 
 ## 收工读数(缺一即回件不合格)
-flow-manifest verify 末行 + RC · flow-fact-lint verify 末行 + RC(新增 RED 零)· .after-<轮名>-hashes.txt 与 .declared-<轮名>.txt 的路径
+flow-manifest verify 末行 + RC(快照轮改贴 shasum -c 的非 OK 行数)· flow-fact-lint verify 末行 + RC(新增 RED 零;判据由编排方收工再跑一次)· .after-<轮名>-hashes.txt 与 .declared-<轮名>.txt 的路径
 整读过的文件清单(每个一行理由;没有就写「零整读」)
 ```

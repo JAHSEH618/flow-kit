@@ -28,7 +28,7 @@
 1. 扫描:每类的非空转读数(阳性另造,不许取本轮实例)+ 交付态命中
 2. 逐行判:「贴了 N 行 / 判了 N 行」—— 两数必须相等,不许「输出如下」直接跳结论
 3. 计数:凡贴出两个本该相等的数,同一行写出差值并说明为何可接受;差 ≠ 0 未解释 = 红
-4. 机械核对各自的 RC:flow-route-debts 按收工实改集复跑 diff 派单必读 · flow-receipts 复跑 diff 覆盖声明 · flow-manifest verify(含非空转实证)
+4. 机械核对各自的 RC:flow-route-debts 按收工实改集复跑 diff 派单必读 · flow-receipts 复跑 diff 覆盖声明 · flow-manifest verify(活树轴,含非空转实证;快照轴改贴对上一轮 .after 的 shasum -c 非 OK 行数 —— 副本里 verify 会 FATAL)
 
 ## 逐欠账三态表(④A 必填)—— **表落 `<流程目录>/.verdicts-<轮名>.md`,本件只留这一行**
 三态表 N 条(还 a / 追写 b / 不动 c)→ `.verdicts-<轮名>.md`;体例与自检见下节

@@ -1,0 +1,25 @@
+#!/bin/sh
+# flow-changed —— 打印实改集(git 轴,一行一路径),给 config 里的门命令用。
+# 病根(0.9.0):变异门(Stryker 之类)只该对实改集跑 —— 全仓跑要几十分钟,门就没人开;而门命令走 `sh -c`,
+#   拿不到库函数 flow_changed_paths,项目只能自己再拼一遍 `git status`(quotepath / -uall / kit 自有件过滤三处都会漏,契约 8 禁止)。
+# 用法: flow-changed [--no-tests]      # --no-tests:去掉 FLOW_TEST_GLOBS 命中件(变异只打生产码)
+# 例(config 的 flow_gates 一行):
+#   'mutate	f=$(flow-changed --no-tests | paste -sd, -); [ -n "$f" ] && pnpm exec stryker run --mutate "$f" || echo "Mutation score: N/A(零实改)"'
+# RC 同层:枚举失败 RC=2 且 FATAL,不吐空集(空集在门那里就是「零文件要打」= 绿)。
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_load_config
+NOTEST=0
+case "${1:-}" in "") ;; --no-tests) NOTEST=1 ;; *) echo "用法: flow-changed [--no-tests]" >&2; exit 2 ;; esac
+out=$(flow_changed_paths) || flow_die "实改集枚举失败(flow_changed_paths RC≠0),不吐空集"
+if [ "$NOTEST" = 1 ]; then
+  set -f; set -- ; for g in $FLOW_TEST_GLOBS; do set -- "$@" "$g"; done; set +f
+  printf '%s\n' "$out" | while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    skip=0; for g in "$@"; do case "$p" in $g) skip=1 ;; esac; done
+    [ "$skip" = 1 ] || printf '%s\n' "$p"
+  done
+else
+  printf '%s\n' "$out" | grep . || true
+fi
+exit 0

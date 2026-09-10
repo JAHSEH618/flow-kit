@@ -1,9 +1,9 @@
 #!/bin/sh
 # flow-close —— 编排方的核对与收口一键(四种模式)。
 #   默认(轮收工):§B5 冻结核对 + 非空转 + 交付态哈希 + 账本 lint + 文档预算 + 规则书棘轮。
-#   --between(轮间交接口):交付态哈希 + 冻结核对 + 非空转 + 树读数 + 路由复跑 + REQ 对账 + 文档预算。(flow-round close 按约定名调它)
+#   --between(轮间交接口):交付态哈希 + 冻结核对 + 非空转 + 假话门(0.9.0)+ 越面(0.9.0,--face)+ 树读数 + 路由复跑 + REQ 对账 + 文档预算。(flow-round close 按约定名调它)
 #       REQ 对账拿到 RC=3(TRACE N/A,本仓 plan 不写 REQ 行)印 info 不判红 —— 「不适用」与「不达标」不许同型(0.7.1)。
-#   --wrap(收口机械段,0.6.0;步序 0.8.2 调过):交付态哈希 → manifest verify → 非空转(**以上三条先核树**)
+#   --wrap(收口机械段,0.6.0;步序 0.8.2 调过):交付态哈希 → manifest verify → 非空转 → 假话门(**以上四条先核树**)
 #       → 三态表 dry-run → 账本 lint → REQ 对账 →(对账绿才动树)索引重渲 + REQ 翻 done → 门整跑(收口那一次;末尾印一行可照抄的门读数)
 #       → 文档预算 → 规则书棘轮 → 轮数账 --write → 状态档事实段;末行 WRAP OK 之后印剩余手工步清单(编排方不必再读 close-block.md)。
 #       病根:收口十步里的机械步曾各占编排方一个请求(ShipLedger 收口 ≈60 min、StockSteer 20+27 min);这里一条命令、一行末行。
@@ -18,8 +18,8 @@
 # 病根:轮间那套一直是手拼 5–7 条命令、每批 4 次(实测 ≈28 min/批,占编排固定开销的三分之一),
 #   而手拼时 RC 隔着管道取、判据进 && 链 —— 正是 §J 那两条硬规矩最常破的地方。
 # 用法: flow-close <流程目录(绝对)> <基线文件(绝对)> <申报清单(绝对)> [after-hashes(绝对)]
-#       flow-close --between <流程目录(绝对)> <基线(绝对)> <申报清单(绝对)> <after-hashes(绝对)> [--task <任务号>] [--plan <plan绝对>]
-#         --task 给了才跑路由复跑(按申报清单里的路径),--task + --plan 都给了才跑 flow-trace。
+#       flow-close --between <流程目录(绝对)> <基线(绝对)> <申报清单(绝对)> <after-hashes(绝对)> [--task <任务号>] [--plan <plan绝对>] [--face <.face-<轮名>.txt 绝对>]
+#         --task 给了才跑路由复跑(按申报清单里的路径),--task + --plan 都给了才跑 flow-trace;--face 给了才判越面(flow-round close 按约定名传)。
 #       flow-close --wrap <流程目录(绝对)> <基线(绝对)> <申报清单(绝对)> [after-hashes(绝对)] [--task <号>] [--plan <plan绝对>] [--verdicts <三态表绝对>]
 #       flow-close --ship <commit> --subject <PR 标题> [--verdicts <三态表绝对>] [--dir <流程目录绝对>]
 # 逐项打印 RC;任一红 ⟹ 末行 `ROUND-CLOSE RED` / `BETWEEN RED` / `WRAP RED` 且 RC=1;全绿 ⟹ `… OK`。--ship 末行 `SHIP OK: PR #N …` / `SHIP RED`。
@@ -28,8 +28,8 @@
 # 规则书棘轮:FLOW_LOCAL_DOC **字节**记在 FLOW_FLOW_DIR/.rulebook-bytes,只许降(变长 = RED);行数超 FLOW_DOC_BUDGET_RULEBOOK 也 RED。
 #   0.8.3 把单位从行换成字节:实录一族一行、族内用 ` · ` 串子句(flow-rulebook retire N.k),退一条子句行数纹丝不动 ⟹ 旧单位量不到退役,退与不退同读数。
 #   遇到旧的 .rulebook-lines:先按**旧单位**判一次(换单位不许洗掉一次变长),不红才打字节新基线并删旧件,两个方向的读数都印出来(协议 §J 门定义变了要重打基线)。
-# 读的配置:FLOW_REPO_DIR FLOW_LOCAL_DOC_PATH FLOW_FLOW_DIR_PATH FLOW_DOC_BUDGET_RULEBOOK;
-#   子命令 flow-manifest / flow-route-debts / flow-doc-budget / flow-trace 按名调用(PATH)。
+# 读的配置:FLOW_REPO_DIR FLOW_LOCAL_DOC_PATH FLOW_FLOW_DIR_PATH FLOW_DOC_BUDGET_RULEBOOK FLOW_FACT_LINT_ROOTS FLOW_FACT_LINT_BASELINE_PATH;
+#   子命令 flow-manifest / flow-route-debts / flow-doc-budget / flow-trace / flow-fact-lint 按名调用(PATH)。
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
 flow_load_config
@@ -105,19 +105,21 @@ fi
 DIR="$1"; BASE="$2"; DECL="$3"; shift 3
 AFTER=""
 case "${1:-}" in ""|--*) ;; *) AFTER="$1"; shift ;; esac
-TASK=""; PLAN=""; VERD=""
+TASK=""; PLAN=""; VERD=""; FACE=""
 while [ $# -gt 0 ]; do
-  case "$1" in --task|--plan|--verdicts) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
+  case "$1" in --task|--plan|--verdicts|--face) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
   case "$1" in
     --task) TASK="$2"; shift 2 ;;
     --plan) PLAN="$2"; shift 2 ;;
     --verdicts) [ "$MODE" = wrap ] || flow_die "--verdicts 只在 --wrap 下认"; VERD="$2"; shift 2 ;;
+    --face) [ "$MODE" = between ] || flow_die "--face 只在 --between 下认(收口的申报清单是编排方的,没有面)"; FACE="$2"; shift 2 ;;
     *) flow_die "未知参数 $1" ;;
   esac
 done
-for p in "$DIR" "$BASE" "$DECL" ${AFTER:+"$AFTER"} ${PLAN:+"$PLAN"} ${VERD:+"$VERD"}; do
+for p in "$DIR" "$BASE" "$DECL" ${AFTER:+"$AFTER"} ${PLAN:+"$PLAN"} ${VERD:+"$VERD"} ${FACE:+"$FACE"}; do
   case "$p" in /*) ;; *) flow_die "文件参数须绝对路径: $p" ;; esac
 done
+[ -z "$FACE" ] || [ -f "$FACE" ] || flow_die "写权限面清单不存在: $FACE"
 [ "$MODE" = between ] && [ -z "$AFTER" ] && flow_die "--between 必须给 after-hashes(轮间核对的第一判据就是上一轮交付态)"
 
 TMP=$(mktemp -d "$(flow_tmpdir)/flow-close.XXXXXX") || exit 2
@@ -173,6 +175,42 @@ step_hollow() {
       echo "  ⚠ 非空转失败:抽掉实改集里的一行后没有点名它的 RED —— verify 本身不可信"; red=1
     fi
   fi
+}
+
+# 0.9.0:假话门由编排方在活树跑,轮收工 / 收口都跑。此前它只在 flow-round open(F-13)与 agent 自己的收工命令里跑 ——
+#   判据在 agent 自陈里,编排方从没独立跑过;P3-4 ②B-F 的微改 patch 带进一行 RED NEW QUANT,到下一轮 open 才炸。
+#   一个判据只在一处由不写代码的一方跑;agent 自跑的那次是给它自己的提示,不是判据。
+step_factlint() {
+  hdr "flow-fact-lint verify(假话门,编排方独立跑)"
+  if [ -z "$FLOW_FACT_LINT_ROOTS" ]; then echo "  跳过:FLOW_FACT_LINT_ROOTS 未配置"; return 0; fi
+  if [ ! -f "$FLOW_FACT_LINT_BASELINE_PATH" ]; then echo "  跳过:基线不存在 $FLOW_FACT_LINT_BASELINE_PATH(先 flow-fact-lint baseline)"; return 0; fi
+  flow-fact-lint verify > "$TMP/factlint" 2>&1; frc=$?
+  LC_ALL=C grep -E '^verify|^RED|^FATAL' "$TMP/factlint"; echo "RC=$frc"
+  [ "$frc" = 0 ] || red=1
+}
+
+# 0.9.0 越面:申报 ⊆ 写权限面(.face-<轮名>.txt,flow-dispatch 从触面落的;与 flow-micro 同一套面内判法)。
+#   病根:.face 落了三个版本,唯一的消费者是 flow-micro;轮收工没有任何工具比过「实改集在不在面内」——
+#   P3-4 三轮的申报清单都含 apps/web/test/ 与 packages/core/src/index.ts,面里没有,没人量。例外只走申报行尾 `# 裁决-N`(与测试锁同一条通道)。
+step_face() {
+  [ -n "$FACE" ] || { echo "== (越面跳过:未给 --face;flow-dispatch --dir 才落 .face-<轮名>.txt)=="; return 0; }
+  hdr "越面(申报 ⊆ $(basename "$FACE");例外走申报行尾 # 裁决-N)"
+  declv=$(grep -v '^[[:space:]]*#' "$DECL" | LC_ALL=C grep -E '#[^#]*裁决[- ]*[0-9]+' | sed -e 's/^[0-9a-f]\{40,\}  //' -e 's/^git \(..\) //' -e 's/^git //' | sed 's/.* -> //' | sed 's/^[[:space:]]*//' | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' | grep . | sort -u)
+  nin=0; nout=0
+  for p in $declp; do
+    inf=0
+    while IFS= read -r e; do
+      case "$e" in ''|\#*) continue ;; esac
+      e=${e%/}
+      [ "$p" = "$e" ] && { inf=1; break; }
+      case "$p" in "$e"/*) inf=1; break ;; esac
+    done < "$FACE"
+    if [ "$inf" = 1 ]; then nin=$((nin+1))
+    elif printf '%s\n' "$declv" | grep -qxF -- "$p"; then echo "ok   面外但申报行带裁决号: $p"; nin=$((nin+1))
+    else echo "RED 越面: $p 不在写权限面内,申报行也无裁决号 —— 还原它,或编排方以裁决扩面:申报行写成「$p  # 裁决-N <为什么>」"; nout=$((nout+1)); fi
+  done
+  echo "面内 $nin · 越面 $nout(面 $(grep -cv '^[[:space:]]*#' "$FACE" || true) 条)"
+  [ "$nout" = 0 ] || red=1
 }
 
 step_tree() {
@@ -270,12 +308,15 @@ step_gates() {
   ( cd "$FLOW_REPO_DIR" && flow-gates --reset > "$DIR/.evidence/close-gates.txt" 2>&1 ); rc=$?
   LC_ALL=C grep -E '^FLOW-GATES' "$DIR/.evidence/close-gates.txt" | tail -1; echo "RC=$rc(全量 $DIR/.evidence/close-gates.txt)"; [ "$rc" = 0 ] || red=1
   # 门读数一行(0.7.0):根文档那句「门读数」每批都是编排方 grep 三次 + cut -c 窥视拼出来的;这里从同源 rc.txt 直接拼好,照抄即可
+  # 0.9.0:命中缓存时 $o 是**缓存条目**的证据目录,拼出来的读数是上一次整跑的 —— 行里必须带 cached@<那次的时间>,
+  #   否则根文档那句门读数的出处就是 kit 自己丢的(与审轴「把上一轮读数报成自己的」同一件事)
   o=$(LC_ALL=C sed -n 's/.*FLOW-GATES [A-Z]* key=[0-9a-f]* out=\([^ ]*\).*/\1/p' "$DIR/.evidence/close-gates.txt" | tail -1)
+  ctag=$(LC_ALL=C sed -n 's/^CACHED PASS(同树键 reset 口径 @\([^,]*\),.*/cached@\1;/p' "$DIR/.evidence/close-gates.txt" | tail -1)
   if [ -n "$o" ] && [ -f "$o/rc.txt" ]; then
     line=$(LC_ALL=C awk '/^infra-guard/{next} /^[A-Za-z0-9_]+ RC=/{cur=$1; next} /^[A-Za-z0-9_]+ skipped$/{cur=""; next}
       cur!="" && NF { gsub(/^[ \t]+|[ \t]+$/, ""); if (!(cur in seen)) {seen[cur]=1; order[++n]=cur; r[cur]=$0} else r[cur]=r[cur] " · " $0 }
       END{ for(i=1;i<=n;i++) printf "%s%s → %s", (i>1?";":""), order[i], r[order[i]]; printf "\n" }' "$o/rc.txt")
-    [ -n "$line" ] && echo "门读数(照抄进根文档;同源 $o/rc.txt):$line"
+    [ -n "$line" ] && echo "门读数(照抄进根文档;${ctag}同源 $o/rc.txt):$line"
   fi
 }
 step_markdone() {
@@ -298,7 +339,7 @@ step_state() {
 }
 
 if [ "$MODE" = between ]; then
-  step_after; step_manifest; step_hollow; step_tree; step_route; step_trace; step_budget
+  step_after; step_manifest; step_hollow; step_factlint; step_face; step_tree; step_route; step_trace; step_budget
   if [ "$red" = 0 ]; then echo "BETWEEN OK"; exit 0; else echo "BETWEEN RED"; exit 1; fi
 fi
 if [ "$MODE" = wrap ]; then
@@ -309,7 +350,7 @@ if [ "$MODE" = wrap ]; then
   # ShipLedger P3-3 没炸,只因为它的 plan 零 REQ 行(TRACE N/A ⟹ 零翻转);换到写 REQ 行的仓,收口第一次就红在最贵的时刻。
   # 头注原先只想到「plan 要在申报清单里,否则 verify 报漏申报」,漏了「在清单里也会因为被改而红」这半边。
   # 两个写手另外都挪到 red=0 之后:树已经红了就别再往里写,修完重跑即可(两者都幂等)。
-  step_after; step_manifest; step_hollow
+  step_after; step_manifest; step_hollow; step_factlint
   step_verdicts; step_lint; step_trace
   if [ "$red" = 0 ]; then step_index; step_markdone; else echo "== (索引重渲 与 REQ 翻 done 跳过:前面已红,先修完再让 kit 动树)=="; fi
   step_gates; step_budget; step_rulebook; step_usage; step_state
@@ -328,5 +369,5 @@ WOK
     exit 0
   else echo "WRAP RED"; exit 1; fi
 fi
-step_manifest; step_hollow; step_after; step_lint; step_budget; step_rulebook
+step_manifest; step_hollow; step_after; step_factlint; step_lint; step_budget; step_rulebook
 if [ "$red" = 0 ]; then echo "ROUND-CLOSE OK"; exit 0; else echo "ROUND-CLOSE RED"; exit 1; fi

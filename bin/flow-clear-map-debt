@@ -44,6 +44,7 @@ import sys,re,datetime
 mode,c,dry,q,d,dname,tsv=sys.argv[1:8]
 MARK=r'(?:[①-⑳㉑-㉟㊱-㊿]|#\d+)'      # 与 flow_mark_re 同集:圈码 1–50 与 #N
 today=datetime.date.today().isoformat()
+wu_re=re.compile(r'^>\s*(?:⚠\s*)?\*\*'+re.escape(today))
 row_re=re.compile(r'^- \[ \] (\S+) \| '+re.escape(c)+r' \| 触欠账('+MARK+r') 的触面 \| 该更新:(.*)$')
 def fatal(msg):
     print('FATAL: '+msg,file=sys.stderr); sys.exit(2)
@@ -57,7 +58,9 @@ if mode=='writeup':
         elif cur: blocks[cur].append(l)
     def decide(mark):
         b=blocks.get(mark,[])
-        if any(l.startswith(f'> **{today}') or l.startswith(f'> ⚠ **{today}') for l in b):
+        # 0.9.0:追写行是 flow-ledger append 落的 `>   **<今天>…`(续行体例 `>   `,见 flow-ledger 头注),旧判法只认 `> **` 单空格
+        #   ⟹ P3-4 收口 5 条追写全没认出、全留给人。前缀改成「> + 任意空白(+ ⚠)」,与写方体例同源。
+        if any(wu_re.match(l) for l in b):
             return f'{today} 收口清账:账本该条同日追写已落(commit 前),见 {dname} {mark} 的「{today}」段;hook 记账重复,勾掉'
         return None
 else:

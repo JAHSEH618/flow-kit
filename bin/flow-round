@@ -87,7 +87,7 @@ gen_state() {
   {
     echo "<!-- flow:gen-begin -->"
     echo "## 〇 · 事实段(flow-round 生成 $(date +%F\ %H:%M);段内勿手改,段外是编排方的裁决)"
-    echo "- 树:HEAD $(git -C "$FLOW_REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo none) · porcelain $(git -C "$FLOW_REPO_DIR" -c core.quotepath=false status --porcelain -uall 2>/dev/null | LC_ALL=C grep -c .) · 流程目录 $DIR"
+    echo "- 树:root $(git -C "$FLOW_REPO_DIR" rev-parse --show-toplevel 2>/dev/null || echo none) · HEAD $(git -C "$FLOW_REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo none) · porcelain $(git -C "$FLOW_REPO_DIR" -c core.quotepath=false status --porcelain -uall 2>/dev/null | LC_ALL=C grep -c .) · 流程目录 $DIR"
     echo ""
     echo "| 轮 | 派单 | 步骤账 | 回件 | 冻结件 | 门末行 |"
     echo "|---|---|---|---|---|---|"
@@ -108,10 +108,12 @@ gen_state() {
       # 门读数只认**约定的那一个**件名(0.8.2)。从前是 glob `"$r"-*gates*.txt`:`①写-` 前缀吃到了 `①写-续-gates.txt`,
       # 于是 ①写 那行印着一次它根本没跑过的 PASS(该轮门整跑 0 次)。派单印进去的名字就是 `<轮名>-gates.txt`,按名取,取不到就是「没跑」。
       # 末行也不再 `cut -c1-60`:那一刀把 out= 路径切成半截,既没用也违 §J 硬规矩①;要短就整段去掉 out=,别切字节。
+      # 0.9.0:只删 `out=<路径>` 那一个词。0.8.2 写成 `s/ out=.*//` 把后面的 `(cached…)` 一并删了 ⟹ 状态档里缓存命中与整跑同型,
+      #   编排方从状态档看不出「这轮门根本没跑」(P3-4 四个审轴把上一轮读数报成自己的,状态档没给过一点提示)。
       g="$EV/$r-gates.txt"
       gcell="—"
       if [ -f "$g" ]; then
-        gcell=$(LC_ALL=C grep -E '^FLOW-GATES' "$g" | tail -1 | sed 's/ out=.*//')
+        gcell=$(LC_ALL=C grep -E '^FLOW-GATES' "$g" | tail -1 | sed 's/ out=[^ ]*//')
         [ -n "$gcell" ] || gcell="(无 FLOW-GATES 行)"
       fi
       echo "| $r | $dcell | $scell | $hcell | $fcell | $gcell |"
@@ -167,17 +169,18 @@ open)
   if [ -f "$DIR/.steps-$ROUND.md" ]; then flow-step show "$DIR" "$ROUND" | tail -1
   else echo "  WARN:无步骤账 —— flow-dispatch --dir 会建;没有它就没有断点续跑"; fi
   hdr "状态档事实段"; gen_state
-  if [ "$red" = 0 ]; then echo "ROUND-OPEN OK: $ROUND(基线 $(basename "$BASE");此后编排方对仓内文件零编辑)"; exit 0; else echo "ROUND-OPEN RED: $ROUND"; exit 1; fi ;;
+  if [ "$red" = 0 ]; then echo "ROUND-OPEN OK: $ROUND(基线 $(basename "$BASE") 打在 $(git -C "$FLOW_REPO_DIR" rev-parse --show-toplevel);此后编排方对仓内文件零编辑;verify 只许在这棵树跑)"; exit 0; else echo "ROUND-OPEN RED: $ROUND"; exit 1; fi ;;
 close)
   case "$ROUND" in
     *-续) flow_warn "轮名带 -续(「$ROUND」):续轮本不该单开一轮(0.8.2 起 flow-round open 判死)。这里照收,只是这一轮的读数是半轮的" ;;
   esac
   BASE="$DIR/.manifest-baseline-$ROUND.txt"; DECL="$DIR/.declared-$ROUND.txt"; AFTER="$DIR/.after-$ROUND-hashes.txt"
   for f in "$BASE" "$DECL" "$AFTER"; do [ -f "$f" ] || flow_die "收工件缺失: $f(约定名;agent 收工件没落全,先补,别绕过)"; done
-  hdr "flow-close --between(交付态哈希 + 冻结 verify + 非空转 + 树读数 + 路由复跑 + REQ 对账 + 预算)"
+  hdr "flow-close --between(交付态哈希 + 冻结 verify + 非空转 + 假话门 + 越面 + 树读数 + 路由复跑 + REQ 对账 + 预算)"
   set -- "$DIR" "$BASE" "$DECL" "$AFTER"
   [ -n "$TASK" ] && set -- "$@" --task "$TASK"
   [ -n "$PLAN" ] && set -- "$@" --plan "$PLAN"
+  [ -f "$DIR/.face-$ROUND.txt" ] && set -- "$@" --face "$DIR/.face-$ROUND.txt"   # 0.9.0 越面:面由 flow-dispatch --dir 落,按约定名传
   flow-close --between "$@" > "$EV/$ROUND-close-between.txt" 2>&1; rc=$?
   LC_ALL=C grep -E '^== |^RED|^FATAL|^BETWEEN|^OK=|^info |RC=' "$EV/$ROUND-close-between.txt" | sed 's/^/  /'
   echo "RC=$rc(全量 $EV/$ROUND-close-between.txt)"; [ "$rc" = 0 ] || red=1

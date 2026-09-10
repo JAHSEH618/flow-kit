@@ -32,8 +32,11 @@ flow_gates() {
     'dbreset	pnpm db:reset' \
     'integration	pnpm test:integration' \
     'dbverify	pnpm db:verify'
+    # 变异门(0.9.0,可选):只对实改集打(flow-changed --no-tests 出清单;全仓跑几十分钟,门就没人开)。有它的仓,②B / ④B 不再自设变异,
+    # 只读它的幸存变异体清单判「漏测 / 等价」;读数行进 FLOW_GATE_SUMMARY_RE。它跟着 flow-gates 走,只在 --db 独占 的轮与收口跑。
+    # 'mutate	f=$(flow-changed --no-tests | paste -sd, -); [ -n "$f" ] && pnpm exec stryker run --mutate "$f" || echo "Mutation score: N/A(零实改)"'
 }
-FLOW_GATE_SUMMARY_RE='Test Files|Tests |全过|FAIL'   # 门输出里要抄进 rc.txt 的读数行(ERE)
+FLOW_GATE_SUMMARY_RE='Test Files|Tests |全过|FAIL|Mutation score'   # 门输出里要抄进 rc.txt 的读数行(ERE)
 FLOW_INFRA_FAIL_RE='57P01|Connection terminated|does not exist in the current database'  # 传输层守卫:命中 >0 判 INFRA_FAIL 弃读数
 FLOW_INFRA_FAIL_GATES='integration'   # 只在这些门的输出里扫守卫(空格分隔;空 = 本次跑过的全部门)
 FLOW_GATE_REBUILD='build'              # 缓存命中时仍要重跑的门名(护 dist;空 = 全取缓存)
@@ -91,7 +94,9 @@ FLOW_TURN_CAP=120                      # 单会话请求数上限,flow-usage 只
 #                                        REQ 条数不是长度的代理量:p4c ①写只有 6 条 REQ,却长出 189 个请求、携带 51.8M(全批的 48%)
 FLOW_DISPATCH_EXCERPT_BYTES=12000      # 派单里 plan 任务节选的字节封顶。实测 §P4-T3 一节 42 KB 横跨三刀,八个 agent 各读一遍 ≈ 该批携带 10%;
 #                                        超过只印 outline + REQ 行 + 节尾(本刀的落位段住在节尾),其余「文件 + 行号」指针;②③④ 一律只给 outline + REQ 行
-FLOW_TEST_GLOBS='*.test.ts *.test.tsx *.spec.ts *.spec.tsx'   # 测试文件模式;flow-trace 当 pathspec、flow-micro 判「性质 = 测试」
+FLOW_TEST_GLOBS='*.test.ts *.test.tsx *.spec.ts *.spec.tsx'   # 测试文件模式;flow-trace 当 pathspec、flow-micro 判「性质 = 测试」、flow-manifest 测试锁(0.9.0)
+# FLOW_TEST_SKIP_RE='\.(only|skip|todo)\(|(^|[^A-Za-z0-9_])x(it|test|describe)\('   # 测试锁:本轮动过的测试件含它 ⟹ verify RED(默认够 vitest / jest;别的栈覆盖)
+# FLOW_BARE_PATH_RE='…'   # flow-ledger add --title 的裸文件名守卫(ERE,反引号外);仓侧有纯文本指针棘轮的按同式覆盖
 FLOW_MICRO_FIX_LINES=16                # 微改通道(0.8.0 换量法):行数由 flow-micro 从④附的 patch numstat 量(只数新增行),不由审方估;非生产条合计 ≤ 此行数、且全在③写权限面内
 #                                        ⟹ 编排方落笔(占裁决号)+ 复跑 ④ 在丙栏预先写下的复现命令对期望读数,不起 ③改二、不 SendMessage。
 #                                        实测 p4d 两条一句话改动走了整整一个周期;p4e 四条非生产项(10–13 行)又走了 ③改二 + ④B定点 46 min —— 单条 ≤3 行的门槛被一条 3–6 行的顶破

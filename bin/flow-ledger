@@ -18,7 +18,7 @@
 # 每次落盘后自动跑 flow-route-debts --lint(改坏账本当场可见)。
 # 末行固定:写路径 `LEDGER OK: 已落盘;lint 已过`;只读路径 `VERDICTS OK: …` / `LEDGER DRY: …`。
 #   行首 `RED` 且 RC=1(lint 红);FATAL RC=2(参数错 / 标记不存在 / 三态表零合法行)。
-# 读的配置:FLOW_LEDGER_PATH FLOW_LEDGER;子命令 flow-route-debts 按名调用(PATH)。
+# 读的配置:FLOW_LEDGER_PATH FLOW_LEDGER FLOW_BARE_PATH_RE(add --title 裸文件名守卫,0.9.0);子命令 flow-route-debts 按名调用(PATH)。
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
 flow_load_config
@@ -82,6 +82,11 @@ case "$CMD" in
     { [ -n "$OWNER" ] && [ -n "$DUE" ] && [ -n "$TOUCHES" ] && [ -n "$TITLE" ]; } || flow_die "add 必填:--owner --due --touches --title"
     case "$TOUCHES" in /*|*",/"*) flow_die "touches 必须仓库相对,不许绝对路径: $TOUCHES" ;; esac
     [ -z "$MARK" ] || flow_is_mark "$MARK" || flow_die "--mark 不是合法标记(圈码或 #N): $MARK"
+    # 0.9.0:title 里反引号外的裸文件名当场 FATAL。title 原样进机器头,flow-render-index 再印进根文档,仓侧「纯文本指针」棘轮
+    #   要到 wrap 门整跑才红(P3-4 为此跑了两遍门);与 0.8.1 rulebook 归档模板同病 —— 入口一秒能挡的,不留给分钟级的门
+    if printf '%s\n' "$TITLE" | sed 's/`[^`]*`//g' | LC_ALL=C grep -qE "$FLOW_BARE_PATH_RE"; then
+      flow_die "--title 里有反引号外的裸文件名:「$TITLE」—— 文件名进反引号再来(它会被 flow-render-index 印进 $FLOW_INDEX_DOC,撞仓侧纯文本指针棘轮);模式 FLOW_BARE_PATH_RE 可在 config 覆盖"
+    fi
     ;;
 esac
 [ $# -eq 0 ] || usage
