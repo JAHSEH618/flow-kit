@@ -97,7 +97,8 @@ FLOW_DISPATCH_EXCERPT_BYTES=12000      # 派单里 plan 任务节选的字节封
 FLOW_TEST_GLOBS='*.test.ts *.test.tsx *.spec.ts *.spec.tsx'   # 测试文件模式;flow-trace 当 pathspec、flow-micro 判「性质 = 测试」、flow-manifest 测试锁(0.9.0)
 # FLOW_TEST_SKIP_RE='\.(only|skip|todo)\(|(^|[^A-Za-z0-9_])x(it|test|describe)\('   # 测试锁:本轮动过的测试件含它 ⟹ verify RED(默认够 vitest / jest;别的栈覆盖)
 # FLOW_BARE_PATH_RE='…'   # flow-ledger add --title 的裸文件名守卫(ERE,反引号外);仓侧有纯文本指针棘轮的按同式覆盖
-FLOW_MICRO_FIX_LINES=16                # 微改通道(0.8.0 换量法):行数由 flow-micro 从④附的 patch numstat 量(只数新增行),不由审方估;非生产条合计 ≤ 此行数、且全在③写权限面内
+FLOW_MICRO_FIX_LINES=16                # 微改通道:行数由 flow-micro 从审轴附的 patch numstat 量(不由审方估);1.0.0 起**只数非测试文件的新增行**(测试行单列印出不计,
+                                       # 删除行不计);② 后与 ④ 后都跑;非生产条合计 ≤ 此行数、且全在写轮的写权限面内
 #                                        ⟹ 编排方落笔(占裁决号)+ 复跑 ④ 在丙栏预先写下的复现命令对期望读数,不起 ③改二、不 SendMessage。
 #                                        实测 p4d 两条一句话改动走了整整一个周期;p4e 四条非生产项(10–13 行)又走了 ③改二 + ④B定点 46 min —— 单条 ≤3 行的门槛被一条 3–6 行的顶破
 FLOW_STALL_SEC=300                     # flow-usage 卡顿判据:一次工具调用 ≥ 此秒数,或 sub-agent 拿到工具结果后 ≥ 此秒数无输出(生成侧断流),单列 WARN

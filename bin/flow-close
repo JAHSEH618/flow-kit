@@ -1,7 +1,9 @@
 #!/bin/sh
 # flow-close —— 编排方的核对与收口一键(四种模式)。
 #   默认(轮收工):§B5 冻结核对 + 非空转 + 交付态哈希 + 账本 lint + 文档预算 + 规则书棘轮。
-#   --between(轮间交接口):交付态哈希 + 冻结核对 + 非空转 + 假话门(0.9.0)+ 越面(0.9.0,--face)+ 树读数 + 路由复跑 + REQ 对账 + 文档预算。(flow-round close 按约定名调它)
+#   --between(轮间交接口):冻结核对 + 非空转 + 假话门(0.9.0)+ 越面(0.9.0,--face;1.0.0 加 --this 只判本轮〇表路径)+ 树读数 + 路由复跑 + REQ 对账 + 文档预算。
+#       (flow-round close 按约定名调它。)1.0.0 起**不再收 after-hashes**:交付态哈希核对挪到 flow-round open(核上一轮的 .after,抓轮间动树),
+#       本轮的 .after 由 close 在 BETWEEN OK 之后打 —— 收工那一刻的交付态哈希核的是 agent 刚 freeze 的树,恒绿,从来不是判据。
 #       REQ 对账拿到 RC=3(TRACE N/A,本仓 plan 不写 REQ 行)印 info 不判红 —— 「不适用」与「不达标」不许同型(0.7.1)。
 #   --wrap(收口机械段,0.6.0;步序 0.8.2 调过):交付态哈希 → manifest verify → 非空转 → 假话门(**以上四条先核树**)
 #       → 三态表 dry-run → 账本 lint → REQ 对账 →(对账绿才动树)索引重渲 + REQ 翻 done → 门整跑(收口那一次;末尾印一行可照抄的门读数)
@@ -18,8 +20,9 @@
 # 病根:轮间那套一直是手拼 5–7 条命令、每批 4 次(实测 ≈28 min/批,占编排固定开销的三分之一),
 #   而手拼时 RC 隔着管道取、判据进 && 链 —— 正是 §J 那两条硬规矩最常破的地方。
 # 用法: flow-close <流程目录(绝对)> <基线文件(绝对)> <申报清单(绝对)> [after-hashes(绝对)]
-#       flow-close --between <流程目录(绝对)> <基线(绝对)> <申报清单(绝对)> <after-hashes(绝对)> [--task <任务号>] [--plan <plan绝对>] [--face <.face-<轮名>.txt 绝对>]
-#         --task 给了才跑路由复跑(按申报清单里的路径),--task + --plan 都给了才跑 flow-trace;--face 给了才判越面(flow-round close 按约定名传)。
+#       flow-close --between <流程目录(绝对)> <基线(绝对)> <申报清单(绝对)> [--task <任务号>] [--plan <plan绝对>] [--face <.face-<轮名>.txt 绝对>] [--this <本轮路径清单 绝对>]
+#         --task 给了才跑路由复跑(按申报清单里的路径),--task + --plan 都给了才跑 flow-trace;--face 给了才判越面(flow-round close 按约定名传);
+#         --this 给了越面只判它列的路径(本轮〇表路径),不判申报并集 —— ④A 拿 ③改 的清单过自己的面会把 ③ 的越面记到 ④ 头上。
 #       flow-close --wrap <流程目录(绝对)> <基线(绝对)> <申报清单(绝对)> [after-hashes(绝对)] [--task <号>] [--plan <plan绝对>] [--verdicts <三态表绝对>]
 #       flow-close --ship <commit> --subject <PR 标题> [--verdicts <三态表绝对>] [--dir <流程目录绝对>]
 # 逐项打印 RC;任一红 ⟹ 末行 `ROUND-CLOSE RED` / `BETWEEN RED` / `WRAP RED` 且 RC=1;全绿 ⟹ `… OK`。--ship 末行 `SHIP OK: PR #N …` / `SHIP RED`。
@@ -98,29 +101,32 @@ if [ "$MODE" = ship ]; then
 fi
 
 if [ "$MODE" = between ]; then
-  [ $# -ge 4 ] || flow_die "用法: flow-close --between <流程目录> <基线> <申报清单> <after-hashes> [--task <任务号>] [--plan <plan绝对>]"
+  [ $# -ge 3 ] || flow_die "用法: flow-close --between <流程目录> <基线> <申报清单> [--task <任务号>] [--plan <plan绝对>] [--face <面>] [--this <本轮路径清单>]"
 else
   [ $# -ge 3 ] || flow_die "用法: flow-close [--wrap] <流程目录(绝对)> <基线文件(绝对)> <申报清单(绝对)> [after-hashes(绝对)] [--task] [--plan] [--verdicts]"
 fi
 DIR="$1"; BASE="$2"; DECL="$3"; shift 3
 AFTER=""
-case "${1:-}" in ""|--*) ;; *) AFTER="$1"; shift ;; esac
-TASK=""; PLAN=""; VERD=""; FACE=""
+case "${1:-}" in ""|--*) ;; *)
+  [ "$MODE" != between ] || flow_die "1.0.0 起 --between 不收 after-hashes(得到 $1):交付态核对挪到 flow-round open,本轮 .after 由 close 全绿后打"
+  AFTER="$1"; shift ;; esac
+TASK=""; PLAN=""; VERD=""; FACE=""; THIS=""
 while [ $# -gt 0 ]; do
-  case "$1" in --task|--plan|--verdicts|--face) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
+  case "$1" in --task|--plan|--verdicts|--face|--this) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
   case "$1" in
     --task) TASK="$2"; shift 2 ;;
     --plan) PLAN="$2"; shift 2 ;;
     --verdicts) [ "$MODE" = wrap ] || flow_die "--verdicts 只在 --wrap 下认"; VERD="$2"; shift 2 ;;
     --face) [ "$MODE" = between ] || flow_die "--face 只在 --between 下认(收口的申报清单是编排方的,没有面)"; FACE="$2"; shift 2 ;;
+    --this) [ "$MODE" = between ] || flow_die "--this 只在 --between 下认"; THIS="$2"; shift 2 ;;
     *) flow_die "未知参数 $1" ;;
   esac
 done
-for p in "$DIR" "$BASE" "$DECL" ${AFTER:+"$AFTER"} ${PLAN:+"$PLAN"} ${VERD:+"$VERD"} ${FACE:+"$FACE"}; do
+for p in "$DIR" "$BASE" "$DECL" ${AFTER:+"$AFTER"} ${PLAN:+"$PLAN"} ${VERD:+"$VERD"} ${FACE:+"$FACE"} ${THIS:+"$THIS"}; do
   case "$p" in /*) ;; *) flow_die "文件参数须绝对路径: $p" ;; esac
 done
 [ -z "$FACE" ] || [ -f "$FACE" ] || flow_die "写权限面清单不存在: $FACE"
-[ "$MODE" = between ] && [ -z "$AFTER" ] && flow_die "--between 必须给 after-hashes(轮间核对的第一判据就是上一轮交付态)"
+[ -z "$THIS" ] || [ -f "$THIS" ] || flow_die "本轮路径清单不存在: $THIS"
 
 TMP=$(mktemp -d "$(flow_tmpdir)/flow-close.XXXXXX") || exit 2
 trap 'rm -rf "$TMP"' EXIT
@@ -185,7 +191,7 @@ step_factlint() {
   if [ -z "$FLOW_FACT_LINT_ROOTS" ]; then echo "  跳过:FLOW_FACT_LINT_ROOTS 未配置"; return 0; fi
   if [ ! -f "$FLOW_FACT_LINT_BASELINE_PATH" ]; then echo "  跳过:基线不存在 $FLOW_FACT_LINT_BASELINE_PATH(先 flow-fact-lint baseline)"; return 0; fi
   flow-fact-lint verify > "$TMP/factlint" 2>&1; frc=$?
-  LC_ALL=C grep -E '^verify|^RED|^FATAL' "$TMP/factlint"; echo "RC=$frc"
+  LC_ALL=C grep -E '^verify|^RED|^FATAL|^—— 图例' "$TMP/factlint"; echo "RC=$frc"   # 图例(A5)跟着 RED 一起印,agent 不必读源码
   [ "$frc" = 0 ] || red=1
 }
 
@@ -194,10 +200,12 @@ step_factlint() {
 #   P3-4 三轮的申报清单都含 apps/web/test/ 与 packages/core/src/index.ts,面里没有,没人量。例外只走申报行尾 `# 裁决-N`(与测试锁同一条通道)。
 step_face() {
   [ -n "$FACE" ] || { echo "== (越面跳过:未给 --face;flow-dispatch --dir 才落 .face-<轮名>.txt)=="; return 0; }
-  hdr "越面(申报 ⊆ $(basename "$FACE");例外走申报行尾 # 裁决-N)"
+  if [ -n "$THIS" ]; then facep=$(grep -v '^[[:space:]]*#' "$THIS" | sed 's/[[:space:]]*$//' | grep . | sort -u); scope="本轮〇表路径 $(printf '%s\n' "$facep" | grep -c . || true) 条"
+  else facep="$declp"; scope="申报并集"; fi
+  hdr "越面($scope ⊆ $(basename "$FACE");例外走申报行尾 # 裁决-N)"
   declv=$(grep -v '^[[:space:]]*#' "$DECL" | LC_ALL=C grep -E '#[^#]*裁决[- ]*[0-9]+' | sed -e 's/^[0-9a-f]\{40,\}  //' -e 's/^git \(..\) //' -e 's/^git //' | sed 's/.* -> //' | sed 's/^[[:space:]]*//' | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' | grep . | sort -u)
   nin=0; nout=0
-  for p in $declp; do
+  for p in $facep; do
     inf=0
     while IFS= read -r e; do
       case "$e" in ''|\#*) continue ;; esac
@@ -339,7 +347,8 @@ step_state() {
 }
 
 if [ "$MODE" = between ]; then
-  step_after; step_manifest; step_hollow; step_factlint; step_face; step_tree; step_route; step_trace; step_budget
+  # 1.0.0:交付态哈希那步不在这里 —— 上一轮的在 flow-round open 核,本轮的由 close 全绿后打
+  step_manifest; step_hollow; step_factlint; step_face; step_tree; step_route; step_trace; step_budget
   if [ "$red" = 0 ]; then echo "BETWEEN OK"; exit 0; else echo "BETWEEN RED"; exit 1; fi
 fi
 if [ "$MODE" = wrap ]; then

@@ -164,12 +164,16 @@ verify)
                      | sed -e 's/^[0-9a-f]\{40,\}  //' -e 's/^git \(..\) //' -e 's/^git //' | sed 's/.* -> //' | sed 's/^[[:space:]]*//' \
                      | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' | grep . | sort -u)
 
+  # 1.0.0 / A5:RED 行注明轴口径 —— git 轴是自 HEAD 的未提交改动(不是自基线),ignored 轴是与基线比;p4n ②A 为这一句读了本文件两段
   red=0
-  for p in $tracked $ig_changed; do
-    printf '%s\n' "$declared_paths" | grep -qxF -- "$p" || { echo "RED 漏申报: $p —— 申报清单补这一行,或还原它(它确实被改了)"; red=1; }
+  for p in $tracked; do
+    printf '%s\n' "$declared_paths" | grep -qxF -- "$p" || { echo "RED 漏申报: $p —— git 轴:自 HEAD 的未提交改动(含前几轮的);回件〇表补这一行(1.0.0 申报由〇表派生),或还原它"; red=1; }
+  done
+  for p in $ig_changed; do
+    printf '%s\n' "$declared_paths" | grep -qxF -- "$p" || { echo "RED 漏申报: $p —— ignored 轴:与基线的 sha 不同;回件〇表补这一行,或还原它"; red=1; }
   done
   for p in $ig_gone; do
-    printf '%s\n' "$declared_paths" | grep -qxF -- "$p" || { echo "RED 漏申报(被删): $p —— 申报清单补这一行,或还原它"; red=1; }
+    printf '%s\n' "$declared_paths" | grep -qxF -- "$p" || { echo "RED 漏申报(被删): $p —— ignored 轴:基线里有、树上没有;回件〇表补这一行(性质 删),或还原它"; red=1; }
   done
 
   # 轴3 测试锁(0.9.0):已有测试件动了要有裁决号;本轮改过 / 新增的测试件不许带跳过标记

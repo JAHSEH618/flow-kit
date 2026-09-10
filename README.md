@@ -12,7 +12,7 @@ claude plugin marketplace add ~/CodeSpace/flow-kit
 claude plugin install flow-kit@flow-kit-local --scope user
 ```
 
-装进一个工作区:在工作区根跑 `flow-init --repo <仓路径|.>`,或调 `/flow-kit:init` 走引导式。派单 / 复审 / 收口前读 `/flow-kit:protocol`。一轮的编排方三条命令:`flow-dispatch --dir` 派单 → `flow-round open` 开工 → `flow-round close` 收工交接口;中断了 `flow-dispatch --resume`;④ 的非生产尾巴走微改通道 `flow-micro <patch>... --face --apply`;收口 `flow-close --wrap` 与 `--ship`。
+装进一个工作区:在工作区根跑 `flow-init --repo <仓路径|.>`,或调 `/flow-kit:init` 走引导式。派单 / 复审 / 收口前读 `/flow-kit:protocol`。一轮的编排方三条命令:`flow-dispatch --dir` 派单 → `flow-round open` 开工 → `flow-round close` 收工交接口(派生申报、verify、全绿冻结);中断了 `flow-dispatch --resume`;② 与 ④ 后的非生产 patch 走微改通道 `flow-micro <patch>... --face --freeze --apply --verdict N`(② 全非生产就跳 ③);收口 `flow-close --wrap` 与 `--ship`。agent 侧只剩:写回件、判据命令经 `flow-ev` 跑(1.0.0)。
 
 ## 升级
 

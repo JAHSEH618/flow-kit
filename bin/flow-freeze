@@ -1,77 +1,28 @@
-#!/usr/bin/env bash
-# flow-freeze —— 冻结一棵工作树,产出完整哈希清单。
+#!/bin/sh
+# flow-freeze —— 冻结一棵工作树,产出完整哈希清单(shasum -c 体例)。1.0.0 起主体入库为 `flow_freeze_to`,本命令只剩壳,留作排障入口。
 #
 # 为什么存在:中断时曾用 `git status` 枚举改动来建清单,漏掉了 gitignore 区里的规格文件 —— git 根本看不见它。
-# 修法不是「检测哪个规格变了」(gitignore 的文件没有 HEAD 可比),
-# 而是**把整个规格目录无条件纳入清单** —— 漏不掉,因为不做选择。
+# 修法不是「检测哪个规格变了」(gitignore 的文件没有 HEAD 可比),而是**把整个规格目录无条件纳入清单** —— 漏不掉,因为不做选择。
+# 1.0.0:冻结归编排方 —— `flow-round close` 在 BETWEEN OK 之后打 `.after-<轮名>-hashes.txt`,`flow-micro --apply` 落笔后重打;
+#   agent 不再自跑(它自跑的那次从来不是判据,只是收工仪式里的一个请求)。
 #
 # 用法: flow-freeze <输出文件(绝对路径)>
-# 例:   flow-freeze "$PWD/.flow/7/.freeze-hashes.txt"
-# 仓根取自 FLOW_REPO_DIR(脚本自己 cd,不依赖调用方 cwd);规格目录取自 FLOW_SPEC_DIRS(空格分隔,仓相对)。
-# FLOW_SPEC_UNTRACKED=1 才走 shasum 轴(规格目录活在 git 外);=0 只走 git 轴并打印一行说明。
-set -euo pipefail
+# 仓根取自 FLOW_REPO_DIR(库函数自己 cd,不依赖调用方 cwd);规格目录取自 FLOW_SPEC_DIRS(空格分隔,仓相对)。
+# FLOW_SPEC_UNTRACKED=1 才走规格目录轴(规格目录活在 git 外);=0 只走 git 轴。
+set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
 flow_load_config
 
 [ $# -ge 1 ] || { echo "用法: flow-freeze <输出文件(绝对路径)>" >&2; exit 2; }
-OUT="$1"
-case "$OUT" in /*) ;; *) flow_die "输出文件必须绝对路径(脚本会 cd 到仓根,相对路径没有锚点): $OUT" ;; esac
-[ -d "$(dirname "$OUT")" ] || flow_die "输出目录不存在: $(dirname "$OUT")"
-
-cd "$FLOW_REPO_DIR"
-tf_git="$(flow_tmpdir)/.flow-freeze-git-$$"
-tf_specs="$(flow_tmpdir)/.flow-freeze-specs-$$"
-trap 'rm -f "$tf_git" "$tf_specs"' EXIT
-
-# 1) git 看得见的改动(已跟踪的改 + 未跟踪的新增)。枚举只经 flow_changed_paths(-uall / 剥状态位 / quotepath / kit 自有件过滤同源;为什么见 lib 注释)。
-#    不许 `|| true`:枚举失败吐的是空集,空集到下面 `[ -f ]` 那关就静默成空清单 —— 失败必须当场死。
-flow_changed_paths | sort -u > "$tf_git" || flow_die "实改集枚举失败(flow_changed_paths RC≠0),拒绝出清单"
-
-# 2) git 看不见的:规格目录整个无条件纳入(被 gitignore,但它是真值源)
-: > "$tf_specs"
+flow_freeze_to "$1"; rc=$?
+[ "$rc" = 0 ] || exit "$rc"
 if [ "$FLOW_SPEC_UNTRACKED" = 1 ]; then
-  for d in $FLOW_SPEC_DIRS; do
-    find "$d" -type f -name '*.md' 2>/dev/null || true
-  done | sort > "$tf_specs"
+  NS=0; for d in $FLOW_SPEC_DIRS; do c=$(grep -cF "  $d/" "$1" || true); NS=$((NS + c)); done
+  echo "  其中规格目录 [$FLOW_SPEC_DIRS] $NS 行(这些 git status 看不见)"
 else
-  echo "shasum 轴关闭:FLOW_SPEC_UNTRACKED=0(规格入库,git 轴已覆盖),只走 git 轴"
+  echo "  只有 git 轴(FLOW_SPEC_UNTRACKED=0,规格入库)"
 fi
-
-# 3) 守卫:清单里出现目录 = 上面的枚举漏了它下面的文件。**当场红,不静默跳过**
-#    ——「[ -f ] 为假就默默不写」正是那次缺陷能潜伏到写轮才被发现的原因。
-BAD=$(cat "$tf_git" "$tf_specs" | sort -u | while IFS= read -r f; do
-  [ -d "$f" ] && echo "$f"
-done || true)
-if [ -n "$BAD" ]; then
-  echo "FATAL: 枚举结果里出现目录,它下面的文件会被漏掉:" >&2
-  printf '  %s\n' $BAD >&2
-  exit 2
-fi
-
-# 4) 守卫:路径含空白 ⟹ 清单拿去当申报清单时会被 flow-manifest 判格式错;这里先红,不让它静默流下去
-WS=$(cat "$tf_git" "$tf_specs" | grep '[[:space:]]' || true)
-if [ -n "$WS" ]; then
-  echo "FATAL: 枚举结果里有含空白的路径,拒绝出清单:" >&2
-  printf '%s\n' "$WS" | sed 's/^/  /' >&2
-  exit 2
-fi
-
-cat "$tf_git" "$tf_specs" | sort -u | while IFS= read -r f; do
-  if [ -f "$f" ]; then flow_sha256 "$f"; fi
-done > "$OUT"
-
-N=$(wc -l < "$OUT" | tr -d ' ')
-echo "冻结清单已出: $OUT"
-if [ "$FLOW_SPEC_UNTRACKED" = 1 ]; then
-  NS=0
-  for d in $FLOW_SPEC_DIRS; do
-    c=$(grep -cF "  $d/" "$OUT" || true); NS=$((NS + c))
-  done
-  echo "  共 $N 行(其中规格目录 [$FLOW_SPEC_DIRS] $NS 行 —— 这些 git status 看不见)"
-else
-  echo "  共 $N 行(只有 git 轴)"
-fi
-echo "  HEAD = $(git log --oneline -1 2>/dev/null || echo "(无提交)")"
-echo
+echo "  HEAD = $(git -C "$FLOW_REPO_DIR" log --oneline -1 2>/dev/null || echo "(无提交)")"
 if command -v shasum >/dev/null 2>&1; then chk="shasum -a 256 -c"; else chk="sha256sum -c"; fi
-echo "校验: cd $FLOW_REPO_DIR && $chk $OUT"
+echo "校验: cd $FLOW_REPO_DIR && $chk $1"
+exit 0

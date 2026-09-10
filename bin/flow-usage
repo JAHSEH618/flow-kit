@@ -30,6 +30,10 @@
 #     p4e 实测旧窗(首次提到目录 = 派单 mkdir 那一步起、--write 那一刻止)只盖住编排方 142 请求里的 65:开工 11 min 与收口 16 min 全在窗外,
 #     「独占关键路径 14m ✅」是切窗产物,真值 ≈40 min。flow-close --ship --dir 末尾重跑一次,窗才含 commit / PR。
 #     父会话一次都没提到流程目录 ⟹ 不切窗(备注写明),跨批时数字偏大 —— 但「切了却切错」比「没切」更坏。
+# sub-agent 开销三列(1.0.0 / D3):每个请求按它的 tool_use 归一类 —— 打回件(cat >> 回件 / 三态表,Write / Edit 同)> 仪式(flow-freeze · 手写 .declared ·
+#   自跑 manifest verify / fact-lint / doc-budget / flow-step · shasum -c · 复跑 route-debts / receipts / trace;不含 flow-gates / flow-micro / flow-ev,那是任务)> 读 kit
+#   (读 flow-kit 的 bin / lib / 模板 / flow.config.sh)。轮次行加三个请求数,合计行加开销占比,开销请求 > 15% WARN(是账不是门)。
+#   分类只认命令头与路径形状,不进 config。三批实测开销请求 28–36%、携带 30–41%;1.0.0 的验收读数就是这三列(p4n 72 / 13 / 42 → ≤10 / 0 / ≤25)。
 # 用法: flow-usage <流程目录(绝对)> [--write]      --write 另写 <流程目录>/.usage.md(dotfile,不进 doc-budget 热路径);
 #   生成段由 <!-- flow:gen-begin/end --> 括起,重跑保留标记之后的手填段(0.6.0 的旧件没有标记:从「## 固定开销行(手填」起保留)
 # 末行固定:`USAGE OK: N 会话 / M 轮`;零会话命中 ⟹ FATAL RC=2(空集不算绿:「没花 token」与「没扫到」不许同型)。
@@ -169,6 +173,27 @@ def category(name, inp):
     if name == 'AskUserQuestion': return '问用户'
     return name
 
+# sub-agent 开销分类(1.0.0 / D3):一个 tool_use 块 → 'hand' / 'rite' / 'kit' / None。只认命令头与路径形状,不进 config
+RITE_RE = re.compile(r'\bflow-(freeze|manifest|fact-lint|doc-budget|step|route-debts|receipts|trace)\b|\bsha(sum|256sum)\b[^|;\n]*\s-c\b|\.declared-')
+KIT_RE = re.compile(r'/flow-kit/|/bin/flow-[a-z-]+\b|flow-lib\.sh|flow\.config\.sh|(handoff|review)-template\.md|/skills/protocol/')
+HAND_RE = re.compile(r'(?:cat|tee)\s*>>?\s*[^\s<]*(handoff|review|verdicts)[^\s<]*|open\([\'"][^\'"]*(handoff|review|verdicts)[^\'"]*[\'"],\s*[\'"][wa]')
+def overhead(name, inp):
+    if not isinstance(inp, dict): return None
+    if name == 'Bash':
+        c = inp.get('command', '') or ''
+        if HAND_RE.search(c): return 'hand'
+        if RITE_RE.search(c): return 'rite'
+        if KIT_RE.search(c) and re.search(r'\b(cat|sed|head|tail|grep|rg|less|awk|nl|wc)\b', c): return 'kit'
+        return None
+    if name in ('Write', 'Edit'):
+        f = inp.get('file_path', '') or ''
+        if re.search(r'handoff|review|verdicts', os.path.basename(f)): return 'hand'
+        return None
+    if name == 'Read':
+        f = inp.get('file_path', '') or ''
+        if KIT_RE.search(f): return 'kit'
+    return None
+
 def stats(path, win=None, sub=False):
     """一个会话的账:token 四项(同 message.id 逐字段取 max)· 请求数 · 调用数 · 读批量 · 墙钟四段 · 卡顿清单 · 活动区间 · 输出去向。
     sub=True(sub-agent)才判生成侧断流与中断:编排方等 sub-agent 是合法等待。"""
@@ -216,6 +241,8 @@ def stats(path, win=None, sub=False):
                     if r['tu'] is None:
                         c = (i.get('command') or i.get('file_path') or i.get('description') or '') if isinstance(i, dict) else ''
                         r['tu'] = (b.get('name'), i, str(c).strip().replace('\n', ' ')[:60])
+                    ov = overhead(b.get('name'), i)
+                    if ov: r.setdefault('ov', set()).add(ov)
                     if b.get('name') == 'Bash':
                         isread, np = read_shape(i.get('command', '') or '')
                         if isread: nread += 1; npath += np
@@ -262,6 +289,13 @@ def stats(path, win=None, sub=False):
     for m in order:
         tu = reqs[m]['tu']
         cats[category(tu[0], tu[1]) if tu else category(None, {})] += reqs[m]['u'][3]
+    # 开销三类按请求计,一个请求只记一类:打回件 > 仪式 > 读 kit(同一请求里有打回件即记打回件,有仪式即记仪式)
+    ov_hand = ov_rite = ov_kit = 0
+    for m in order:
+        ov = reqs[m].get('ov') or set()
+        if 'hand' in ov: ov_hand += 1
+        elif 'rite' in ov: ov_rite += 1
+        elif 'kit' in ov: ov_kit += 1
     # 编排方独占用:每个请求的区间 = (上一事件末 → 本请求末块)
     spans = []; pe = None
     for t, kind, mid, _txt in events:
@@ -272,6 +306,7 @@ def stats(path, win=None, sub=False):
         pe = end
     return dict(turns=len(order), inp=inp, cw=cw, cr=cr, out=out, carried=inp + cw + cr,
                 eq=inp + 1.25 * cw + 0.1 * cr + 5 * out, tools=len(tools), dur=dur,
+                ov_hand=ov_hand, ov_rite=ov_rite, ov_kit=ov_kit,
                 nread=nread, npath=npath, gen=gen, tool=tool, idle=idle, stalls=stalls, intervals=intervals,
                 spans=spans, cats=cats, intr=intr, first_act=first_act, stall_before_intr=stall_before_intr,
                 start=events[0][0] if events else None, end=events[-1][0] if events else None,
@@ -287,11 +322,12 @@ if ws and flowdir.startswith(ws + '/'):
 def belongs(txt):
     return flowdir in txt or (lane_re is not None and lane_re.search(txt) is not None)
 rows = collections.defaultdict(lambda: dict(turns=0, inp=0, cw=0, cr=0, out=0, carried=0, eq=0.0, tools=0, dur=0.0, nread=0, npath=0,
-                                            gen=0.0, tool=0.0, idle=0.0, stalls=[], model=collections.Counter(), n=0, sessions=[]))
+                                            gen=0.0, tool=0.0, idle=0.0, stalls=[], model=collections.Counter(), n=0, sessions=[],
+                                            ov_hand=0, ov_rite=0, ov_kit=0))
 parents = set(); matched = 0
 def add(role, st):
     r = rows[role]
-    for k in ('turns', 'inp', 'cw', 'cr', 'out', 'carried', 'eq', 'tools', 'dur', 'nread', 'npath', 'n', 'gen', 'tool', 'idle'): r[k] += st[k]
+    for k in ('turns', 'inp', 'cw', 'cr', 'out', 'carried', 'eq', 'tools', 'dur', 'nread', 'npath', 'n', 'gen', 'tool', 'idle', 'ov_hand', 'ov_rite', 'ov_kit'): r[k] += st[k]
     r['stalls'] += st['stalls']; r['model'][st['model']] += 1
     r['sessions'].append(dict(sid=st['sid'], turns=st['turns'], start=st['start'], end=st['end'], intr=st['intr'], first_act=st['first_act'], stall=st['stall_before_intr']))
 hits = []; sub_intervals = []
@@ -417,7 +453,8 @@ roles = [r for r in ORDER if r in rows] + sorted(set(rows) - set(ORDER))
 for role in roles:
     r = rows[role]; cpt = r['tools'] / r['turns'] if r['turns'] else 0
     model = r['model'].most_common(1)[0][0]
-    lines.append(f"| {role} | {hm(r['dur'])} | 携带 {k(r['carried'])} · 输出 {k(r['out'])} · 当量 {k(r['eq'])} | {r['turns']} 轮 · {cpt:.2f} 调用/轮 · 读批量 {rb(r):.2f} 路径/读调用({r['nread']} 次)· {model} · {r['n']} 会话{winnote if role == '编排方' else ''} |")
+    ovtxt = '' if role == '编排方' else f" · 开销 仪式 {r['ov_rite']} / 读kit {r['ov_kit']} / 打回件 {r['ov_hand']}"
+    lines.append(f"| {role} | {hm(r['dur'])} | 携带 {k(r['carried'])} · 输出 {k(r['out'])} · 当量 {k(r['eq'])} | {r['turns']} 轮 · {cpt:.2f} 调用/轮 · 读批量 {rb(r):.2f} 路径/读调用({r['nread']} 次){ovtxt} · {model} · {r['n']} 会话{winnote if role == '编排方' else ''} |")
     solo = f" · 独占关键路径 {hm(orch_solo)}(开工 {hm(solo_open)} · 轮间 {hm(solo_between)} · 收口 {hm(solo_close)})" if role == '编排方' else ''
     wall.append(f"| {role} | {hm(r['dur'])} | {hm(r['gen'])} | {hm(r['tool'])} | {hm(r['idle'])} | {len(r['stalls'])}{solo} |")
     total_turns += r['turns']; total_sessions += r['n']
@@ -451,7 +488,11 @@ if orch_solo > 1800:
     warns.append(f"WARN 编排方独占关键路径 {hm(orch_solo)} > 30 min(开工 {hm(solo_open)} · 轮间 {hm(solo_between)} · 收口 {hm(solo_close)})—— 不达标只许退役规矩或修工具,不许加规矩")
 sub = [rows[x] for x in rows if x != '编排方']
 srd = sum(x['nread'] for x in sub); spt = sum(x['npath'] for x in sub)
-lines.append(f"| sub-agent 合计 | {hm(sum(x['dur'] for x in sub))} | 携带 {k(sum(x['carried'] for x in sub))} · 输出 {k(sum(x['out'] for x in sub))} · 当量 {k(sum(x['eq'] for x in sub))} | {sum(x['turns'] for x in sub)} 轮 · 读批量 {(spt / srd if srd else 0):.2f} 路径/读调用({srd} 次)· {sum(x['n'] for x in sub)} 会话(并行轴时长各自计) |")
+sturns = sum(x['turns'] for x in sub); sov = sum(x['ov_rite'] + x['ov_kit'] + x['ov_hand'] for x in sub)
+ovpct = (sov * 100 // sturns) if sturns else 0
+lines.append(f"| sub-agent 合计 | {hm(sum(x['dur'] for x in sub))} | 携带 {k(sum(x['carried'] for x in sub))} · 输出 {k(sum(x['out'] for x in sub))} · 当量 {k(sum(x['eq'] for x in sub))} | {sturns} 轮 · 读批量 {(spt / srd if srd else 0):.2f} 路径/读调用({srd} 次)· 开销 {sov} 请求({ovpct}%:仪式 {sum(x['ov_rite'] for x in sub)} / 读kit {sum(x['ov_kit'] for x in sub)} / 打回件 {sum(x['ov_hand'] for x in sub)})· {sum(x['n'] for x in sub)} 会话(并行轴时长各自计) |")
+if sturns and ovpct > 15:
+    warns.append(f"WARN sub-agent 开销请求 {sov}/{sturns} = {ovpct}% > 15%(仪式 {sum(x['ov_rite'] for x in sub)} · 读kit {sum(x['ov_kit'] for x in sub)} · 打回件 {sum(x['ov_hand'] for x in sub)})—— 仪式应为零(1.0.0 收工零命令),读 kit 应为零(判据自解释),打回件只能减不能零;超线先看派单有没有还在印收工命令")
 outcat = []
 if orch_cats:
     tot = sum(orch_cats.values()) or 1

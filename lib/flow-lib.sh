@@ -82,9 +82,9 @@ flow_load_config() {
   FLOW_TURN_CAP=120                     # 单会话请求数上限(flow-usage 只 WARN):携带 ∝ 轮数 × 上下文,上下文又随轮数长 ⟹ 二次;按会话判,续轮单算
   FLOW_DISPATCH_EXCERPT_BYTES=12000     # 派单里 plan 任务节选的字节封顶:超过只印 outline + REQ 行 + 节尾(本刀落位段),其余给「文件 + 行号」指针
                                         # 实测一节 42 KB 横跨三刀,八个 agent 各读一遍 ≈ 该批携带 10%;②③④ 一律不印正文
-  FLOW_MICRO_FIX_LINES=16               # 微改通道:④ 必闭里非生产条的**合计新增行**上限。0.8.0 改判 —— 行数由 `flow-micro` 从审方附的 patch
-                                        # `git apply --numstat` 求和(**只数新增行**),不再由审方估:P3-1 实测裁决-700 估 16 行 / 实做 55 行(偏 3.4×),
-                                        # 而行数是这条通道唯一的门槛。没附 patch 的条目一律不算微改,自动落回 ③改二
+  FLOW_MICRO_FIX_LINES=16               # 微改通道:审轮(② 与 ④)必闭里非生产条的**非测试新增行合计**上限(1.0.0 / C2;测试行单列印出不计,删除行不计)。
+                                        # 行数由 `flow-micro` 从审方附的 patch `git apply --numstat` 求和,不由审方估:P3-1 实测裁决-700 估 16 行 / 实做 55 行(偏 3.4×)。
+                                        # 没附 patch 的条目一律不算微改,自动落回 ③
   FLOW_STALL_SEC=300                    # flow-usage 卡顿判据:一次工具调用 ≥ 此秒数单列 WARN(harness 卡顿实测 600 s 整、两轴同刻放行)
   FLOW_RECEIPT_MODE="section"           # plan 体例:section = `## <任务号>` 小节;table = 任务是表行
   FLOW_TEST_GLOBS='*.test.ts *.test.tsx *.spec.ts *.spec.tsx'   # 测试文件模式(空格分隔的 glob)。两处共用:flow-trace 拿它当 git ls-files 的 pathspec、
@@ -148,6 +148,89 @@ flow_filter_kit_owned() {   # stdin 一行一路径 → 去掉 kit 自有件(精
 #   枚举失败吐的是空集,而空集在三个调用方那里都是绿 —— 调用方必须按 §J 同层捕获,RC≠0 不许当空集用。
 flow_changed_paths() {
   git -C "$FLOW_REPO_DIR" -c core.quotepath=false status --porcelain -uall | sed 's/^...//' | sed 's/.* -> //' | flow_filter_kit_owned
+}
+
+# —— 冻结一棵树(1.0.0 入库;flow-freeze 命令只剩壳):实改集(git 轴 + 规格目录轴)逐件 sha256 → <out>,shasum -c 体例 ——
+#   为什么入库:1.0.0 起冻结归 `flow-round close`(全绿之后打 .after)与 `flow-micro --apply`(落笔后重打),agent 不再自跑。
+#   规格目录轴:git 看不见 gitignore 区,FLOW_SPEC_UNTRACKED=1 时规格目录整个无条件纳入(不做选择就漏不掉)。
+#   两条守卫都 FATAL 不静默:枚举结果里出现目录(它下面的文件会漏)· 路径含空白(喂给 flow-manifest 会判格式错)。
+#   RC:0 = 清单已出(stdout 一行 `冻结清单已出: <out>(N 行)`);2 = 枚举失败 / 守卫红,清单不写。
+flow_freeze_to() {   # 用法: flow_freeze_to <输出文件(绝对)>
+  _fz_out="$1"
+  case "$_fz_out" in /*) ;; *) flow_die "冻结输出文件必须绝对路径: $_fz_out" ;; esac
+  [ -d "$(dirname "$_fz_out")" ] || flow_die "冻结输出目录不存在: $(dirname "$_fz_out")"
+  _fz_tmp=$(mktemp "$(flow_tmpdir)/flow-freeze.XXXXXX") || return 2
+  ( cd "$FLOW_REPO_DIR" || exit 2
+    # 枚举失败不许当空集(空集到 [ -f ] 那关就静默成空清单)—— RC 同层捕获
+    flow_changed_paths > "$_fz_tmp" || { echo "FATAL: 实改集枚举失败(flow_changed_paths RC≠0),拒绝出清单" >&2; exit 2; }
+    if [ "$FLOW_SPEC_UNTRACKED" = 1 ]; then
+      for d in $FLOW_SPEC_DIRS; do [ -d "$d" ] && find "$d" -type f -name '*.md'; done >> "$_fz_tmp"
+    fi
+    sort -u "$_fz_tmp" > "$_fz_tmp.u"
+    _fz_bad=$(while IFS= read -r f; do [ -n "$f" ] && [ -d "$f" ] && printf '%s\n' "$f"; done < "$_fz_tmp.u")
+    if [ -n "$_fz_bad" ]; then
+      echo "FATAL: 枚举结果里出现目录,它下面的文件会被漏掉:" >&2; printf '  %s\n' $_fz_bad >&2; exit 2
+    fi
+    _fz_ws=$(grep '[[:space:]]' "$_fz_tmp.u" || true)
+    if [ -n "$_fz_ws" ]; then
+      echo "FATAL: 枚举结果里有含空白的路径,拒绝出清单:" >&2; printf '%s\n' "$_fz_ws" | sed 's/^/  /' >&2; exit 2
+    fi
+    while IFS= read -r f; do [ -n "$f" ] && [ -f "$f" ] && flow_sha256 "$f"; done < "$_fz_tmp.u" > "$_fz_out"
+    echo "冻结清单已出: $_fz_out($(grep -c . "$_fz_out" || true) 行)"
+  ); _fz_rc=$?
+  rm -f "$_fz_tmp" "$_fz_tmp.u"
+  return $_fz_rc
+}
+
+# —— 回件认领(1.0.0 入库,flow-round / flow-dispatch 共用):按**件里的首行**认,不按件名猜 ——
+#   回件首行逐字 `# <轮名> 回件 …`(两份回件模板的契约)。件名归编排方随手起,两批实测按件名前缀 + mtime 猜过 14 行行行错。
+#   stdout 印文件名(相对 <流程目录>),没有就空;RC 恒 0(认不出由调用方判)。
+flow_find_handoff() {   # 用法: flow_find_handoff <流程目录(绝对)> <轮名>
+  ( cd "$1" 2>/dev/null || exit 0
+    for m in *.md; do
+      [ -f "$m" ] || continue
+      case "$(head -1 "$m")" in "# $2 回件"*) printf '%s\n' "$m"; break ;; esac
+    done )
+}
+
+# —— 〇表解析(1.0.0 / A1):回件〇节索引表 → 申报行(`path` 或 `path  # 裁决-N`)——
+#   表列:`| 符号 | 文件:行段 | 性质 | 对应 | 例外 |`。第二列 = 路径[:行段](反引号可有可无);性质 新增 / 改 / 删 才算实改,
+#   顶回 / 核过 之类不进申报;例外列写 `裁决-N` ⟹ 行尾 `# 裁决-N`(越面与测试锁的例外通道,与 flow-manifest verify 同一条)。
+#   审轮的〇是正面结论不是表 ⟹ 零行(视为零改动)。只读 `## 〇` 节;表头行与分隔行跳过。
+flow_handoff_paths() {   # 用法: flow_handoff_paths <回件(绝对)>
+  LC_ALL=C awk -F'|' '
+    /^## /{ on = ($0 ~ /^## 〇/); next }
+    !on || $0 !~ /^\|/ || NF < 5 { next }
+    { for (i = 1; i <= NF; i++) { gsub(/^[ \t]+|[ \t]+$/, "", $i) }
+      f = $3; k = $4; e = (NF >= 6 ? $6 : "")
+      if (k != "新增" && k != "改" && k != "删") next          # 表头行(性质)与分隔行(---)也在这里被跳过
+      gsub(/`/, "", f); sub(/:[0-9][^\/]*$/, "", f)
+      if (f == "" || f ~ /[ \t]/ || f ~ /^[0-9][0-9,–-]*$/) next   # 纯行段(旧四列体例把路径写在第一列)不是路径:跳过,让 verify 报漏申报
+      if (e ~ /裁决[- ]*[0-9]+/) { sub(/.*裁决[- ]*/, "", e); sub(/[^0-9].*/, "", e); printf "%s  # 裁决-%s\n", f, e }
+      else print f }' "$1"
+}
+
+# —— 派生申报清单(1.0.0 / A1):本轮 = 〇表路径 ∪ 目录里**所有先前轮**的派生清单 ——
+#   git 轴比的是 HEAD 不是基线:一批里前几轮未提交的改动全在实改集里,所以要并上前几轮(取并集而不取「上一轮」:
+#   ②A ‖ ②B 谁后收工不定,flow-micro 追写的是 ①写 那份,按 mtime 取单份都会漏)。同一路径多行取带裁决号的那行,本轮优先。
+#   自己那份(.declared-<轮名>.txt)不并入(重跑 close 幂等);带 kit 头的先前清单头行跳过。写进 <out>,首行 kit 头。
+flow_derive_declared() {   # 用法: flow_derive_declared <流程目录(绝对)> <轮名> <回件(绝对,可空)> <输出(绝对)>
+  _dd_dir="$1"; _dd_round="$2"; _dd_h="$3"; _dd_out="$4"
+  _dd_tmp=$(mktemp "$(flow_tmpdir)/flow-declared.XXXXXX") || return 2
+  { [ -n "$_dd_h" ] && [ -f "$_dd_h" ] && flow_handoff_paths "$_dd_h" | sed 's/^/0\t/'
+    for f in "$_dd_dir"/.declared-*.txt; do
+      [ -f "$f" ] || continue
+      [ "$f" = "$_dd_dir/.declared-$_dd_round.txt" ] && continue
+      grep -v '^[[:space:]]*#' "$f" | sed -e 's/^[0-9a-f]\{40,\}  //' -e 's/^git \(..\) //' -e 's/^git //' -e 's/.* -> //' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep . | sed 's/^/1\t/'
+    done; } > "$_dd_tmp"
+  { echo "# declared · $_dd_round(flow-round close 派生 $(date +%F\ %H:%M):〇表路径 ∪ 先前轮清单;勿手改,重跑 close 重生)"
+    LC_ALL=C awk -F'\t' '{ line = $2; p = line; sub(/[ \t][ \t]*#.*$/, "", p); sub(/[ \t]*$/, "", p); if (p == "") next
+        has = (line ~ /#/)
+        if (!(p in best)) { best[p] = line; rank[p] = $1 * 2 + (has ? 0 : 1); ord[++n] = p }
+        else { r = $1 * 2 + (has ? 0 : 1); if (r < rank[p]) { best[p] = line; rank[p] = r } } }
+      END { for (i = 1; i <= n; i++) print best[ord[i]] }' "$_dd_tmp"
+  } > "$_dd_out"
+  rm -f "$_dd_tmp"
 }
 
 # —— 路径实参的词分割守卫(0.8.2):单个实参含空白 ⟹ 多半是把整份清单塞进一个变量喂进来了 ——

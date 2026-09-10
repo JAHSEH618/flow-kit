@@ -9,12 +9,15 @@
 # 用法:
 #   flow-dispatch <任务号> --tree <快照|活树-独占|禁入> --db <独占|只读|禁用> --seq <N> [--round <①写|②A|②B|③改|④A|④B>] \
 #       [--dir <流程目录绝对路径>] [--core <core写权限面>] [--plan <plan文件绝对路径>] [--cap-ok <理由>] <触面路径(仓库相对)...>
-#   flow-dispatch --resume <原派单件绝对路径> --dir <流程目录> [--round <原轮名>]  # 续轮派单:从步骤账机械生成(0.6.0)
+#   flow-dispatch --resume <原派单件绝对路径> --dir <流程目录> [--round <原轮名>]  # 续轮派单:①写 从步骤账、②③④ 从回件已落的节 + log.tsv 生成接手点(1.0.0)
 #     轮名默认从原派单的「轮次 / 模型」行取(0.8.2);--round 给了必须与它一致,且**不许带 `-续`** —— 续轮不是新轮,
 #     它沿用原轮的基线 / 步骤账 / 申报清单,轮名只有一个。原派单件本身是续轮派单 ⟹ FATAL(续轮不接续轮,仍指最初那份)。
-#   --dir 给了才能:① 把冻结 / 收工 / 门 / 预算的命令**连实参**印进块(agent 不必学用法,编排方不必读 kit 源码);
-#              ② 建步骤账 .steps-<轮名>.md(①写按 open REQ 一条一步;其余轮 装载 / 主活 / 回件 / 收工核对),agent 每步 flow-step done;
-#              ③ 建 .evidence/。与 flow-round open|close 同一套约定文件名。--dir 必须与 --round 同给。
+#   --dir 给了才能:① 把 flow-ev / 门 / 快照核对的命令**连实参**印进块(agent 不必学用法,编排方不必读 kit 源码);
+#              ② 只给 ①写 建步骤账 .steps-①写.md(按 open REQ 一条一步;1.0.0 起 ②③④ 不建 —— 它们的四步是固定文案不是断点);
+#              ③ 建 .evidence/;④ 印必读骨架(上一轮回件按首行认领 · flow-local · 路由到的账本行区间)。与 flow-round 同一套约定文件名。--dir 必须与 --round 同给。
+#   1.0.0(A1 收工零命令):派单**不再印收工段**(flow-freeze / .declared / verify / fact-lint / doc-budget 全退出)—— 申报由 flow-round close
+#     从回件〇表派生、冻结在全绿后由 kit 打;agent 面向的命令只剩 flow-ev(判据命令的唯一通道)、独占轮的门整跑、快照轮的 shasum -c。
+#   1.0.0(A5):回件模板**整块印进生成段**,由 <!-- flow:tpl-begin/end --> 括起(smoke 的 GEN_CAP 量法排除它);config 的门名单印一行。
 #   任务节选按轴(0.6.0):①写(或未给 --round)印正文但按 FLOW_DISPATCH_EXCERPT_BYTES 封顶 —— 超过只印 节头 + outline + REQ 行 + 节尾
 #     (本刀的落位段住在节尾),中间给「文件 + 行号」指针;②③④ 一律只印 outline + REQ 行(它们读的是回件索引表,不是任务书正文)。
 #     实测一节 42 KB 横跨三刀,八个 agent 各读一遍 ≈ 该批携带的 10%。REQ 行只印 open / deferred(0.7.0):[done] 行 p4e 实测占派单 10.3 KB。
@@ -63,16 +66,35 @@ if [ "${1:-}" = "--resume" ]; then
   [ -n "$RROUND" ] || RROUND="$ORIGROUND"
   [ -n "$RROUND" ] || flow_die "原派单里没有「轮次 / 模型」行,取不到轮名($ORIG)—— 显式给 --round <原轮名>(不带 -续)"
   STEPS="$RDIR/.steps-$RROUND.md"
-  [ -f "$STEPS" ] || flow_die "步骤账不存在: $STEPS —— 没有步骤账就没有断点;先从回件重建(flow-step init $RDIR $RROUND <步骤…>,已做的 flow-step done)再来"
-  LAST=$(flow-step show "$RDIR" "$RROUND" | tail -1)
-  case "$LAST" in "STEPS DONE"*) flow_die "步骤账已全勾($LAST)—— 不是断点,是收工;走 flow-round close" ;; esac
+  if [ -f "$STEPS" ]; then
+    LAST=$(flow-step show "$RDIR" "$RROUND" | tail -1)
+    case "$LAST" in "STEPS DONE"*) flow_die "步骤账已全勾($LAST)—— 不是断点,是收工;走 flow-round close" ;; esac
+    STEPLINE="- **步骤账**:$STEPS —— $LAST
+  每完成一步:\`flow-step done $RDIR $RROUND <N> \"<一句>\"\`;续轮之外别的 agent 也可能接手,勾在文件里不在你脑子里"
+  else
+    # 1.0.0 / A3:②③④ 没有步骤账,接手点从回件已落的节头与 flow-ev 的账生成。回件一个字没落就从头 —— 那本来就没有断点
+    RH=$(flow_find_handoff "$RDIR" "$RROUND")
+    RLOG="$RDIR/.evidence/$RROUND-log.tsv"; nlog=0; [ -f "$RLOG" ] && nlog=$(grep -c . "$RLOG" || true)
+    if [ -n "$RH" ]; then
+      have=""; lack=""
+      for sec in 〇 甲栏 乙栏 丙栏 丁栏 戊栏; do
+        n=$(LC_ALL=C awk -v S="## $sec" 'index($0, S) == 1 { on = 1; next } /^## /{ on = 0 } on && NF { c++ } END { print c + 0 }' "$RDIR/$RH")
+        if [ "$n" -gt 0 ]; then have="$have $sec($n 行)"; else lack="$lack $sec"; fi
+      done
+      STEPLINE="- **接手点**(从回件已落的节生成;②③④ 不建步骤账):回件 $RDIR/$RH
+  已落:${have:- 无} · flow-ev 账 $nlog 条($RLOG);缺:${lack:- 无}。已落的节**只追加不重写**,缺的节从头写"
+    else
+      STEPLINE="- **接手点**:目录里没有首行为「# $RROUND 回件」的件,flow-ev 账 $nlog 条 —— 回件一个字没落就没有断点,按原派单从头做(已有的 .evidence/$RROUND-*.txt 可直接引)"
+    fi
+    LAST="(无步骤账)"
+  fi
   # 0.9.0:快照轮的续轮不核 verify(副本里 FATAL),核上一轮交付态的 shasum -c
   RTREE=$(LC_ALL=C sed -n 's/^- \*\*树权限\*\*:\([^(]*\).*/\1/p' "$ORIG" | head -1)
   case "$RTREE" in
     快照*) RPREV=$(ls -t "$RDIR"/.after-*-hashes.txt 2>/dev/null | grep -v "/.after-$RROUND-hashes.txt\$" | head -1); [ -n "$RPREV" ] || RPREV="<上一轮 .after-*-hashes.txt>"
            if command -v shasum >/dev/null 2>&1; then RCHK="shasum -a 256 -c"; else RCHK="sha256sum -c"; fi
            RCORE="\`$RCHK $RPREV | grep -vc ': OK\$'\`(应为 0:快照没被动;别跑 flow-manifest verify,副本里它 FATAL)" ;;
-    *)     RCORE="\`flow-manifest verify $RDIR/.manifest-baseline-$RROUND.txt $RDIR/.declared-$RROUND.txt\`(申报清单还没落就先按回件索引表 / \`git status\` 补一份)" ;;
+    *)     RCORE="\`git -C $FLOW_REPO_DIR -c core.quotepath=false status --porcelain -uall\` 对回件〇表:表里没有的实改文件要么补进表,要么是上一个 agent 的半截变异态(编排方待填段有它停在哪)" ;;
   esac
   # ⚠ 下面是未加引号的 heredoc:反引号要写成 \` 才是字面量。0.6.0 写成 \\\` 留下了活反引号,把 flow-manifest verify / git status / ls 真跑了一遍、
   #   输出嵌进派单,<N> 还被当成重定向(「N: No such file」)—— F-24,p4e 实测。
@@ -81,22 +103,20 @@ if [ "${1:-}" = "--resume" ]; then
 ## 派单必带块 —— $RROUND-续(flow-dispatch --resume 生成 $(date +%F);原派单 $ORIG;生成段勿手改,要改重跑)
 
 - **你是谁**:$RROUND-续。上一个 $RROUND agent 已停(叫停 / 限额 / watchdog),上下文唤不回;你**不重建推理**,从步骤账的下一个未勾步骤接手,不开新战场。
-- **原派单**(整块照做;已勾的步骤跳过,权限面 / 号段 / 纪律全部沿用):$ORIG
-- **步骤账**:$STEPS —— $LAST
-  每完成一步:\`flow-step done $RDIR $RROUND <N> "<一句>"\`;续轮之外别的 agent 也可能接手,勾在文件里不在你脑子里
-- **先对树核,再动手**(通知里的 result 只带首句;watchdog 判 failed 也不代表没干活 —— 两批实测两次中断都停在「差最后一步」):
+- **原派单**(整块照做;已做的跳过,权限面 / 号段 / 纪律全部沿用):$ORIG
+$STEPLINE
+- **先对树核,再动手**(通知里的 result 只带首句;watchdog 判 failed 也不代表没干活):
   $RCORE
   \`ls -t $RDIR/.evidence | head\` 看最后一条落盘;回件已有的节**只追加不重写**,
-  **唯一例外是〇节**:它若还是 \`(待收工填)\` 之类的占位,就**在原位补全**,别把结论补在末尾另起一节。
-  〇 是下游整轮唯一的跳读入口 —— 占位留着,下一轮只能整读你这份件(实测 ④A 的〇节 52 字节占位 ⟹ ③改二 整读 33 KB)
-- **收工件**:同原派单(.after-$RROUND-hashes.txt · .declared-$RROUND.txt · 回件);回件末尾加一行「续轮从步骤 N 接手,N 之前的内容出自上一个 agent」
+  **唯一例外是〇节**:它若还是 \`(待收工填)\` 之类的占位,就**在原位补全**,别把结论补在末尾另起一节(〇 是下游整轮唯一的跳读入口)
+- **收工件**:只有回件(申报与冻结由编排方 flow-round close 派生);回件末尾加一行「续轮接手于 <节 / 步骤>,之前的内容出自上一个 agent」
 <!-- flow:gen-end -->
 
 ### 编排方待填(生成器管不到的判断项)
 - 上一个 agent 停在哪(树上实际状态,编排方独立读数,非 agent 自陈;半截变异态还是已复原)
 - 已知未闭的编译错 / 门读数(零门读数就写「零门读数,别拿任何数当交付」)
 RS
-  echo "" ; echo "步骤账全文:"; cat "$STEPS"
+  if [ -f "$STEPS" ]; then echo "" ; echo "步骤账全文:"; cat "$STEPS"; fi
   exit 0
 fi
 
@@ -214,57 +234,91 @@ if [ -n "$ROUND" ]; then
   else ROUNDLINE="- **轮次 / 模型**:$ROUND · 继承编排方(FLOW_ROLE_MODELS 未给 $ROUND)"; fi
 else ROUNDLINE="- **轮次 / 模型**:(未给 --round;Agent 调用 model 继承编排方)"; fi
 
-# 回件模板:路径由 kit 自己算并印进派单件。手打的插件缓存路径带版本号(…/flow-kit/0.3.0/…),升级即断。
+# 回件模板(1.0.0 / A5):--round 给了就**整块印进生成段**,由 <!-- flow:tpl-begin/end --> 括起 —— agent 少一个读模板的请求,
+#   「不许手打插件缓存路径」那条禁令随之作废;smoke 的 GEN_CAP 量法排除 tpl 段。没给 --round 只印两份的路径(kit 自算,带版本号的缓存路径升级即断)。
 TPL_H="$FLOW_KIT_DIR/skills/protocol/references/handoff-template.md"
 TPL_R="$FLOW_KIT_DIR/skills/protocol/references/review-template.md"
+TPL=""
 case "$ROUND" in
-  ①写|③改)        TPLLINE="- **回件模板**(整块照抄):$TPL_H" ;;
-  ②A|②B|④A|④B|④*) TPLLINE="- **回件模板**(整块照抄):$TPL_R" ;;
-  *)               TPLLINE="- **回件模板**(整块照抄):写 / 改轮 $TPL_H · 审轮 $TPL_R" ;;
+  ①写*|③改*)        TPL="$TPL_H" ;;
+  ②*|④*)            TPL="$TPL_R" ;;
 esac
-
-# 门整跑只归库独占的轮(F-22,p4e 实测:--db 禁用 的 ②A 拿到的收工段里仍有 flow-gates --reset,与人填段直接冲突,它为此花了一段自证)
-if [ "$DB" = 独占 ]; then
-  GATELINE="    \`flow-gates --reset > $DIR/.evidence/$ROUND-gates.txt 2>&1; echo RC=\$?\`(每轮至多一次整跑;同一棵树别跑第二遍)"
-  GATESTEP=" + flow-gates --reset"
+if [ -n "$TPL" ]; then
+  TPLLINE="- **回件模板**:见块末 flow:tpl 段(整块照抄,逐项填;首行逐字 \`# $ROUND 回件 · <一句>\`)"
 else
-  GATELINE="    (库权限 $DB:门整跑不归你 —— 不跑 flow-gates --reset / dbreset / 集成;要读数引上一轮 .evidence/*-gates.txt 的末行)"
-  GATESTEP=""
+  TPLLINE="- **回件模板**(整块照抄):写 / 改轮 $TPL_H · 审轮 $TPL_R"
 fi
-# 冻结 / 收工 / 步骤账行:--dir 给了就连实参印(约定名与 flow-round 同源),没给就印占位写法
-# 0.9.0:快照轮(--tree 快照*)不印 flow-manifest verify —— 它判的是活树(基线 root 与副本不同,0.9.0 起在副本里跑直接 FATAL),
-#   归编排方 flow-round close;副本里要证的只有「没被动」= 对上一轮交付态 shasum -c。P3-4 四条 A 轴各跑一次副本 verify 报 git 12,
-#   与主树同型,那一行从来不是判据。假话门(flow-fact-lint)同理归 close;写 / 改轮自跑那次是给自己的提示,修早一点,不是判据。
+
+# 门名一行(A5):agent 不必 cat config 去看门叫什么
+GATES=$(flow_gates | cut -f1 | grep . | tr '\n' ' ' | sed 's/ $//')
+[ -n "$GATES" ] && GATELIST="$GATES" || GATELIST="(零门:config 未定义 flow_gates)"
+
+# 收工行(1.0.0 / A1 / D2):agent 面向的命令只剩三条 —— flow-ev(判据命令的唯一通道)· 独占轮的门整跑 · 快照轮的 shasum -c。
+#   flow-freeze / .declared / verify / fact-lint / doc-budget 全退出派单:申报由 flow-round close 从〇表派生、冻结全绿后由 kit 打、
+#   假话门 / 越面 / 预算 / 测试锁全在 close 判。派单里让 agent 自跑的从来只是提示,不是判据(契约 9)。
+#   门整跑只归库独占的轮(F-22):--db 禁用 的轮拿到 flow-gates --reset 会与人填段冲突,为此花一段自证。
 if command -v shasum >/dev/null 2>&1; then SHACHK="shasum -a 256 -c"; else SHACHK="sha256sum -c"; fi
-ROOTLINE=""; [ -n "$DIR" ] && ROOTLINE="(基线打在 root \`$(git -C "$FLOW_REPO_DIR" rev-parse --show-toplevel)\`;verify 只许在这棵树跑)"
+EVCMD="flow-ev ${DIR:-<流程目录>} $ROUND <名> -- <命令>"
+if [ "$DB" = 独占 ]; then
+  GATELINE="门整跑一次:\`flow-ev ${DIR:-<流程目录>} $ROUND gates -- flow-gates --reset\`(每轮至多一次;同一棵树别跑第二遍)"
+else
+  GATELINE="库权限 $DB:门整跑不归你 —— 不跑 flow-gates --reset / dbreset / 集成;要读数引上一轮 .evidence/*-gates.txt 的末行"
+fi
+ROOTLINE=""; [ -n "$DIR" ] && ROOTLINE="(基线打在 root \`$(git -C "$FLOW_REPO_DIR" rev-parse --show-toplevel)\`)"
 if [ -n "$DIR" ]; then
   case "$TREE" in
     快照*)
       PREV=$(ls -t "$DIR"/.after-*-hashes.txt 2>/dev/null | head -1); [ -n "$PREV" ] || PREV="<上一轮 .after-*-hashes.txt>"
-      FREEZELINE="- **冻结**:基线 \`$DIR/.manifest-baseline-$ROUND.txt\` 由编排方 \`flow-round open\` 在活树打$ROOTLINE;你在快照里,**不跑 flow-manifest verify**(它判活树,归编排方收工;在副本里跑会 FATAL)
-- **收工三件(命令连实参,照抄)**:
-    \`$SHACHK $PREV > $DIR/.evidence/$ROUND-snap-check.txt 2>&1; echo RC=\$?\`(证快照没被动:非 OK 行须为 0;开工先跑一次证同构)
-    \`flow-freeze $DIR/.after-$ROUND-hashes.txt\` · 申报清单 \`$DIR/.declared-$ROUND.txt\`(快照轮零改动:= 上一轮的申报清单原样)
-$GATELINE
-    \`flow-doc-budget $DIR\`
-- **步骤账**:\`$DIR/.steps-$ROUND.md\`(每完成一步 \`flow-step done $DIR $ROUND <N> \"<一句>\"\`;你被中断时续轮从第一个未勾步骤接手,勾在文件里不在你脑子里)" ;;
+      FREEZELINE="- **判据命令一律经 flow-ev**:\`$EVCMD\`(在仓根 sh -c 跑,全量落 .evidence/$ROUND-<名>.txt,账记 .evidence/$ROUND-log.tsv,屏上只印末 20 行 + RC;逐行判的扫描加 \`--show all\`;一个名一份证据,重名 FATAL)
+- **树核对**:开工与收工各一次 \`$SHACHK $PREV | grep -vc ': OK\$'\`(应为 0:你的副本与上一轮交付态同构;基线 \`.manifest-baseline-$ROUND.txt\` 由编排方在活树打$ROOTLINE,verify 归编排方,副本里不跑)
+- **收工件只有回件**:申报与冻结由编排方 \`flow-round close\` 从回件〇表派生(审轮零改动,〇是正面结论);$GATELINE" ;;
     *)
-      FREEZELINE="- **冻结**:基线 \`$DIR/.manifest-baseline-$ROUND.txt\` 由编排方 \`flow-round open\` 在派单后打$ROOTLINE(你开工时它应已存在;不存在就停,别自己打)
-- **收工三件(命令连实参,照抄)**:
-    \`flow-freeze $DIR/.after-$ROUND-hashes.txt\` · 申报清单 \`$DIR/.declared-$ROUND.txt\`(一行一路径,不许散文;例外行尾 \`# 裁决-N\`)
-    \`flow-manifest verify $DIR/.manifest-baseline-$ROUND.txt $DIR/.declared-$ROUND.txt > $DIR/.evidence/$ROUND-manifest-verify.txt 2>&1; echo RC=\$?\`(必须读到 verify OK 或 RED;FATAL 与没跑一律当红)
-$GATELINE
-    \`flow-fact-lint verify > $DIR/.evidence/$ROUND-factlint.txt 2>&1; echo RC=\$?\`(提示用,判据由编排方收工独立跑)· \`flow-doc-budget $DIR\`
-- **步骤账**:\`$DIR/.steps-$ROUND.md\`(每完成一步 \`flow-step done $DIR $ROUND <N> \"<一句>\"\`;你被中断时续轮从第一个未勾步骤接手,勾在文件里不在你脑子里)" ;;
+      FREEZELINE="- **判据命令一律经 flow-ev**:\`$EVCMD\`(在仓根 sh -c 跑,全量落 .evidence/$ROUND-<名>.txt,账记 .evidence/$ROUND-log.tsv,屏上只印末 20 行 + RC;逐行判的扫描加 \`--show all\`;一个名一份证据,重名 FATAL)
+- **收工件只有回件**:申报清单 = 回件〇表第二列的路径(每个实改文件 ≥ 1 行;例外列写 \`裁决-N\`),冻结与 verify(含测试锁 · 假话门 · 越面)由编排方 \`flow-round close\` 跑;基线 \`.manifest-baseline-$ROUND.txt\` 由 \`flow-round open\` 打$ROOTLINE(不存在就停,别自己打);$GATELINE" ;;
+  esac
+  case "$ROUND" in
+    ①写*) FREEZELINE="$FREEZELINE
+- **步骤账**:\`$DIR/.steps-$ROUND.md\`(每完成一步 \`flow-step done $DIR $ROUND <N> \"<一句>\"\`;中断时续轮从第一个未勾步骤接手)" ;;
   esac
 else
-  FREEZELINE="- **冻结**:开工在仓库根跑 \`flow-manifest baseline <流程目录>/.manifest-baseline-<轮名>.txt\`(基线放仓外;收工 verify 由编排方在活树跑,protocol §1)
-  ⚠ **baseline 打在编排方停止编辑之后**(protocol §3:打早了会让写轮收到幻影 RED,并教会所有人对 RED 耸肩)
-  (未给 --dir:收工命令与步骤账都没印实参;给 --dir 才有断点续跑)"
+  FREEZELINE="- **判据命令一律经 flow-ev**:\`flow-ev <流程目录> <轮名> <名> -- <命令>\`;收工件只有回件(申报与冻结由编排方 flow-round close 派生)
+  (未给 --dir:命令没印实参;给 --dir 才有约定文件名与 ①写 的步骤账)"
 fi
 
-# 步骤账:--dir 给了且尚无账就建;①写按 open REQ 一条一步,其余轮按固定四步
-if [ -n "$DIR" ] && [ ! -f "$DIR/.steps-$ROUND.md" ]; then
+# 必读骨架(1.0.0 / B3;--dir 才有):上一轮回件按首行认领 · flow-local · 路由到的账本行区间。手写段只剩裁决与必查
+MUSTREAD=""
+if [ -n "$DIR" ]; then
+  prev_rounds=""
+  case "$ROUND" in
+    ②*)   prev_rounds="①写" ;;
+    ③改*) prev_rounds="②A ②B" ;;
+    ④*)   prev_rounds="③改 ②A ②B" ;;
+  esac
+  for r in $prev_rounds; do
+    hh=$(flow_find_handoff "$DIR" "$r")
+    if [ -n "$hh" ]; then
+      case "$r" in ②*) [ "${ROUND#④}" != "$ROUND" ] && hint="(只读丙栏)" || hint="(先读〇节表,按表跳读)" ;; *) hint="(先读〇节表,按表跳读)" ;; esac
+      MUSTREAD="$MUSTREAD
+    $r 回件 $DIR/$hh $hint"
+    else
+      MUSTREAD="$MUSTREAD
+    $r 回件:目录里没有首行为「# $r 回件」的件(待填:编排方补路径,或本轮不依赖它)"
+    fi
+  done
+  MUSTREAD="$MUSTREAD
+    本地规矩 $FLOW_LOCAL_DOC_PATH"
+  # 账本行区间:对必读里每条标记,机器头所在行到下一个机器头前一行
+  for m in $(LC_ALL=C grep -oE "^- $(flow_mark_re)" "$TMP/debts" | sed 's/^- //' | sort -u); do
+    ls_=$(LC_ALL=C grep -n "^<!-- debt:[0-9]* mark:$m " "$FLOW_LEDGER_PATH" | head -1 | cut -d: -f1)
+    [ -n "$ls_" ] || continue
+    le_=$(awk -v s="$ls_" 'NR>s && /^<!-- debt:/{print NR-1; exit}' "$FLOW_LEDGER_PATH"); [ -n "$le_" ] || le_=$(wc -l < "$FLOW_LEDGER_PATH" | tr -d ' ')
+    MUSTREAD="$MUSTREAD · $FLOW_LEDGER L$ls_–$le_($m)"
+  done
+  MUSTREAD="- **必读**(kit 印;手写段只加裁决与必查,不复述):$MUSTREAD"
+fi
+
+# 步骤账:--dir 给了、是 ①写 且尚无账就建(按 open REQ 一条一步);1.0.0 起 ②③④ 不建 —— 它们的四步是固定文案不是断点,续轮从回件读
+if [ -n "$DIR" ] && [ ! -f "$DIR/.steps-$ROUND.md" ] && [ "${ROUND#①写}" != "$ROUND" ]; then
   STEPARGS="$TMP/steps"; : > "$STEPARGS"
   case "$ROUND" in
     ①写*)
@@ -274,11 +328,8 @@ if [ -n "$DIR" ] && [ ! -f "$DIR/.steps-$ROUND.md" ]; then
         LC_ALL=C grep -E "$(flow_req_re).*\[open" "$TMP/sec" | sed -e 's/^[-*[:space:]]*//' -e 's/[[:space:]]*\[open[^]]*\]//' | cut -c1-90 >> "$STEPARGS"
       fi
       [ -s "$STEPARGS" ] || echo "主活:按派单写代码 + 测绿(任务节无 open REQ 行或无 plan 节选;自己 flow-step add 拆步骤)" >> "$STEPARGS"
-      printf '%s\n' "回件:索引表 + 甲乙丙丁戊 + 收工读数(边写边落)" "收工核对:flow-freeze + 申报清单 + flow-manifest verify$GATESTEP + flow-fact-lint verify + flow-doc-budget" >> "$STEPARGS" ;;
-    ②*|④*)
-      printf '%s\n' "装载:读派单 + 上一轮回件首节索引表(按表跳读)" "主活:按本轮清单逐条核,每闭一条追加落盘" "回件:〇甲乙丙丁戊 + 必答四组数(④A 另落三态表)" "收工核对:flow-freeze + 申报清单 + flow-manifest verify(快照零改动也要 verify)$GATESTEP + flow-doc-budget" >> "$STEPARGS" ;;
-    *)
-      printf '%s\n' "装载:读派单 + 两份审查回件的〇节与丙栏" "主活:逐条 finding 改或反证顶回,每条追加落盘" "回件:索引表每行挂 finding 号 + 收工读数" "收工核对:flow-freeze + 申报清单 + flow-manifest verify$GATESTEP + flow-fact-lint verify + flow-doc-budget" >> "$STEPARGS" ;;
+      GS=""; [ "$DB" = 独占 ] && GS=" + 门整跑(flow-ev … gates -- flow-gates --reset)"
+      printf '%s\n' "回件:〇表(第二列 = 路径:行段,每个实改文件 ≥ 1 行)+ 甲乙丙丁戊,边写边落$GS" >> "$STEPARGS" ;;
   esac
   # 多行文字进位置参数:逐行读,不靠分词
   set --
@@ -291,7 +342,7 @@ fi
 if [ "$FLOW_FIX_BY_WRITER" = 1 ]; then
   FIX="SendMessage 回①写轮本人(断连才起新 agent);审查方结论优先,反证必须带命令"
 else
-  FIX="另起 agent(宿主无 SendMessage;派单自带上一轮回件索引表,按表跳读);审查方结论优先,反证必须带命令"
+  FIX="另起 agent;审查方结论优先,反证必须带命令"
 fi
 SPECS=""; for d in $FLOW_SPEC_DIRS; do SPECS="$SPECS $d/"; done; SPECS="${SPECS# }"
 
@@ -305,28 +356,22 @@ cat <<HDR
 <!-- flow:gen-begin -->
 $HEAD
 
-- **树权限**:$TREE(protocol §3:只读 agent 一律快照;活树是变异轴独占资源)
-- **库权限**:$DB(protocol §3:库是单点,dbreset 门任何时刻只许一个持有者)
+- **树权限**:$TREE
+- **库权限**:$DB
 - **核心库写权限面**:$CORE
-- **写权限面 · 许写**(= 触面,与 .face-<轮名>.txt 同源;收工 flow-round close 判 申报 ⊆ 面,越面 RED,例外只走申报行尾 \`# 裁决-N\`):$FACE_TXT
+- **写权限面 · 许写**(= 触面;close 判 〇表路径 ⊆ 面,越面 RED,例外走〇表「例外」列 \`裁决-N\`):$FACE_TXT
 - **裁决号段**:从 $SEQ 起
 $ROUNDLINE
+- **门**:$GATELIST(config flow_gates;读数取 .evidence/*-gates.txt 末行)
 $TPLLINE
 $FREEZELINE
-- **扫描纪律**:全仓口径判据须 \`command grep\` 或显式含 $SPECS(protocol §4 范围轴);零命中先过非空转(protocol §4)
-- **假话门**:新增 RED 零才许交付,判据由编排方收工独立跑(flow-round close);你自跑 \`flow-fact-lint verify\` 是为了修早一点;基线存量归收尾轮
-- **移交件预算**:回件**自写**部分 ≤$FLOW_DOC_BUDGET_FILE 行且 ≤$FLOW_DOC_BUDGET_SELF 字节(本派单件的生成段由 \`<!-- flow:gen-* -->\` 括起,不计进你的预算;
-  超限首部 \`budget-ok:<理由>\` 显式带过);命令全量输出落 <流程目录>/.evidence/,件内只贴摘录+路径;引上游用指针(裁决号/文件+节号)不抄正文;收工编排方跑 \`flow-doc-budget\`(protocol §5)
-  ⚠ 回件是你逐字打出来的(复审轴 21–34% 的墙钟耗在写回件上):少写一段的收益比少读十个文件大得多。
-- **读取纪律**:上一轮回件先读首节「改动索引表」,按表只读文件区间;整读一个文件要在回件里给一行理由;
-  定位用 LSP(先 ToolSearch select:LSP)/ \`grep -n\`,不用 cat 找;plan 只读本块的任务书节选,账本只读本块的必读段
-- **工具纪律**(一次响应只发得出一个工具块;读批量与调用每轮由 flow-usage 记账):**要批量就把多条命令合进同一个 Bash**(\`cmd1; echo ===; cmd2\`);
-  flow-* 命令与门的输出 \`> <流程目录>/.evidence/<名>.txt; rc=\$?\`,判读只贴末行读数 + RC(末行为此固定可 grep),全量不 cat 进上下文;自造扫描仍逐行判
-- **证据源封闭**:证据只来自树、上游 spec、本批流程目录;会话记录(~/.claude/projects/**/*.jsonl)与 tool-results 不是证据源,不读不引
-  ⚠ **边做边落盘**:进程中途死于 API 断连时,**没落盘的一律全丢**;
-  攒到最后一次性写 = 拿整轮的工作量赌连接不断。已得结论每隔一段就写进回件文件。
-- **闭环**:回件落文件即可,不必回信;转达走编排方(protocol §1);残留按 protocol §2 三级标级,不标按阻塞
-- 回件边写边落:每闭一条 finding 就追加落盘,不许攒到收工一次写
+${MUSTREAD:+$MUSTREAD
+}- **扫描纪律**:全仓口径判据须 \`command grep\` 或显式含 $SPECS(范围轴);零命中先过非空转
+- **移交件预算**:回件自写 ≤$FLOW_DOC_BUDGET_FILE 行 / ≤$FLOW_DOC_BUDGET_SELF 字节,〇 + 丙栏 ≤$FLOW_DOC_BUDGET_HOTPATH 字节(close 判);件内只贴判词 + 指针,不抄正文
+- **读取纪律**:按上一轮回件〇表只读文件区间,整读一个文件要在回件给一行理由;定位用 LSP / \`grep -n\`;plan 只读本块节选,账本只读必读段
+- **工具纪律**:多条命令合进同一个 Bash;判据命令走 flow-ev,判读只看末行 + RC;自造扫描逐行判
+- **证据源封闭**:只认树、上游 spec、本批流程目录;会话记录与 tool-results 不是证据源,不读不引
+- **回件边写边落**:每闭一条就追加落盘(断连时没落盘的全丢);不必回信;残留按三级标级,不标按阻塞
 - 三改轮:$FIX
 HDR
 
@@ -412,18 +457,23 @@ RH
   cat "$TMP/rcpt"
 fi
 
+if [ -n "$TPL" ]; then
+  echo ""
+  echo "<!-- flow:tpl-begin -->"
+  echo "### 回件模板(同源印自 $(basename "$TPL");整块照抄,逐项填)"
+  cat "$TPL"
+  echo "<!-- flow:tpl-end -->"
+fi
 cat <<FT
 <!-- flow:gen-end -->
 
-### 编排方待填(生成器管不到的判断项)
-- 禁写面:逐条写明(许写已由生成段从触面印出,别再手写一份;写「其余不许」不算)
+### 编排方待填(生成器管不到的判断项;不复述生成段)
+- 禁写面:逐条写明(许写已由生成段从触面印出;写「其余不许」不算)
 - 交付判据与任务书之外的裁决(任务书正文已在节选段,不再抄;①写不跑变异电池,变异归 ②B 与 ④B)
 - 自报三处「最没把握」的要求(①写轮)
-- ④ 的必闭每条带:可原样重跑的复现命令 + 期望读数 + **一份可 \`git apply\` 的 patch**(落 \`$DIR/.evidence/$ROUND-micro-<裁决号>.patch\`,生成用 \`git -c core.quotepath=false diff\`)。
-  行数与性质**不由审方估**,由 \`flow-micro <patch>... --face $DIR/.face-<③改轮名>.txt\` 从 patch 量(新增行求和 · 路径与改动行核性质 · 面内);
-  末行 MICRO OK ⟹ 编排方 \`--apply --freeze <③改的 .after-*-hashes.txt>\` 落笔(占裁决号)+ 复跑④写下的复现命令对读数,不起 ③改二;
-  MICRO RED(有生产 / 面外 / 合计新增 > $FLOW_MICRO_FIX_LINES)⟹ 整批走 ③改二。**没附 patch 的条目一律不算微改。**
-- 本轮**必读清单**(移交件按件点名;目录其余 = 旁证按需读,protocol §5)
+- 审轮丙栏每条必闭带:\`ev:<名>\`(复现命令的账)+ 期望读数 + **一份可 \`git apply\` 的 patch**(落 \`$DIR/.evidence/$ROUND-micro-<裁决号>.patch\`,头一行 \`# repro: <命令> → 期望 <读数>\`,正文 \`git -c core.quotepath=false diff\`)。
+  行数与性质由编排方 \`flow-micro <patch>... --face .face-<写轮名>.txt\` 从 patch 量(② 后与 ④ 后都跑;上限 $FLOW_MICRO_FIX_LINES 只数非测试新增行);**没附 patch 的条目一律不算微改**
+- 必查(必读之外本轮特有要核的;必读骨架已由生成段印出)
 - 若并行:H1/H2 隔离条件逐条核($SPECS 手工 cp / DB 单点 / 文件层不相交 / 号段)
 FT
 exit 0

@@ -4,7 +4,7 @@
 0. 收口另起会话:flow-round state <流程目录> 刷完事实段、手写区写完再开新会话做收口(编排方末轮上下文 429k;收口占它一半轮次)
 1. flow-close --wrap <流程目录> <基线> <编排方申报清单(含账本 / spec plan / 根文档)> [after-hashes] [--task] [--plan] [--verdicts <④A 三态表>]
    —— 机械段一条命令:三态表 dry-run · 索引重渲 · 账本 lint · REQ 对账 · REQ 翻 done(对账绿才翻,plan 须在申报清单里)· 门整跑(收口那一次;印一行可照抄的门读数)
-      · 冻结核对 + 非空转 + 交付态哈希 · 预算 · 规则书棘轮 · 轮数账 --write · 状态档事实段
+      · 冻结核对 + 非空转 + 交付态哈希(after-hashes = 最后一轮 close 打的 .after)· 预算 · 规则书棘轮 · 轮数账 --write · 状态档事实段
    末行 WRAP OK 才往下,它后面印的就是剩余手工步(2–7),照它做;RED 逐项看,规则书变长即 RED
 2. 账本(判断步):按 dry-run 做 diff 审 → flow-ledger apply <三态表> --write · append <标记> "<一行>" · add --owner … --due … --touches … --title … --body-file <正文文件>
    (正文多行一次落,整块带 `> ` 前缀也认;p4e 曾 add 只落机器头、正文再五次 python)已还条目正文里的开口项单开新条;owner 不锚已收工任务;新条落接收位(flow-receipts 能扫到)
@@ -33,6 +33,6 @@
 
 - 编排方独占关键路径 = 开工 + 轮间 + 收口 ≤ 30 min(flow-usage 全窗算;p4e 实测 35 = 9 + 11 + 13。旧窗只盖住编排方 46% 的请求,曾报 14 ✅)
 - 轮内门整跑每轮 ≤ 1 次 + 收口 1 次(旧判据「总数 ≤3」的结构下限就是 4,判据本身错了)
-- 不起独立收尾轮;④ 判零阻塞后的非生产尾巴走微改通道 `flow-micro <patch>... --face … --apply --freeze …`,不起 ③改二(p4e 那条尾巴 46 min)
+- 不起独立收尾轮;② 与 ④ 后的非生产 patch 都走微改通道 `flow-micro <patch>... --face .face-<写轮名>.txt --freeze <最新 .after> --apply --verdict <N>`(kit 重打冻结件、追加申报、印复现命令);② 全非生产 ⟹ 跳 ③ 直接 ④;不起 ③改二
 - token 列首批记录作基线,之后只比不涨;「调用/轮」低于 1.5 的轴换模型或拆任务,「读批量」低于 2 的轴是没把读合进一个 Bash;单会话请求超 FLOW_TURN_CAP 就拆任务(续轮单算)—— 三条都不加纪律
 - 卡顿(单次工具 ≥ FLOW_STALL_SEC,或 sub-agent 拿到工具结果后 ≥ 它无输出;上下文与输出都正常)从账上扣掉再比:那是 harness 侧,不是 flow 的;中断税行里只有「编排方接手 + 续轮装载」两段归 flow

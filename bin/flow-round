@@ -1,24 +1,30 @@
 #!/bin/sh
 # flow-round —— 轮级的两个过渡各一条命令(开工 / 收工交接口)+ 状态档事实段生成。
 # 病根:编排方在每个轮间用 10–25 个请求做文书(基线、冻结、fact-lint、预算、between、状态档整段 python 重写),每个请求带 30 万上下文;
-#   两批实测编排方自占关键路径 70–100 min,其中状态档整段重写 ≥6 次 × 3–5k token,还为读 kit 源码学用法每批花 3–4 个请求。
-#   文件名也长出两套(`.manifest-baseline-①写` 与 `…-①写轮`)。本命令按约定派生全部文件名,编排方只给 <流程目录> <轮名>,判读只看末行。
+#   两批实测编排方自占关键路径 70–100 min。本命令按约定派生全部文件名,编排方只给 <流程目录> <轮名>,判读只看末行。
+# 1.0.0(A1 收工零命令):agent 收工只写回件,收工件(申报清单 / 交付态哈希)由本命令派生与冻结 ——
+#   · close 先从回件〇节索引表**派生申报清单**(〇表路径 ∪ 目录里所有先前轮的派生清单;例外列 `裁决-N` ⟹ 行尾 `# 裁决-N`)
+#     落 .declared-<轮名>.txt;目录里若有 agent 手写的同名件(无 kit 头)⟹ diff、不一致 WARN、以派生为准。
+#   · between 全绿后才冻结:flow_freeze_to 写 .after-<轮名>-hashes.txt;红了不冻,修完重跑。
+#   · 「交付态哈希」从 close 挪到 open:open 对目录里**最新**的 .after-*-hashes.txt 跑 shasum -c,非 OK 行 > 0 即 RED(抓的是轮间有人动树);
+#     一批的第一轮没有上一轮 ⟹ info 不判红。
+# 1.0.0(A2 甲栏机器生成):close 另判三条 —— 审轮(②/④)的 .evidence/<轮名>-log.tsv 存在且非空;丙栏每个 `ev:<名>` 在 log 里有行;
+#   甲栏判词行数(`- <名>:…`)= log 行数(「贴了 N 行 / 判了 N 行」做成机器判)。
+# 1.0.0(A3):步骤账只归 ①写;②③④ 的「步骤账全勾」改 info。
 # 用法:
-#   flow-round open  <流程目录(绝对)> <轮名>                      # 开工:fact-lint verify(F-13)→ manifest baseline → doc-budget → 步骤账在否 → 状态档事实段
+#   flow-round open  <流程目录(绝对)> <轮名>                      # 开工:fact-lint verify(F-13)→ 上一轮交付态 shasum -c → manifest baseline → doc-budget → 步骤账在否(①写)→ 状态档事实段
 #   flow-round close <流程目录(绝对)> <轮名> [--task <号>] [--plan <plan绝对>]
-#                                                                   # 收工交接口:flow-close --between(文件名按约定)+ 步骤账全勾 + 状态档事实段
+#                                                                   # 收工交接口:回件认领 → 派生申报 → flow-close --between → 全绿冻结 → 步骤账(①写)→ 回件六判 → 状态档事实段
 #   flow-round state <流程目录(绝对)>                             # 只刷状态档事实段(00-ORCH-STATE.md 的 <!-- flow:gen-* --> 段;段外是编排方的裁决,不动)
-# 派单 / 回件两列**按件里的内容认领**(0.7.1),不按件名前缀猜:派单看 flow-dispatch 印的「轮次 / 模型」行,回件看首行「# <轮名> 回件」。
+# 派单 / 回件两列**按件里的内容认领**(0.7.1),不按件名前缀猜:派单看 flow-dispatch 印的「轮次 / 模型」行,回件看首行「# <轮名> 回件」(库函数 flow_find_handoff)。
 #   认不出才退回 glob 并标 ⚠glob猜。实测 P3-1 状态档 14 行行行取错(③改二 两行都印 03c-fix-handoff.md,实件 05b/05c)。
 # 约定文件名(flow-dispatch --dir 印进派单的就是这些;agent 与编排方两侧同源):
-#   .manifest-baseline-<轮名>.txt · .declared-<轮名>.txt · .after-<轮名>-hashes.txt · .steps-<轮名>.md · .evidence/<轮名>-*.txt
+#   .manifest-baseline-<轮名>.txt · .declared-<轮名>.txt(kit 派生)· .after-<轮名>-hashes.txt(kit 冻结)· .face-<轮名>.txt · .steps-<轮名>.md(只 ①写)· .evidence/<轮名>-*.txt · .evidence/<轮名>-log.tsv
 # F-13:开工序里从没有 `flow-fact-lint verify` 这一步 —— 落位段写进 specs/ 后直接 baseline 冻结,自带的 RED 潜到①写收工才炸,
 #   而那时 specs/ 已在所有 agent 的禁写面。open 先 verify,新增 RED > 0 即红(门定义刚改过就先 `flow-fact-lint baseline` 重打)。
 # 末行固定:`ROUND-OPEN OK|RED` / `ROUND-CLOSE OK|RED` / `ROUND-STATE OK`;参数错 FATAL RC=2。
-# 收工另判本轮**自己那份**回件(0.8.2):首行认不出 ⟹ RED(从前退回 glob 猜,猜错会进状态档的每一次刷新);
-#   〇节是占位 ⟹ RED;热路径节(〇 + 丙栏)> FLOW_DOC_BUDGET_HOTPATH 字节 ⟹ RED。
+# 收工另判本轮**自己那份**回件(0.8.2):首行认不出 ⟹ RED;〇节是占位 ⟹ RED;热路径节(〇 + 丙栏)> FLOW_DOC_BUDGET_HOTPATH 字节 ⟹ RED。
 #   为什么判这三条而不是判全文:全文长度是交付面的函数(九份回件按申报件归一 609–1498 B/件),而下游每一轮重付的只有 〇+丙。
-#   doc-budget 的全文自写线仍在,做绝对上限;它的「近线 90%」从 WARN 降成 info —— 那条 WARN 在一个批次里对同一份件喊了 11 次,没人动。
 # 读的配置:FLOW_REPO_DIR FLOW_FACT_LINT_ROOTS FLOW_FACT_LINT_BASELINE_PATH FLOW_DOC_BUDGET_HOTPATH;子命令 flow-close / flow-manifest / flow-fact-lint / flow-doc-budget / flow-step 按名调用。
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
@@ -58,13 +64,7 @@ newest() {   # newest <glob 模式(相对 DIR)>:按 mtime 最新的一个文件�
 #   实测 P3-1 状态档 14 行**行行取错**:B 支印成 C 支的件,③改二 两行都印 `03c-fix-handoff.md`(实件 05b/05c),
 #   编排方只能在手写区加一句「别照那一列抄」。件名靠不住,件里的轮名靠得住 —— 两侧同源(契约 3)。
 # 认不出才退回 glob,并把格子标成 ⚠glob猜:猜错要看得见,不许静默错。
-find_handoff() {   # 回件首行逐字 `# <轮名> 回件 …`(两份回件模板的契约;P3-1 的 14 份回件 14/14 是这个形状)
-  ( cd "$DIR" 2>/dev/null || exit 0
-    for m in *.md; do
-      [ -f "$m" ] || continue
-      case "$(head -1 "$m")" in "# $1 回件"*) printf '%s\n' "$m"; break ;; esac
-    done )
-}
+find_handoff() { flow_find_handoff "$DIR" "$1"; }   # 1.0.0 入库(flow-dispatch 的必读骨架也用它)
 find_dispatch() {  # 派单生成段里的 `- **轮次 / 模型**:<轮名> ·` —— flow-dispatch 自己印的,天然同源
   ( cd "$DIR" 2>/dev/null || exit 0
     for m in *.md; do
@@ -79,6 +79,10 @@ find_resume() {    # 续轮派单头 `## 派单必带块 —— <轮名>-续(`(f
       if LC_ALL=C grep -qF -- "派单必带块 —— $1-续(" "$m"; then printf '%s\n' "$m"; break; fi
     done )
 }
+
+# 上一轮交付态 = 目录里 mtime 最新的 .after-*-hashes.txt(排除本轮自己那份)。取最新而不取「按轮名推」:②A ‖ ②B 谁后收工不定,
+#   flow-micro --apply 重打的那份 mtime 也最新 —— 最新的就是树现在该在的态。flow-micro 备份件是 `<名>.pre-<N>`,不在这个 glob 里。
+newest_after() { ls -t "$DIR"/.after-*-hashes.txt 2>/dev/null | grep -v "/.after-$1-hashes.txt\$" | head -1; }
 
 # —— 状态档事实段:00-ORCH-STATE.md 的 gen 段整段重生成;段外(编排方的裁决)一字不动 ——
 gen_state() {
@@ -101,7 +105,8 @@ gen_state() {
       dcell="—"; [ -n "$d" ] && dcell="$d $(kb "$DIR/$d")$dg"
       rsm=$(find_resume "$r"); [ -n "$rsm" ] && dcell="$dcell · 续 $rsm"
       hcell="—"; [ -n "$h" ] && hcell="$h $(kb "$DIR/$h")$hg"
-      if [ -f "$DIR/.steps-$r.md" ]; then scell=$(flow-step show "$DIR" "$r" 2>/dev/null | tail -1 | sed -e 's/^STEPS OK: //' -e 's/^STEPS DONE: //' -e 's/ · 下一步.*//'); else scell="无"; fi
+      if [ -f "$DIR/.steps-$r.md" ]; then scell=$(flow-step show "$DIR" "$r" 2>/dev/null | tail -1 | sed -e 's/^STEPS OK: //' -e 's/^STEPS DONE: //' -e 's/ · 下一步.*//')
+      else case "$r" in ①写*) scell="无" ;; *) scell="—" ;; esac; fi   # 1.0.0:②③④ 不建步骤账,格子留横线不留「无」
       fcell=""
       [ -f "$DIR/.after-$r-hashes.txt" ] && fcell="after ✓" || fcell="after ✗"
       [ -f "$DIR/.declared-$r.txt" ] && fcell="$fcell declared ✓" || fcell="$fcell declared ✗"
@@ -153,11 +158,21 @@ open)
   elif [ ! -f "$FLOW_FACT_LINT_BASELINE_PATH" ]; then echo "  跳过:基线不存在 $FLOW_FACT_LINT_BASELINE_PATH(先 flow-fact-lint baseline)"
   else
     ( cd "$FLOW_REPO_DIR" && flow-fact-lint verify > "$EV/$ROUND-open-factlint.txt" 2>&1 ); rc=$?
-    LC_ALL=C grep -E '^verify:|^RED NEW|^FATAL' "$EV/$ROUND-open-factlint.txt"; echo "RC=$rc"
+    LC_ALL=C grep -E '^verify:|^RED NEW|^FATAL|^—— 图例' "$EV/$ROUND-open-factlint.txt"; echo "RC=$rc"
     if [ "$rc" != 0 ]; then
       echo "  RED:新增 RED > 0 —— 是编排方刚写的落位段就地改;门定义刚改过(0.6.0 补了「行」单位与全树)就先 flow-fact-lint baseline 重打"
       echo "ROUND-OPEN RED: $ROUND(fact-lint 先红,基线没打 —— 改完重跑 open)"; exit 1
     fi
+  fi
+  hdr "上一轮交付态 shasum -c(1.0.0:从 close 挪到 open —— 抓的是轮间有人动树)"
+  PREV=$(newest_after "$ROUND")
+  if [ -z "$PREV" ]; then echo "  info 目录里没有别的轮的 .after-*-hashes.txt(一批的第一轮)—— 无可核,不判红"
+  else
+    ( cd "$FLOW_REPO_DIR" && flow_sha256_check "$PREV" ) > "$EV/$ROUND-open-after.txt" 2>/dev/null
+    aok=$(grep -c ': OK$' "$EV/$ROUND-open-after.txt"); abad=$(grep -vc ': OK$' "$EV/$ROUND-open-after.txt")
+    echo "  $(basename "$PREV"):OK=$aok FAILED=$abad"
+    if [ $((aok+abad)) -eq 0 ]; then echo "  RED:零条结果(清单为空或校验工具没跑起来)—— 空集不算绿(§J0)"; red=1
+    elif [ "$abad" != 0 ]; then grep -v ': OK$' "$EV/$ROUND-open-after.txt" | sed 's/^/    /'; echo "  RED:树不在上一轮的交付态 —— 轮间有人动了树(编排方并行编辑面除外,由编排方自判;本命令按红报)"; red=1; fi
   fi
   hdr "flow-manifest baseline → $(basename "$BASE")"
   if [ -f "$BASE" ]; then echo "  FATAL:基线已存在(重开一轮要显式 rm,不静默覆盖)"; red=1
@@ -165,9 +180,9 @@ open)
   hdr "flow-doc-budget(派单件自写字节)"
   flow-doc-budget "$DIR" > "$EV/$ROUND-open-budget.txt" 2>&1; rc=$?
   LC_ALL=C grep -E '^RED|^FATAL|^WARN' "$EV/$ROUND-open-budget.txt"; echo "RC=$rc"; [ "$rc" = 0 ] || red=1
-  hdr "步骤账 .steps-$ROUND.md"
+  hdr "步骤账 .steps-$ROUND.md(1.0.0:只 ①写 建;②③④ 的断点从回件已落的节读)"
   if [ -f "$DIR/.steps-$ROUND.md" ]; then flow-step show "$DIR" "$ROUND" | tail -1
-  else echo "  WARN:无步骤账 —— flow-dispatch --dir 会建;没有它就没有断点续跑"; fi
+  else case "$ROUND" in ①写*) echo "  WARN:无步骤账 —— flow-dispatch --dir 会建;没有它 ①写 就没有按 REQ 的断点" ;; *) echo "  info ②③④ 不建步骤账(--resume 从回件节头与 log.tsv 生成接手点)" ;; esac; fi
   hdr "状态档事实段"; gen_state
   if [ "$red" = 0 ]; then echo "ROUND-OPEN OK: $ROUND(基线 $(basename "$BASE") 打在 $(git -C "$FLOW_REPO_DIR" rev-parse --show-toplevel);此后编排方对仓内文件零编辑;verify 只许在这棵树跑)"; exit 0; else echo "ROUND-OPEN RED: $ROUND"; exit 1; fi ;;
 close)
@@ -175,22 +190,45 @@ close)
     *-续) flow_warn "轮名带 -续(「$ROUND」):续轮本不该单开一轮(0.8.2 起 flow-round open 判死)。这里照收,只是这一轮的读数是半轮的" ;;
   esac
   BASE="$DIR/.manifest-baseline-$ROUND.txt"; DECL="$DIR/.declared-$ROUND.txt"; AFTER="$DIR/.after-$ROUND-hashes.txt"
-  for f in "$BASE" "$DECL" "$AFTER"; do [ -f "$f" ] || flow_die "收工件缺失: $f(约定名;agent 收工件没落全,先补,别绕过)"; done
-  hdr "flow-close --between(交付态哈希 + 冻结 verify + 非空转 + 假话门 + 越面 + 树读数 + 路由复跑 + REQ 对账 + 预算)"
-  set -- "$DIR" "$BASE" "$DECL" "$AFTER"
+  [ -f "$BASE" ] || flow_die "基线缺失: $BASE(flow-round open 打的;没开过工的轮收不了)"
+  case "$ROUND" in ②*|④*) AXIS=1 ;; *) AXIS=0 ;; esac   # 审轮:〇是正面结论不是表;log 必须非空
+  h=$(find_handoff "$ROUND"); HP=""; [ -n "$h" ] && HP="$DIR/$h"
+  hdr "派生申报清单 → $(basename "$DECL")(1.0.0:〇表路径 ∪ 先前轮清单;agent 不再手写)"
+  THIS="$EV/$ROUND-this-paths.txt"
+  if [ -n "$HP" ]; then flow_handoff_paths "$HP" | sed -e 's/[[:space:]][[:space:]]*#.*$//' | sort -u > "$THIS"; else : > "$THIS"; fi
+  OLDDECL=""
+  if [ -f "$DECL" ] && ! head -1 "$DECL" | grep -q '^# declared · '; then OLDDECL="$EV/$ROUND-declared-handwritten.txt"; cp "$DECL" "$OLDDECL"; fi
+  flow_derive_declared "$DIR" "$ROUND" "$HP" "$DECL"
+  echo "  本轮〇表 $(grep -c . "$THIS" || true) 条 · 派生清单 $(grep -vc '^#' "$DECL" || true) 条(含先前轮)"
+  if [ -n "$OLDDECL" ]; then
+    # 迁移:agent 手写的申报清单与派生结果 diff,不一致只 WARN,以派生为准(判据仍是下面的 verify)
+    grep -v '^[[:space:]]*#' "$OLDDECL" | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' | grep . | sort -u > "$EV/.dd-a.$$"
+    grep -v '^#' "$DECL" | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' | sort -u > "$EV/.dd-b.$$"
+    dd=$(comm -3 "$EV/.dd-a.$$" "$EV/.dd-b.$$" | grep -c . || true); rm -f "$EV/.dd-a.$$" "$EV/.dd-b.$$"
+    echo "  WARN:目录里有 agent 手写的 $(basename "$DECL")(无 kit 头),已按派生覆盖;两边差 $dd 条(手写件存 $OLDDECL)"
+  fi
+  hdr "flow-close --between(verify(含树身份 + 测试锁)· 非空转 · 假话门 · 越面(只判本轮〇表路径)· 树读数 · 路由复跑 · REQ 对账 · 预算)"
+  set -- "$DIR" "$BASE" "$DECL" --this "$THIS"
   [ -n "$TASK" ] && set -- "$@" --task "$TASK"
   [ -n "$PLAN" ] && set -- "$@" --plan "$PLAN"
   [ -f "$DIR/.face-$ROUND.txt" ] && set -- "$@" --face "$DIR/.face-$ROUND.txt"   # 0.9.0 越面:面由 flow-dispatch --dir 落,按约定名传
   flow-close --between "$@" > "$EV/$ROUND-close-between.txt" 2>&1; rc=$?
   LC_ALL=C grep -E '^== |^RED|^FATAL|^BETWEEN|^OK=|^info |RC=' "$EV/$ROUND-close-between.txt" | sed 's/^/  /'
   echo "RC=$rc(全量 $EV/$ROUND-close-between.txt)"; [ "$rc" = 0 ] || red=1
-  hdr "步骤账全勾"
+  hdr "冻结 → $(basename "$AFTER")(1.0.0:BETWEEN OK 之后才打;红了不冻)"
+  if [ "$rc" = 0 ]; then
+    flow_freeze_to "$AFTER" > "$EV/$ROUND-freeze.txt" 2>&1; frc=$?; sed 's/^/  /' "$EV/$ROUND-freeze.txt"; echo "RC=$frc"
+    [ "$frc" = 0 ] || { echo "  RED:冻结失败 —— 交付态没有哈希,下一轮 open 无可核"; red=1; }
+  else echo "  跳过:between 红了,树不是交付态,不冻(修完重跑 close)"; fi
+  hdr "步骤账(只 ①写;②③④ 为 info)"
   if [ -f "$DIR/.steps-$ROUND.md" ]; then
     last=$(flow-step show "$DIR" "$ROUND" | tail -1); echo "  $last"
-    case "$last" in "STEPS DONE"*) ;; *) echo "  RED:步骤账未全勾 —— 要么 agent 没收工,要么漏勾;先核回件再定"; red=1 ;; esac
-  else echo "  WARN:无步骤账,跳过"; fi
-  hdr "回件(首行认领 · 〇节实心 · 热路径节 ≤ $FLOW_DOC_BUDGET_HOTPATH 字节)"
-  h=$(find_handoff "$ROUND")
+    case "$ROUND" in
+      ①写*) case "$last" in "STEPS DONE"*) ;; *) echo "  RED:步骤账未全勾 —— 要么 agent 没收工,要么漏勾;先核回件再定"; red=1 ;; esac ;;
+      *) case "$last" in "STEPS DONE"*) ;; *) echo "  info ②③④ 的步骤账 1.0.0 起不判(断点从回件读)" ;; esac ;;
+    esac
+  else case "$ROUND" in ①写*) echo "  WARN:无步骤账,跳过" ;; *) echo "  info 无步骤账(1.0.0:②③④ 不建)" ;; esac; fi
+  hdr "回件(首行认领 · 〇节实心 · 热路径节 ≤ $FLOW_DOC_BUDGET_HOTPATH 字节 · log 非空(审轮)· 丙栏 ev 有行 · 甲栏判词数 = log 行数)"
   if [ -z "$h" ]; then
     # 0.8.2 改 RED(从前退回 glob 猜):猜错的件名不会停在这里,它进状态档的**每一次**刷新,
     #   而状态档是中断后重建的唯一入口(实测两批各猜错一次,P3-1 那次 14 行行行错,编排方只能在手写区加一句「别照那一列抄」)。
@@ -221,6 +259,23 @@ close)
     if [ "$tot" -gt "$FLOW_DOC_BUDGET_HOTPATH" ]; then
       echo "  RED:热路径节 $tot 字节 > $FLOW_DOC_BUDGET_HOTPATH —— 细节挪进甲栏与 .evidence/,〇 与丙只留判据与指针"
       echo "       (判的不是你写了多少,是下游每一轮要重读多少;全文多长不在这条线上)"; red=1
+    fi
+    # —— 1.0.0 / A2:甲栏由 flow-ev 的账生成,回件只留判词 ——
+    LOG="$EV/$ROUND-log.tsv"
+    nlog=0; [ -f "$LOG" ] && nlog=$(grep -c . "$LOG" || true)
+    if [ "$nlog" = 0 ]; then
+      if [ "$AXIS" = 1 ]; then echo "  RED:审轮零条 flow-ev 账($LOG 不存在或为空)—— 判据命令一律经 flow-ev 跑,甲栏才有账可指;没跑过一条命令的审查不是审查"; red=1
+      else echo "  info 本轮零条 flow-ev 账(写 / 改轮允许;有账才判甲栏与丙栏的对应)"; fi
+    else
+      # 丙栏每个 ev:<名> 必须在 log 里有行(那一行就是 oracle;复跑者是编排方)
+      miss=$(LC_ALL=C awk '/^## /{ on = ($0 ~ /^## 丙栏/); next } on' "$DIR/$h" | LC_ALL=C grep -oE 'ev:[A-Za-z0-9_.-]+' | sed 's/^ev://' | sort -u | while IFS= read -r n; do
+        cut -f1 "$LOG" | grep -qxF -- "$n" || printf '%s ' "$n"; done)
+      if [ -n "$miss" ]; then echo "  RED:丙栏引了 log 里没有的 ev:$miss—— 复现命令要先经 flow-ev 跑出账,再在丙栏引它的名"; red=1
+      else echo "  丙栏 ev 引用 $(LC_ALL=C awk '/^## /{ on = ($0 ~ /^## 丙栏/); next } on' "$DIR/$h" | LC_ALL=C grep -oE 'ev:[A-Za-z0-9_.-]+' | sort -u | grep -c . || true) 个,log 里都有行"; fi
+      # 甲栏判词行数 = log 行数(「贴了 N 行 / 判了 N 行」的机器版)
+      nj=$(LC_ALL=C awk '/^## /{ on = ($0 ~ /^## 甲栏/); next } on' "$DIR/$h" | LC_ALL=C grep -cE '^- [A-Za-z0-9_.-]+[::]' || true)
+      if [ "$nj" != "$nlog" ]; then echo "  RED:甲栏判词 $nj 行 ≠ log $nlog 行 —— 每条 flow-ev 一行「- <名>:<判词>」,不多不少(多的是没跑过命令的话,少的是跑了没判)"; red=1
+      else echo "  甲栏判词 $nj 行 = log $nlog 行"; fi
     fi
   fi
   hdr "状态档事实段"; gen_state

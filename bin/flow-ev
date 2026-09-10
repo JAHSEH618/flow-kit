@@ -1,0 +1,54 @@
+#!/bin/sh
+# flow-ev —— agent 跑判据命令的唯一通道(1.0.0 / A2):跑、落全量、记一行账、屏上只印末 N 行 + RC。
+# 病根:回件甲栏是 agent 逐字抄出来的 —— 命令、RC、末行、.evidence 路径三段本来就是命令自己产的,②A 一份甲栏 20.3 KB、
+#   约占它输出的三分之一,每条 ≈430 B;而下游只需要「这条判了什么」一行判词。命令的账让机器记,判词留给人。
+# 做什么(顺序固定):
+#   1. 在仓根 `sh -c "<命令>"` 跑;stdout 与 stderr **全量**落 <流程目录>/.evidence/<轮名>-<名>.txt(§J 硬规矩①:探测器输出不截断);
+#   2. RC 与命令同层捕获(硬规矩②);
+#   3. 往 <流程目录>/.evidence/<轮名>-log.tsv 追加一行:名 · RC · 末行(≤200 字节,字边界截)· 时间 · 命令;
+#   4. 屏上印末 N 行(默认 20;逐行判的扫描用 --show all)+ `RC=<n>`。
+# 名是唯一入口:同一轮里名重复 ⟹ FATAL(一个名一份证据;重跑就换个名,旧证据不许被静默覆盖)。
+#   丙栏每条带 `ev:<名>` 指向它的复现命令 —— log 里那一行就是 oracle,写在 ③ 动树之前,复跑者是编排方。
+# 用法:
+#   flow-ev <流程目录(绝对)> <轮名> <名> [--show N|all] -- <命令…>
+#     名:[A-Za-z0-9_.-]+(进文件名);命令在 `--` 之后,多个实参按空格拼成一串交给 sh -c(管道 / 重定向照写)。
+# 末行固定:`RC=<n>`(命令自己的 RC 原样透传);参数错 FATAL RC=2。
+# 读的配置:FLOW_REPO_DIR。
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_load_config
+
+usage() { echo "用法: flow-ev <流程目录(绝对)> <轮名> <名> [--show N|all] -- <命令…>" >&2; exit 2; }
+DIR="${1:-}"; ROUND="${2:-}"; NAME="${3:-}"
+[ -n "$DIR" ] && [ -n "$ROUND" ] && [ -n "$NAME" ] || usage
+shift 3
+case "$DIR" in /*) ;; *) flow_die "流程目录须绝对路径: $DIR" ;; esac
+[ -d "$DIR" ] || flow_die "流程目录不存在: $DIR"
+case "$NAME" in *[!A-Za-z0-9_.-]*|'') flow_die "名只许 [A-Za-z0-9_.-](它进文件名): $NAME" ;; esac
+SHOW=20
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --show) [ $# -ge 2 ] || flow_die "--show 缺值"; SHOW="$2"; shift 2 ;;
+    --) shift; break ;;
+    *) flow_die "命令要放在 -- 之后,得到 $1" ;;
+  esac
+done
+[ $# -ge 1 ] || flow_die "-- 之后缺命令"
+case "$SHOW" in all|*[0-9]*) ;; *) flow_die "--show 只认数字或 all: $SHOW" ;; esac
+CMD="$*"
+
+EV="$DIR/.evidence"; mkdir -p "$EV"
+OUT="$EV/$ROUND-$NAME.txt"; LOG="$EV/$ROUND-log.tsv"
+[ ! -e "$OUT" ] || flow_die "名重复: $NAME 在本轮已有证据($OUT)—— 一个名一份证据,重跑就换个名(如 ${NAME}2),旧的不许静默覆盖"
+
+# 同层捕获:命令跑进文件,RC 紧跟其后;屏上的末 N 行是从文件读回来的,不是另跑一遍
+( cd "$FLOW_REPO_DIR" && sh -c "$CMD" ) > "$OUT" 2>&1; rc=$?
+last=$(tail -1 "$OUT" 2>/dev/null | tr '\t' ' ')
+last=$(printf '%s' "$last" | LC_ALL=C awk "$(flow_awk_utrunc)"'{ print utrunc($0, 200) }')
+printf '%s\t%s\t%s\t%s\t%s\n' "$NAME" "$rc" "$last" "$(date +%FT%H:%M:%S)" "$(printf '%s' "$CMD" | tr '\t\n' '  ')" >> "$LOG"
+
+if [ "$SHOW" = all ]; then cat "$OUT"; else tail -n "$SHOW" "$OUT"; fi
+n=$(grep -c . "$OUT" || true)
+echo "—— ev:$NAME · 全量 $n 行 → $OUT · 账 $LOG"
+echo "RC=$rc"
+exit "$rc"

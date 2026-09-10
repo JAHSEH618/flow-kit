@@ -152,11 +152,16 @@ nwarn=$(awk -F'\t' '$1=="HIT" && $2=="QUANTW"' "$HITS" | grep -c . || true)
 footer() {
   echo "—— 射程注记:QUANTW 是 WARN(收尾轮按类人扫,不挡门);措辞轴/「都」/md 指令式量词在门外;门绿 ≠ 族清。"
 }
+# 1.0.0 / A5:有 RED 时印一行图例 —— agent 读 kit 源码的原因只有一个:输出没说清自己在判什么(p4n ②A / ④A 各读了本文件一次)
+legend() {
+  echo "—— 图例:QUANT 全称句(「本仓从没…」)· PROV 出处句(「#12 实测」)· SELFNUM 自指数(「下面三条」)· QUANTW 宽泛量词(门外,WARN)。改法只删不写;写的人当场自分类用 fact-ok(<理由>)"
+}
 
 case "$MODE" in
 scan)
   awk -F'\t' '{lv=($1=="OKD")?"ok  ":(($2=="QUANTW")?"WARN":"RED ");printf "%s %s %s:%s: %s\n",lv,$2,$3,$4,$5}' "$HITS"
   echo "hits: 共 $total(RED $nred · WARN $nwarn · fact-ok $okd)—— 贴 $total 行 / 判 $total 行"
+  [ "$nred" -gt 0 ] && legend
   footer
   [ "$nred" -gt 0 ] && exit 1; exit 0 ;;
 baseline)
@@ -177,6 +182,7 @@ verify)
       "$SELF/new" "$HITS"
   fi
   echo "verify: 新增 $nnew · 已修 $nfix · 基线 $(grep -c . "$SELF/baseu" || true) · 现存 $(grep -c . "$cur" || true) · WARN $nwarn(门外)"
+  [ "$nnew" -gt 0 ] && legend
   footer
   [ "$nnew" -gt 0 ] && { echo "RED: 新增假话句 $nnew 条 —— 当场改或 fact-ok 自分类,不许进树"; exit 1; }
   echo "verify OK(棘轮:零新增)"; exit 0 ;;

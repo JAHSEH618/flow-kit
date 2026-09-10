@@ -17,9 +17,19 @@
 #   · 有一条「生产」⟹ RED:整批走 ③改二。**这不是「改错了」,是这条通道不收生产改动。**
 #   · 非生产条**合计新增** > FLOW_MICRO_FIX_LINES ⟹ RED。
 # --apply 之前先对冻结件核树:patch 在哪棵树上量的,就必须落在哪棵树上(§J 硬规矩 4:比对前证明两侧同源)。
+# 1.0.0 三处改:
+#   · C2 上限只数**非测试**新增行:numstat 按 FLOW_TEST_GLOBS 分两桶,门槛只看非测试桶,末行印「非测试 N · 测试 M」。
+#     病根:p4n ③改二 存在的唯一原因是 ④B 三条不阻塞合量 25 行 > 16,而那 25 行全是测试断言 —— 测试锁防的是写手削断言,审方加断言是反方向。
+#   · C1 通道前移到 ②:② 收工后编排方先跑通道再决定派不派 ③(`--face .face-①写.txt --freeze <最新 .after>`)。--apply 落笔后 kit 自动做三件:
+#     ① 冻结件备份成 `<冻结件>.pre-<裁决号>` 再重打(树变了,交付态哈希跟着变;备份件不在 `.after-*-hashes.txt` 这个 glob 里,flow-round open 取最新的不会取到它);
+#     ② 向冻结件配对的申报清单(`.after-X-hashes.txt` → `.declared-X.txt`,或 --declared 显式给)追加 patch 触到的路径,行尾 `# 裁决-N micro`;
+#     ③ 印每份 patch 附的复现头(`diff --git` 之前以 `#` 起的行:审方按模板写 `# repro: <命令> → 期望 <读数>` / `# ev:<名>`),编排方逐条复跑对读数。
+#     跳 ③ 的判据归编排方:②A 与 ②B 丙栏每一条都带 patch 且本命令 MICRO OK ⟹ 直接派 ④(交付态起点 = 重打后的冻结件)。
+#   · 多份 patch **先拼成一个流**再 --check / --numstat / apply:`git apply --check a b` 是逐文件对**原树**各查一遍,两份 patch 改同一行也 RC=0,
+#     而 `git apply a b` 会落下第一份、在第二份上失败 —— 半截落笔(实测)。一个流里 git 才按前一份的结果核下一份,且全落或全不落。
 # 用法:
-#   flow-micro <patch(绝对)>... --face <写权限面清单(绝对)> [--freeze <冻结件(绝对)>] [--apply]
-#     patch 由 ④ 落在 <流程目录>/.evidence/<轮名>-micro-<裁决号>.patch;写权限面清单 = flow-dispatch --dir 落的 .face-<轮名>.txt
+#   flow-micro <patch(绝对)>... --face <写权限面清单(绝对)> [--freeze <冻结件(绝对)>] [--apply --verdict <裁决号> [--declared <申报清单(绝对)>]]
+#     patch 由审轴落在 <流程目录>/.evidence/<轮名>-micro-<裁决号>.patch;写权限面清单 = flow-dispatch --dir 落的 .face-<轮名>.txt
 #     多份 patch 一起给:门判的是**合计**,而合计只有一起判才算数。
 # 末行固定:`MICRO OK: …` / `MICRO RED: …`;参数错或 patch 落不下 ⟹ FATAL RC=2。
 # 读的配置:FLOW_REPO_DIR FLOW_MICRO_FIX_LINES FLOW_TEST_GLOBS
@@ -27,17 +37,19 @@ set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
 flow_load_config
 
-usage() { echo "用法: flow-micro <patch(绝对)>... --face <写权限面清单(绝对)> [--freeze <冻结件(绝对)>] [--apply]" >&2; exit 2; }
+usage() { echo "用法: flow-micro <patch(绝对)>... --face <写权限面清单(绝对)> [--freeze <冻结件(绝对)>] [--apply --verdict <裁决号> [--declared <申报清单(绝对)>]]" >&2; exit 2; }
 
-FACE=""; FREEZE=""; APPLY=0
+FACE=""; FREEZE=""; APPLY=0; VERDICT=""; DECLARED=""
 TMP=$(mktemp -d "$(flow_tmpdir)/flow-micro.XXXXXX") || exit 2
 trap 'rm -rf "$TMP"' EXIT
 : > "$TMP/patches"
 while [ $# -gt 0 ]; do
-  case "$1" in --face|--freeze) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
+  case "$1" in --face|--freeze|--verdict|--declared) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
   case "$1" in
     --face)   FACE="$2"; shift 2 ;;
     --freeze) FREEZE="$2"; shift 2 ;;
+    --verdict) VERDICT="$2"; shift 2 ;;
+    --declared) DECLARED="$2"; shift 2 ;;
     --apply)  APPLY=1; shift ;;
     -*)       flow_die "未知参数 $1" ;;
     *)        case "$1" in /*) ;; *) flow_die "patch 须绝对路径(文件参数一律绝对): $1" ;; esac
@@ -54,28 +66,39 @@ if [ -n "$FREEZE" ]; then
   [ -f "$FREEZE" ] || flow_die "冻结件不存在: $FREEZE"
 fi
 [ "$APPLY" = 0 ] || [ -n "$FREEZE" ] || flow_die "--apply 必须同给 --freeze:patch 在哪棵树上量的就必须落在哪棵树上(§J 硬规矩 4)"
+if [ "$APPLY" = 1 ]; then
+  case "$VERDICT" in ''|*[!0-9]*) flow_die "--apply 必须同给 --verdict <裁决号(数字)>:落笔占裁决号,追进申报清单的行尾与冻结件备份名都要它" ;; esac
+  if [ -z "$DECLARED" ]; then
+    # 冻结件与申报清单按约定名配对:.after-<轮名>-hashes.txt ↔ .declared-<轮名>.txt(flow-round 两侧同源)
+    DECLARED=$(printf '%s' "$FREEZE" | sed -n 's|/\.after-\(.*\)-hashes\.txt$|/.declared-\1.txt|p')
+    [ -n "$DECLARED" ] || flow_die "--freeze 不是约定名 .after-<轮名>-hashes.txt,推不出配对的申报清单;显式给 --declared <申报清单(绝对)>"
+  fi
+  case "$DECLARED" in /*) ;; *) flow_die "--declared 须绝对路径: $DECLARED" ;; esac
+fi
 
 cd "$FLOW_REPO_DIR" || exit 2
 set --
 while IFS= read -r pf; do [ -n "$pf" ] && set -- "$@" "$pf"; done < "$TMP/patches"
 NP=$#
+# 多份 patch 拼成一个流(见头注:逐文件给 git 既漏冲突又会半截落笔)。一个流里 git 按前一份的结果核下一份,全落或全不落。
+ALL="$TMP/all.patch"; cat -- "$@" > "$ALL"
 
 red=0; step=0
 hdr() { step=$((step+1)); echo "== $step. $1 =="; }
 
 # —— 1. 落得下吗(判据在前,动作在后)——
-hdr "git apply --check($NP 份 patch 作一串核;落不下就不是本树的 patch)"
-git -c core.quotepath=false apply --check -- "$@" > "$TMP/check" 2>&1; rc=$?
+hdr "git apply --check($NP 份 patch 拼成一个流核;落不下 / 互相冲突就不是本树能落的 patch)"
+git -c core.quotepath=false apply --check -- "$ALL" > "$TMP/check" 2>&1; rc=$?
 [ -s "$TMP/check" ] && sed 's/^/  /' "$TMP/check"
 echo "RC=$rc"
 if [ "$rc" != 0 ]; then
-  echo "FATAL: patch 落不到这棵树上 —— 写在别的树 / 别的基线,或体例错。不许猜着改:让审方在它量读数的那棵树上重出一份" >&2
+  echo "FATAL: patch 落不到这棵树上 —— 写在别的树 / 别的基线、体例错,或多份 patch 改到同一处互相冲突。不许猜着改:让审方在它量读数的那棵树上重出一份;冲突的整批落回 ③" >&2
   exit 2
 fi
 
 # —— 2. 量(不估)——
 hdr "git apply --numstat(逐文件新增 / 删除;行数的唯一来源)"
-git -c core.quotepath=false apply --numstat -- "$@" > "$TMP/numstat" 2>&1; rc=$?
+git -c core.quotepath=false apply --numstat -- "$ALL" > "$TMP/numstat" 2>&1; rc=$?
 [ "$rc" = 0 ] || { sed 's/^/  /' "$TMP/numstat"; echo "FATAL: git apply --numstat RC=$rc" >&2; exit 2; }
 [ -s "$TMP/numstat" ] || { echo "FATAL: numstat 零行 —— 空 patch 不是「零改动的微改」,是没东西可判(§J0)" >&2; exit 2; }
 # 八进制转义的路径(CJK 文件名遇上没关 quotepath 的生成方)会让面内比对静默失配 —— 当场判死,给修法
@@ -119,8 +142,8 @@ in_face() {
 }
 nc_of() { LC_ALL=C awk -F'\t' -v p="$1" '$1==p{v=$2} END{print v+0}' "$TMP/nc"; }
 
-hdr "逐文件判(性质 · 面内;上限 $FLOW_MICRO_FIX_LINES 行新增,面 $(basename "$FACE"))"
-addsum=0; nprod=0; nout=0; nfile=0
+hdr "逐文件判(性质 · 面内;上限 $FLOW_MICRO_FIX_LINES 行**非测试**新增,面 $(basename "$FACE"))"
+addsum=0; addtest=0; nprod=0; nout=0; nfile=0
 TAB=$(printf '\t')
 while IFS="$TAB" read -r a d p; do
   [ -n "$p" ] || continue
@@ -136,7 +159,7 @@ while IFS="$TAB" read -r a d p; do
   fi
   if in_face "$p"; then face=面内; else face=面外; nout=$((nout+1)); fi
   [ "$kind" = 生产 ] && nprod=$((nprod+1))
-  [ "$a" = "-" ] || addsum=$((addsum + a))
+  if [ "$a" != "-" ]; then if [ "$kind" = 测试 ]; then addtest=$((addtest + a)); else addsum=$((addsum + a)); fi; fi
   if [ "$kind" = 生产 ] || [ "$face" = 面外 ]; then
     printf 'RED  %s  +%s -%s  %s · %s%s\n' "$p" "$a" "$d" "$kind" "$face" "${why:+($why)}"
     red=1
@@ -146,11 +169,11 @@ while IFS="$TAB" read -r a d p; do
 done < "$TMP/sum"
 
 if [ "$addsum" -gt "$FLOW_MICRO_FIX_LINES" ]; then
-  echo "RED  合计新增 $addsum 行 > 上限 $FLOW_MICRO_FIX_LINES(通道判的是合计,不是单条)"
+  echo "RED  非测试新增合计 $addsum 行 > 上限 $FLOW_MICRO_FIX_LINES(通道判的是合计,不是单条;测试行 $addtest 不计 —— 审方加断言是安全方向)"
   red=1
 fi
 if [ "$red" != 0 ]; then
-  echo "MICRO RED: 生产 $nprod 条 · 面外 $nout 条 · 合计新增 $addsum 行 / 上限 $FLOW_MICRO_FIX_LINES —— 不走微改通道,整批起 ③改二(面外那几条另需编排方以裁决显式扩面)"
+  echo "MICRO RED: 生产 $nprod 条 · 面外 $nout 条 · 新增 非测试 $addsum · 测试 $addtest 行(上限 $FLOW_MICRO_FIX_LINES 只数非测试)—— 不走微改通道,整批起 ③(面外那几条另需编排方以裁决显式扩面)"
   exit 1
 fi
 
@@ -165,13 +188,36 @@ if [ "$APPLY" = 1 ]; then
     LC_ALL=C grep -v ': OK$' "$TMP/fz" | sed 's/^/  /'
     echo "MICRO RED: 树已不是 patch 量的那棵($fbad 行非 OK)—— 先弄清谁动了树,别把 patch 落在别的态上"; exit 1
   fi
-  hdr "git apply(落笔;占裁决号归编排方)"
-  git -c core.quotepath=false apply -- "$@" > "$TMP/apply" 2>&1; rc=$?
+  hdr "git apply(落笔;裁决-$VERDICT)"
+  git -c core.quotepath=false apply -- "$ALL" > "$TMP/apply" 2>&1; rc=$?
   [ -s "$TMP/apply" ] && sed 's/^/  /' "$TMP/apply"
   echo "RC=$rc"
   [ "$rc" = 0 ] || { echo "MICRO RED: git apply RC=$rc(--check 过了却落不下 —— 树在这两步之间变了)"; exit 1; }
-  echo "MICRO OK: 已落笔 · 新增 $addsum 行 / 上限 $FLOW_MICRO_FIX_LINES · 文件 $nfile(全非生产 · 全面内)—— 现在复跑④写下的复现命令对期望读数,读数不对就 git checkout 回去"
+  # —— 1.0.0 / C1:落笔后 kit 自己收尾三件,编排方不再手做 ——
+  hdr "冻结件重打(备份 $(basename "$FREEZE").pre-$VERDICT;树变了交付态哈希跟着变)"
+  cp "$FREEZE" "$FREEZE.pre-$VERDICT" || { echo "MICRO RED: 备份冻结件失败"; exit 1; }
+  flow_freeze_to "$FREEZE" > "$TMP/refreeze" 2>&1; frc=$?; sed 's/^/  /' "$TMP/refreeze"; echo "RC=$frc"
+  [ "$frc" = 0 ] || { echo "MICRO RED: 冻结件重打失败(patch 已落;旧哈希在 $FREEZE.pre-$VERDICT)"; exit 1; }
+  hdr "申报清单追加 → $(basename "$DECLARED")(行尾 # 裁决-$VERDICT micro;下一轮 close 派生时并进去)"
+  if [ ! -f "$DECLARED" ]; then
+    flow_warn "申报清单不存在,新建: $DECLARED"
+    echo "# declared · $(printf '%s' "$DECLARED" | sed -n 's|.*/\.declared-\(.*\)\.txt$|\1|p')(flow-micro 新建 $(date +%F\ %H:%M))" > "$DECLARED"
+  fi
+  nadd=0
+  cut -f3 "$TMP/sum" | while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    if grep -v '^[[:space:]]*#' "$DECLARED" | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' | grep -qxF -- "$p" \
+       && grep -v '^[[:space:]]*#' "$DECLARED" | grep -F -- "$p" | LC_ALL=C grep -qE '#[^#]*裁决[- ]*[0-9]+'; then echo "  已有(带裁决号): $p"
+    else printf '%s  # 裁决-%s micro\n' "$p" "$VERDICT" >> "$DECLARED"; echo "  + $p  # 裁决-$VERDICT micro"; fi
+  done
+  hdr "复现命令清单(每份 patch 头部 diff --git 之前以 # 起的行;编排方逐条复跑对期望读数)"
+  for pf in "$@"; do
+    echo "  $pf"
+    hd=$(LC_ALL=C awk '/^diff --git /{exit} /^#/{print}' "$pf")
+    if [ -n "$hd" ]; then printf '%s\n' "$hd" | sed 's/^/      /'; else echo "      (未附复现头 —— 看回件丙栏该条的 ev:<名>,复跑 .evidence/<轮名>-log.tsv 里那一行命令)"; fi
+  done
+  echo "MICRO OK: 已落笔(裁决-$VERDICT)· 新增 非测试 $addsum · 测试 $addtest 行(上限 $FLOW_MICRO_FIX_LINES 只数非测试)· 文件 $nfile(全非生产 · 全面内)· 冻结件已重打(旧件 .pre-$VERDICT)· 申报已追加 —— 现在逐条复跑上面的复现命令对期望读数,读数不对就 git checkout 回去并 mv 回 .pre 件"
   exit 0
 fi
-echo "MICRO OK: 新增 $addsum 行 / 上限 $FLOW_MICRO_FIX_LINES · 文件 $nfile(全非生产 · 全面内)—— 够格走微改通道;--apply 落笔(须同给 --freeze),然后复跑④写下的复现命令对期望读数"
+echo "MICRO OK: 新增 非测试 $addsum · 测试 $addtest 行(上限 $FLOW_MICRO_FIX_LINES 只数非测试)· 文件 $nfile(全非生产 · 全面内)—— 够格走微改通道;--apply --verdict <N> 落笔(须同给 --freeze),kit 会重打冻结件、追加申报、印复现命令"
 exit 0
