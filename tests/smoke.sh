@@ -1194,5 +1194,53 @@ expect_rc 0 "flow-ev --show all" flow-ev "$F10" ①写 scan --show all -- 'seq 1
 [ "$(printf '%s\n' "$LAST_OUT" | grep -c '^[0-9]*$')" = 30 ] && ok "--show all 印全量 30 行(默认只印末 20)" || fail "--show all 行数错"
 expect_rc 2 "flow-ev 名含空白 FATAL" flow-ev "$F10" ①写 'bad name' -- echo x
 expect_rc 2 "flow-ev 缺 -- FATAL" flow-ev "$F10" ①写 nodash echo x
+# 1.0.1:多实参保引号边界(旧 `CMD="$*"` 拍扁再二次分词:`-- grep -F '"x"' src` 的双引号被剥成裸 x,`-- sh -c 'a; b'` 内层只跑到 a)
+printf 'a "x" b\nbare x here\n"x"\n' > "$WS/src/q.txt"
+expect_rc 0 "flow-ev 多实参:-- grep -F '\"x\"' <文件>(引号保住)" flow-ev "$F10" ①写 q1 -- grep -F '"x"' src/q.txt
+[ "$(grep -c . "$F10/.evidence/①写-q1.txt")" = 2 ] && ok "grep 只命中带双引号的 2 行(拍扁会数成 3)" || fail "引号被拍扁: $(cat "$F10/.evidence/①写-q1.txt")"
+grep -qF "grep -F '\"x\"' src/q.txt" "$F10/.evidence/①写-log.tsv" && ok "log 第五列记的是重包后可照抄的命令" || fail "log 命令列错: $(tail -1 "$F10/.evidence/①写-log.tsv" | cut -f5)"
+expect_rc 0 "flow-ev 多实参:-- sh -c 'echo one; echo two'(整串保住)" flow-ev "$F10" ①写 q2 -- sh -c 'echo one; echo two'
+[ "$(cat "$F10/.evidence/①写-q2.txt")" = "$(printf 'one\ntwo')" ] && ok "内层 sh -c 跑完两句(拍扁只剩 two)" || fail "内层 sh -c 被拍扁: $(cat "$F10/.evidence/①写-q2.txt")"
+expect_rc 0 "flow-ev 多实参:裸 '|' 当管道" flow-ev "$F10" ①写 q3 -- echo abc '|' tr a-z A-Z
+[ "$(cat "$F10/.evidence/①写-q3.txt")" = ABC ] && ok "裸操作符词原样过,管道照通" || fail "裸 | 没当管道: $(cat "$F10/.evidence/①写-q3.txt")"
+expect_rc 0 "flow-ev 多实参:'*.txt' 按字面(不再被内层展开)" flow-ev "$F10" ①写 q4 -- printf '%s\n' 'src/*.txt'
+[ "$(cat "$F10/.evidence/①写-q4.txt")" = 'src/*.txt' ] && ok "调用方引住的通配按字面传" || fail "通配被展开: $(cat "$F10/.evidence/①写-q4.txt")"
+rm -f "$WS/src/q.txt"
+
+# ── 25. 1.0.1:flow-close --wrap 步 1 认收口编辑(申报行尾 # 裁决-N)并在 WRAP OK 后就地重打冻结件 ──
+cd "$WS"
+git add -A >/dev/null 2>&1; git commit -qm 'r101 起点' >/dev/null 2>&1
+flow-fact-lint baseline >/dev/null 2>&1
+rm -f "$WS/.flow/.rulebook-lines" "$WS/.flow/.rulebook-bytes"
+F101="$WS/.flow/r101"; mkdir -p "$F101"
+flow-dispatch T1 --tree 活树-独占 --db 禁用 --seq 1 --round ①写 --dir "$F101" src > "$F101/01-dispatch.md" 2>/dev/null   # open 的 doc-budget 要目录里至少一份 md;面给整个 src(n.ts 是新增件)
+expect_rc 0 "flow-round open(1.0.1 用轮)" flow-round open "$F101" ①写
+printf 'r101\n' >> src/a.ts; printf 'n\n' > src/n.ts
+i=0; while [ $i -lt 4 ]; do i=$((i+1)); flow-step done "$F101" ①写 $i >/dev/null 2>&1; done   # 步骤账勾满(①写 close 判它)
+printf '# ①写 回件 · 冒烟\n\n## 〇 · 改动索引表\n| 符号 | 文件:行段 | 性质 | 对应 | 例外 |\n|---|---|---|---|---|\n| `a` | src/a.ts:1-3 | 改 | R1 | |\n| 新 | src/n.ts:1 | 新增 | R1 | |\n\n## 丙栏 · 自报三处最没把握\n- 一\n' > "$F101/01-h.md"
+expect_rc 0 "flow-round close ①写(打 .after)" flow-round close "$F101" ①写 --task T1
+A101="$F101/.after-①写-hashes.txt"
+grep -q '  src/a.ts$' "$A101" && grep -q '  src/n.ts$' "$A101" && ok ".after 含 a.ts 与 n.ts" || fail ".after 内容错: $(cat "$A101")"
+# 收口编辑(按裁决动树):改 a.ts、删 n.ts;申报行尾都带裁决号
+printf 'wrap-edit\n' >> src/a.ts; rm -f src/n.ts
+printf 'src/a.ts  # 裁决-7 收口按裁决删两行\nsrc/n.ts  # 裁决-8 收口按裁决删件\n' > "$F101/.declared-close.txt"
+expect_rc 0 "flow-close --wrap:FAILED 全带裁决号 ⟹ 步 1 不红" flow-close --wrap "$F101" "$F101/.manifest-baseline-①写.txt" "$F101/.declared-close.txt" "$A101" --task T1
+printf '%s' "$LAST_OUT" | grep -q 'WRAP OK' && ok "WRAP OK(从前这里恒 RED,要手工 flow-freeze 重打)" || fail "WRAP: $(printf '%s' "$LAST_OUT" | grep -E '^RED|FATAL|WRAP' | head -5)"
+printf '%s' "$LAST_OUT" | grep -q '^ok   编排方收口编辑(裁决-7): src/a.ts: FAILED' && ok "改件印 编排方收口编辑(裁决-7)" || fail "a.ts 例外行错: $(printf '%s' "$LAST_OUT" | grep 'src/a.ts')"
+printf '%s' "$LAST_OUT" | grep -q '^ok   编排方收口编辑(裁决-8): src/n.ts: FAILED' && ok "删件印 编排方收口编辑(裁决-8)" || fail "n.ts 例外行错: $(printf '%s' "$LAST_OUT" | grep 'src/n.ts')"
+printf '%s' "$LAST_OUT" | grep -q '^== [0-9]*\. 冻结件就地重打(收口编辑的 2 行' && ok "WRAP OK 后就地重打 2 行" || fail "未重打: $(printf '%s' "$LAST_OUT" | grep 冻结件)"
+printf '%s' "$LAST_OUT" | grep -q '重打后 sha256 -c:OK=[1-9][0-9]* FAILED=0' && ok "重打后的冻结件对活树全 OK" || fail "重打后仍 FAILED: $(printf '%s' "$LAST_OUT" | grep 重打后)"
+[ -f "$A101.pre-wrap" ] && grep -q '  src/n.ts$' "$A101.pre-wrap" && ok "旧件留 .pre-wrap(仍含 n.ts)" || fail ".pre-wrap 缺或内容错"
+grep -q '  src/n.ts$' "$A101" && fail "删掉的 n.ts 那行还在 .after 里" || ok "删掉的 n.ts 那行已从 .after 去掉(flow_freeze_to 同口径:只列存在的)"
+[ "$(ls "$F101"/.after-*-hashes.txt | grep -c .)" = 1 ] && ok ".pre-wrap 不在 .after-*-hashes.txt 的 glob 里(flow-round open 取最新不会取到它)" || fail "glob 撞到备份件: $(ls "$F101"/.after-*)"
+# 阴性对照:无裁决号的 FAILED 照红,且不动冻结件
+printf 'again\n' >> src/a.ts
+printf 'src/a.ts\nsrc/n.ts  # 裁决-8 收口按裁决删件\n' > "$F101/.declared-close.txt"
+cp "$A101" "$T/after101.bak"
+expect_rc 1 "flow-close --wrap:FAILED 无裁决号 ⟹ 照红" flow-close --wrap "$F101" "$F101/.manifest-baseline-①写.txt" "$F101/.declared-close.txt" "$A101" --task T1
+printf '%s' "$LAST_OUT" | grep -q '^RED  src/a.ts: FAILED —— 不在申报清单或申报行无裁决号' && ok "无号 FAILED 点名并给改法" || fail "无号 FAILED 未红: $(printf '%s' "$LAST_OUT" | grep 'src/a.ts')"
+printf '%s' "$LAST_OUT" | grep -q 'WRAP RED' && ok "WRAP RED" || fail "末行不是 WRAP RED"
+cmp -s "$A101" "$T/after101.bak" && ok "红了不动冻结件" || fail "红了却重打了冻结件"
+git checkout -q -- src/a.ts 2>/dev/null; git rm -q --cached src/n.ts 2>/dev/null; rm -f src/n.ts
 
 [ "$red" = 0 ] && { echo "SMOKE OK"; exit 0; } || { echo "SMOKE RED"; exit 1; }

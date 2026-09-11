@@ -8,6 +8,10 @@
 #   --wrap(收口机械段,0.6.0;步序 0.8.2 调过):交付态哈希 → manifest verify → 非空转 → 假话门(**以上四条先核树**)
 #       → 三态表 dry-run → 账本 lint → REQ 对账 →(对账绿才动树)索引重渲 + REQ 翻 done → 门整跑(收口那一次;末尾印一行可照抄的门读数)
 #       → 文档预算 → 规则书棘轮 → 轮数账 --write → 状态档事实段;末行 WRAP OK 之后印剩余手工步清单(编排方不必再读 close-block.md)。
+#       交付态哈希的 FAILED(1.0.1):路径在申报清单里且申报行尾带 `# 裁决-N` ⟹ 印「编排方收口编辑(裁决-N)」不计红,WRAP OK 后 kit 把这些行
+#         在 after-hashes 里**就地重打**(旧件 `<after>.pre-wrap`);无号的照红。病根:收口本身有编排方按裁决必须动树的编辑(P2-4 裁决-2291 删
+#         check.sh 两行),它发生在 wrap 之前 ⟹ 对上一轮 .after 必 FAILED,旧写法「由编排方自判,本脚本按红报」= 知道却照红,每次手工 flow-freeze 重打。
+#         例外通道与测试锁 / 越面同一条,不另开 --refreeze 开关(例外必须带号能追到裁决)。
 #       病根:收口十步里的机械步曾各占编排方一个请求(ShipLedger 收口 ≈60 min、StockSteer 20+27 min);这里一条命令、一行末行。
 #       判断步(账本 diff 审、spec 落地记录、根文档读数、commit 消息)仍归编排方 —— 它们不是机械的。
 #       ⚠ --plan 给了就会改 plan 文件(翻 REQ 状态):它必须在编排方的申报清单里,否则 verify 会红「漏申报」;
@@ -137,15 +141,44 @@ hdr() { step=$((step+1)); echo "== $step. $1 =="; }
 
 # 申报清单 → 纯路径集(剥哈希前缀 / git 状态位 / rename 箭头 / 行尾注释)
 declp=$(sed -e 's/^[0-9a-f]\{40,\}  //' -e 's/^git \(..\) //' -e 's/^git //' "$DECL" | sed 's/.* -> //' | sed 's/^[[:space:]]*//' | grep -v '^#' | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' | grep . | sort -u)
+# 申报行尾带 `# 裁决-N` 的路径 → `路径<TAB>N` 表(越面与交付态哈希共用;与 flow-manifest 的 declared_verdict 同一条解析)
+grep -v '^[[:space:]]*#' "$DECL" | sed -e 's/^[0-9a-f]\{40,\}  //' -e 's/^git \(..\) //' -e 's/^git //' | sed 's/.* -> //' | sed 's/^[[:space:]]*//' \
+  | LC_ALL=C awk '{ if (!match($0, /[[:space:]]+#[^#]*裁决[- ]*[0-9]+/)) next; path=substr($0, 1, RSTART-1); s=substr($0, RSTART, RLENGTH); sub(/.*裁决[- ]*/, "", s); print path "\t" s }' \
+  | sort -u > "$TMP/declv"
+declv=$(cut -f1 "$TMP/declv")
 
 step_after() {
   [ -n "$AFTER" ] || return 0
-  hdr "交付态哈希 sha256 -c $(basename "$AFTER")"
+  hdr "交付态哈希 sha256 -c $(basename "$AFTER")(FAILED 的例外只走申报行尾 # 裁决-N)"
   flow_sha256_check "$AFTER" > "$TMP/after" 2>/dev/null
   ok=$(grep -c ': OK$' "$TMP/after"); bad=$(grep -vc ': OK$' "$TMP/after")
   echo "OK=$ok FAILED=$bad"
   [ $((ok+bad)) -gt 0 ] || { echo "  ⚠ 零条结果(清单为空或校验工具没跑起来)—— 空集不算绿(§J0)"; red=1; }
-  [ "$bad" = 0 ] || { grep -v ': OK$' "$TMP/after"; echo "  (FAILED 若全在编排方并行编辑面则不算红 —— 由编排方自判,本脚本按红报)"; red=1; }
+  [ "$bad" = 0 ] && return 0
+  # 1.0.1:FAILED 的路径在申报清单里且申报行尾带 # 裁决-N ⟹ 编排方收口编辑,不计红,路径记进 after-exc(WRAP OK 后 refreeze_after 就地重打);无号照红
+  : > "$TMP/after-exc"; nred=0
+  grep -v ': OK$' "$TMP/after" > "$TMP/after-bad"
+  while IFS= read -r line; do
+    p=${line%: *}   # 剥末尾 `: OK|FAILED|FAILED open or read`(从最后一个 `: ` 起)
+    n=$(P="$p" LC_ALL=C awk -F'\t' '$1==ENVIRON["P"]{print $2; exit}' "$TMP/declv")
+    if [ -n "$n" ]; then echo "ok   编排方收口编辑(裁决-$n): $line"; printf '%s\n' "$p" >> "$TMP/after-exc"
+    else echo "RED  $line —— 不在申报清单或申报行无裁决号:还原它,或申报行写成「$p  # 裁决-N <为什么动>」"; nred=$((nred+1)); fi
+  done < "$TMP/after-bad"
+  [ "$nred" = 0 ] || red=1
+}
+# 1.0.1:WRAP OK 后把收口编辑过的行在 after-hashes 里就地重打(旧件 .pre-wrap;备份件名不在 .after-*-hashes.txt 这个 glob 里,flow-round open 取最新不会取到它)。
+#   从前这步是编排方手工 flow-freeze(P2-4 的 .pre-2291 就是那次的备份);树上已没有的路径(按裁决删的)那行删掉 —— flow_freeze_to 本就只列存在的文件。
+refreeze_after() {
+  [ -n "$AFTER" ] && [ -s "$TMP/after-exc" ] || return 0
+  hdr "冻结件就地重打(收口编辑的 $(grep -c . "$TMP/after-exc") 行;旧件 $(basename "$AFTER").pre-wrap)"
+  cp "$AFTER" "$AFTER.pre-wrap" || { echo "  ⚠ 备份冻结件失败,未重打: $AFTER"; return 0; }
+  while IFS= read -r p; do
+    if [ -f "$p" ]; then h=$(flow_sha256 "$p"); h=${h%%  *}; echo "  重打 $p"; else h=""; echo "  删行 $p(树上没有)"; fi
+    # 路径进 awk 走 ENVIRON 不走 -v(契约 4);哈希列固定 `<hex>  <path>`
+    P="$p" H="$h" LC_ALL=C awk '{ path=$0; sub(/^[0-9a-f]+  /, "", path); if (path!=ENVIRON["P"]) print; else if (ENVIRON["H"]!="") print ENVIRON["H"] "  " path }' "$AFTER" > "$TMP/after-new" && cat "$TMP/after-new" > "$AFTER"
+  done < "$TMP/after-exc"
+  flow_sha256_check "$AFTER" > "$TMP/after-re" 2>/dev/null
+  echo "重打后 sha256 -c:OK=$(grep -c ': OK$' "$TMP/after-re") FAILED=$(grep -vc ': OK$' "$TMP/after-re")"
 }
 
 step_manifest() {
@@ -203,7 +236,6 @@ step_face() {
   if [ -n "$THIS" ]; then facep=$(grep -v '^[[:space:]]*#' "$THIS" | sed 's/[[:space:]]*$//' | grep . | sort -u); scope="本轮〇表路径 $(printf '%s\n' "$facep" | grep -c . || true) 条"
   else facep="$declp"; scope="申报并集"; fi
   hdr "越面($scope ⊆ $(basename "$FACE");例外走申报行尾 # 裁决-N)"
-  declv=$(grep -v '^[[:space:]]*#' "$DECL" | LC_ALL=C grep -E '#[^#]*裁决[- ]*[0-9]+' | sed -e 's/^[0-9a-f]\{40,\}  //' -e 's/^git \(..\) //' -e 's/^git //' | sed 's/.* -> //' | sed 's/^[[:space:]]*//' | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' | grep . | sort -u)
   nin=0; nout=0
   for p in $facep; do
     inf=0
@@ -364,6 +396,7 @@ if [ "$MODE" = wrap ]; then
   if [ "$red" = 0 ]; then step_index; step_markdone; else echo "== (索引重渲 与 REQ 翻 done 跳过:前面已红,先修完再让 kit 动树)=="; fi
   step_gates; step_budget; step_rulebook; step_usage; step_state
   if [ "$red" = 0 ]; then
+    refreeze_after
     cat <<WOK
 WRAP OK: 机械段全绿。剩下的归编排方(判断步,照这个顺序;不必再读 close-block.md):
   1. 账本:flow-ledger apply <三态表> --write · append <标记> "<一行>" · add --owner … --due … --touches … --title … --body-file <正文文件>
