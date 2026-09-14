@@ -58,7 +58,7 @@ gitignore 件手工拷进副本;引证 spec 一律读主树,差异当 finding �
 微改通道:丙栏每条必闭附一份可 `git apply` 的 patch(落 `.evidence/<轮名>-micro-<裁决号>.patch`,头一行 `# repro: <命令> → 期望 <读数>`,
 正文 `git -c core.quotepath=false diff`)+ ev:<名>。行数与性质不由你估,由编排方 `flow-micro <patch>... --face .face-<写轮名>.txt` 从 patch 量(只数非测试新增行)。
 MICRO OK ⟹ 编排方 --apply 落笔 + 复跑你写的复现命令对读数,不回来找你;**没附 patch 的条目一律不算微改**。
-④B 在活树上出 patch:改 → `git diff` 出件 → 立刻还原(与变异 harness 同一套备份还原 + 冻结件自检),回件里给还原后的 `shasum -c` 读数;快照轴直接 diff。
+④B 在活树上出 patch:`cp` 备份到 scratchpad → 改 → `git diff --no-index <备份> <文件>` → 头两行的备份路径换成 `a/<仓库相对路径>`(一条 sed)→ 从备份还原 + 冻结件 `shasum -c`,读数写进回件;快照轴同一招。别用裸 `git diff`:本批已改过的文件它印的是 HEAD 起的整段,编排方 apply 会撞已落的 hunk。
 
 ## 双模型对照(给某轴换模型前必做一批)
 同一份产物再派一个影子 agent(model=候选,回件写 `<轮号>-review-<轴>.<model>.md`,树权限快照、库禁用),与原版零共享;

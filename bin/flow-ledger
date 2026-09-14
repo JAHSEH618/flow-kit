@@ -7,6 +7,8 @@
 #   flow-ledger verdicts <三态表(绝对)>              → TSV「标记<TAB>判定<TAB>证据」;判定归一化(去 ** ` 与空白)
 #   flow-ledger close <标记> [--note <一句>]          → 机器头 status:open→closed,正文尾追一行「**已还 <日期>**:<note>」
 #   flow-ledger append <标记> <一行文字>              → 正文尾追一行(追写;原文一字不改)
+#   flow-ledger touches <标记> <a,b>                  → 机器头 touches 并集追加(去重保序;已含则 skip)—— 1.0.2:追写常带触面变宽
+#                                                       (P4-T 实测 #102 #97 加 apps/web/src/screens/reports),此前只能 sed 直改机器头再 --lint
 #   flow-ledger add --owner <任务号> --due <任务号或日期> --touches <a,b> --title <一句> [--body <正文> | --body-file <绝对路径|->] [--mark #N]
 #                                                     → 正文可多行(--body-file 读文件,- 读 stdin);整块带 `> ` 前缀也认(0.7.0)
 #   flow-ledger apply <三态表(绝对)> [--write]        → 吃三态表:判定「还」的逐条 close(默认 dry-run);
@@ -28,6 +30,7 @@ usage() {
   flow-ledger verdicts <三态表(绝对)>
   flow-ledger close <标记> [--note <一句>]
   flow-ledger append <标记> <一行文字>
+  flow-ledger touches <标记> <a,b>
   flow-ledger add --owner <任务号> --due <任务号或日期> --touches <a,b> --title <一句> [--body <正文> | --body-file <绝对路径|->] [--mark #N]
   flow-ledger apply <三态表(绝对)> [--write]
 U
@@ -35,7 +38,7 @@ U
 }
 CMD="${1:-}"; [ -n "$CMD" ] || usage
 shift
-case "$CMD" in verdicts|close|append|add|apply) ;; *) usage ;; esac
+case "$CMD" in verdicts|close|append|touches|add|apply) ;; *) usage ;; esac
 [ -f "$FLOW_LEDGER_PATH" ] || flow_die "账本不存在: $FLOW_LEDGER_PATH(FLOW_LEDGER=$FLOW_LEDGER)"
 
 # 参数按位置/开关分拣(POSIX sh:不许数组,逐个透传给 python)
@@ -53,6 +56,9 @@ case "$CMD" in
     ;;
   append)
     A1="${1:-}"; NOTE="${2:-}"; { [ -n "$A1" ] && [ -n "$NOTE" ]; } || usage; shift 2 ;;
+  touches)
+    A1="${1:-}"; NOTE="${2:-}"; { [ -n "$A1" ] && [ -n "$NOTE" ]; } || usage; shift 2
+    case "$NOTE" in /*|*",/"*) flow_die "touches 必须仓库相对,不许绝对路径: $NOTE" ;; esac ;;
   add)
     BF=""
     while [ $# -gt 0 ]; do
@@ -170,6 +176,14 @@ elif cmd == 'append':
     t = body_tail(hi, end)
     src.insert(t + 1, f'>   {note}')
     print(f'ok   {a1} 正文尾追一行(追写;原文未动)'); save()
+elif cmd == 'touches':
+    mkk, hi, end, _ = find(a1)
+    m = re.search(r' touches:(\S*)', src[hi])
+    if not m: fatal(f'{a1} 的机器头没有 touches: 字段')
+    have = [t for t in m.group(1).split(',') if t]
+    new = [t for t in note.split(',') if t and t not in have]
+    if new: src[hi] = src[hi][:m.start(1)] + ','.join(have + new) + src[hi][m.end(1):]
+    print(f'ok   {a1} touches +{len(new)}:{",".join(new) or "(已含,未改动)"} → {",".join(have + new)}'); save()
 elif cmd == 'add':
     bs = blocks()
     nxt = max([b[3] for b in bs] + [int(m[1:]) for b in bs for m in [b[0]] if m.startswith('#')] + [0]) + 1

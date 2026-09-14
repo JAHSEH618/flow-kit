@@ -118,7 +118,7 @@ description: 四轮制(写 / 双轴审 / 改 / 复审)多 agent 工作流的编�
 | `flow-route-debts` | `flow-route-debts <任务号或触面…>` · `--lint` | 派单 / 改账本后 |
 | `flow-receipts` · `flow-trace` | `flow-receipts <plan> <任务号>` · `flow-trace <plan> <任务号> [--mark-done]` | 任务书覆盖声明前;收口(`--wrap` 自动跑) |
 | `flow-close` | `--wrap <流程目录> <基线> <申报> [after] [--task] [--plan] [--verdicts <表>]` · `--ship <commit> --subject <标题> [--verdicts] --dir <流程目录>` | 收口机械段 / 提交后四步 |
-| `flow-ledger` | `apply <三态表> [--write]` · `close <标记> [--note]` · `append <标记> <行>` · `add --owner --due --touches --title [--body-file <正文\|->]` | 收口改账本;三态表的唯一解析器 |
+| `flow-ledger` | `apply <三态表> [--write]` · `close <标记> [--note]` · `append <标记> <行>` · `touches <标记> <a,b>` · `add --owner --due --touches --title [--body-file <正文\|->]` | 收口改账本;三态表的唯一解析器 |
 | `flow-usage` | `flow-usage <流程目录> [--write]` | 收口(`--wrap` 与 `--ship --dir` 自动跑) |
 | `flow-rulebook` | `show [行号]` · `retire <行号>[.<子句号>] --section "<§X · 批次>" --reason "<一句>"` | 收口退役规矩(每批 ≥ 1) |
 | `flow-review-diff` | `flow-review-diff <原版回件> <影子回件>` | 改任一轴的模型前 |

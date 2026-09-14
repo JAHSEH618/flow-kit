@@ -415,6 +415,17 @@ with open(os.path.join(os.path.dirname(tr), 'sid1.jsonl'), 'w') as f:
     f.write(user('2026-09-03T00:58:00.000Z', f'起一批,派单落 {fl}/01-dispatch.md') + '\n')
     f.write(asst('o1', '2026-09-03T00:59:30.000Z', [dict(type='text', text='ok')], out=7) + '\n')
     f.write(asst('o2', '2026-09-04T09:00:00.000Z', [dict(type='text', text='别批,窗外')], out=7) + '\n')
+with open(os.path.join(os.path.dirname(tr), 'sid2.jsonl'), 'w') as f:
+    # 1.0.2 / F-64:收口另起的零 sub-agent 会话(wrap → ship → push);从 sub-agent 反推父会话扫不到它
+    f.write(user('2026-09-03T01:40:00.000Z', '收口') + '\n')
+    f.write(asst('c1', '2026-09-03T01:40:10.000Z', [dict(type='tool_use', id='c1t', name='Bash', input={'command': f'flow-close --wrap {fl} a b c --task T1'})], out=7) + '\n')
+    f.write(asst('c2', '2026-09-03T01:45:00.000Z', [dict(type='tool_use', id='c2t', name='Bash', input={'command': f'flow-close --ship abc123 --subject x --dir {fl}'})], out=7) + '\n')
+    f.write(asst('c3', '2026-09-03T01:46:00.000Z', [dict(type='tool_use', id='c3t', name='Bash', input={'command': 'git push origin dev'})], out=7) + '\n')
+with open(os.path.join(os.path.dirname(tr), 'sid3.jsonl'), 'w') as f:
+    # 阴性对照:下一批读了本批回件(提到本流程目录)、收自己的口 —— flow-close 与本目录不在同一条工具输入,不许并进本批
+    f.write(user('2026-09-03T02:00:00.000Z', '下一批') + '\n')
+    f.write(asst('n1', '2026-09-03T02:00:10.000Z', [dict(type='tool_use', id='n1t', name='Read', input={'file_path': f'{fl}/04a-review-static.md'})], out=7) + '\n')
+    f.write(asst('n2', '2026-09-03T02:30:00.000Z', [dict(type='tool_use', id='n2t', name='Bash', input={'command': 'flow-close --wrap /elsewhere/.flow/next a b c; git commit -m x'})], out=7) + '\n')
 PY
 printf 'FLOW_TRANSCRIPTS_DIR="%s"\nFLOW_TURN_CAP=1\n' "$T/transcripts" >> "$WS/.claude/flow.config.sh"
 expect_rc 0 "flow-usage" flow-usage "$FL"
@@ -425,13 +436,14 @@ printf '%s' "$LAST_OUT" | grep -q '^| ②B | .* 开销 仪式 1 / 读kit 0 / 打
 printf '%s' "$LAST_OUT" | grep -q '^| sub-agent 合计 | .* 开销 4 请求(50%:仪式 2 / 读kit 1 / 打回件 1)' && ok "合计行:开销 4/8 = 50%" || fail "合计开销错: $(printf '%s' "$LAST_OUT" | grep 'sub-agent 合计')"
 printf '%s' "$LAST_OUT" | grep -q 'WARN sub-agent 开销请求 4/8 = 50% > 15%' && ok "开销 > 15% WARN(是账不是门)" || fail "开销 WARN 缺: $(printf '%s' "$LAST_OUT" | grep 开销请求)"
 printf '%s' "$LAST_OUT" | grep -q 'WARN ①写:会话 agent-1 2 请求 > FLOW_TURN_CAP 1' && ok "单会话请求超 FLOW_TURN_CAP 报 WARN(按会话)" || fail "请求上限未 WARN: $(printf '%s' "$LAST_OUT" | grep WARN)"
-printf '%s' "$LAST_OUT" | grep -q '^| 编排方 | .* 1 轮' && ok "父会话记成编排方,窗外那轮已剔除" || fail "编排方行错(应 1 轮): $(printf '%s' "$LAST_OUT" | grep 编排方)"
+printf '%s' "$LAST_OUT" | grep -q '^| 编排方 | .* 4 轮 .* 2 会话' && ok "编排方 = 主会话 1 轮(窗外那轮已剔除)+ 零 sub-agent 的收口会话 3 轮,2 会话;阴性对照未并入" || fail "编排方行错(应 4 轮 · 2 会话): $(printf '%s' "$LAST_OUT" | grep '^| 编排方 | .*携带')"
 printf '%s' "$LAST_OUT" | grep -q '窗 09-0.*父会话提到本流程目录' && ok "编排方行带时间窗" || fail "编排方行缺时间窗"
+printf '%s' "$LAST_OUT" | grep -q '^| 收口 | [1-9][0-9]*m | [0-9][0-9]:[0-9][0-9] → [0-9][0-9]:[0-9][0-9]' && ok "固定开销表「收口」段非零(收口会话的 wrap → ship → push 进账)" || fail "收口段仍为零: $(printf '%s' "$LAST_OUT" | grep '^| 收口')"
 printf '%s' "$LAST_OUT" | grep -q '^| ②B | 10m | .* 2 轮' && ok "「的 **②B · …**」写法识别成 ②B" || fail "②B 角色识别错: $(printf '%s' "$LAST_OUT" | grep -E '^\| ②')"
 printf '%s' "$LAST_OUT" | grep -q '^| ②B | 10m | 0m | 10m | 0m | 1 |' && ok "墙钟归因:②B 工具 10m · 卡顿 1" || fail "墙钟归因行错: $(printf '%s' "$LAST_OUT" | grep -E '^\| ②B \| 10m \| ')"
 printf '%s' "$LAST_OUT" | grep -q 'WARN 卡顿 ②B:.* 工具 605s `flow-manifest verify a b`' && ok "卡顿单列 WARN(605 s ≥ FLOW_STALL_SEC)" || fail "卡顿未 WARN: $(printf '%s' "$LAST_OUT" | grep 卡顿)"
 printf '%s' "$LAST_OUT" | grep -q '编排方输出去向' && ok "编排方输出去向表" || fail "缺输出去向表"
-printf '%s' "$LAST_OUT" | grep -q 'USAGE OK: 4 会话 / 9 轮' && ok "USAGE OK 末行" || fail "USAGE 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+printf '%s' "$LAST_OUT" | grep -q 'USAGE OK: 5 会话 / 12 轮' && ok "USAGE OK 末行(4 sub-agent + 编排方 2 会话)" || fail "USAGE 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
 expect_rc 0 "flow-usage --write" flow-usage "$FL" --write
 [ -f "$FL/.usage.md" ] && ok ".usage.md 已写" || fail ".usage.md 未写"
 expect_rc 0 "flow-doc-budget 不数 .usage.md" flow-doc-budget "$FL"
@@ -459,6 +471,13 @@ printf '%s' "$LAST_OUT" | grep -q '裸文件名' && ok "FATAL 点名裸文件名
 expect_rc 0 "flow-ledger add 反引号内文件名放行" flow-ledger add --owner T4 --due T4 --touches src/a.ts --title '`queue.ts` 里的写口(0.8.3 起)' --mark '#40'
 expect_rc 0 "flow-ledger append(追写)" flow-ledger append '#4' '追写:触面变宽到 src/b.ts'
 grep -q '^>   追写:触面变宽到 src/b.ts' "$WS/specs/debts.md" && ok "append 落在正文尾" || fail "append 未落盘"
+# 1.0.2 / F-61:追写带触面变宽 —— 机器头 touches 并集追加(去重保序),不再 sed 直改
+expect_rc 0 "flow-ledger touches(并集追加)" flow-ledger touches '#4' 'src/b.ts,src/a.ts,src/c/'
+grep -q '<!-- debt:4 mark:#4 status:open owner:T4 due:T4 touches:src/a.ts,src/b.ts,src/c/ title:新立的账 -->' "$WS/specs/debts.md" && ok "touches:src/a.ts → src/a.ts,src/b.ts,src/c/(已含的 a.ts 不重复,顺序保住)" || fail "touches 机器头错: $(grep 'debt:4' "$WS/specs/debts.md")"
+printf '%s' "$LAST_OUT" | grep -q '^ok   #4 touches +2:src/b.ts,src/c/ → src/a.ts,src/b.ts,src/c/' && ok "touches 印 新增 与 现值" || fail "touches 输出错: $(printf '%s' "$LAST_OUT" | head -1)"
+expect_rc 2 "flow-ledger touches 绝对路径 FATAL" flow-ledger touches '#4' '/abs/x'
+expect_rc 2 "flow-ledger touches 标记不存在 FATAL" flow-ledger touches '#99' 'src/z.ts'
+grep -c '^>   追写:触面变宽到 src/b.ts' "$WS/specs/debts.md" | grep -qx 1 && ok "touches 不动正文" || fail "touches 动了正文"
 expect_rc 0 "flow-ledger close" flow-ledger close '#4' --note 冒烟还账
 grep -q '<!-- debt:4 mark:#4 status:closed ' "$WS/specs/debts.md" && ok "close 翻 status" || fail "close 未翻 status"
 grep -q "已还 $(date +%F)" "$WS/specs/debts.md" && ok "close 追一行已还" || fail "close 未追已还行"
@@ -1206,6 +1225,15 @@ expect_rc 0 "flow-ev 多实参:裸 '|' 当管道" flow-ev "$F10" ①写 q3 -- ec
 expect_rc 0 "flow-ev 多实参:'*.txt' 按字面(不再被内层展开)" flow-ev "$F10" ①写 q4 -- printf '%s\n' 'src/*.txt'
 [ "$(cat "$F10/.evidence/①写-q4.txt")" = 'src/*.txt' ] && ok "调用方引住的通配按字面传" || fail "通配被展开: $(cat "$F10/.evidence/①写-q4.txt")"
 rm -f "$WS/src/q.txt"
+# 1.0.2:pipefail(F-60)· 语法先过不烧名(F-62)· -- 之后的 --show FATAL 不烧名(F-63)
+expect_rc 1 "flow-ev pipefail:… | grep -q 无命中 | cut ⟹ RC 是 grep 的 1,不是 cut 的 0" flow-ev "$F10" ①写 pf -- 'echo a | grep -q zzz | cut -c1'
+expect_rc 2 "flow-ev 语法错(不配对引号)FATAL" flow-ev "$F10" ①写 syn -- 'echo "x'
+[ ! -e "$F10/.evidence/①写-syn.txt" ] && ok "语法错不建 OUT、不烧名" || fail "语法错却建了 OUT"
+expect_rc 0 "flow-ev 同名修好重跑(名未消耗)" flow-ev "$F10" ①写 syn -- 'echo fixed'
+expect_rc 2 "flow-ev -- 之后出现 --show FATAL" flow-ev "$F10" ①写 sh1 -- echo hi --show all
+[ ! -e "$F10/.evidence/①写-sh1.txt" ] && ok "--show 位置错不建 OUT、不烧名" || fail "--show 位置错却建了 OUT"
+expect_rc 0 "flow-ev --show 在 -- 之前照跑" flow-ev "$F10" ①写 sh1 --show all -- echo hi
+[ "$(grep -c '^syn\|^sh1\|^pf' "$F10/.evidence/①写-log.tsv")" = 3 ] && ok "账只记跑成的三条(两次 FATAL 零账)" || fail "账行数错: $(cut -f1,2 "$F10/.evidence/①写-log.tsv" | tr '\n' ' ')"
 
 # ── 25. 1.0.1:flow-close --wrap 步 1 认收口编辑(申报行尾 # 裁决-N)并在 WRAP OK 后就地重打冻结件 ──
 cd "$WS"

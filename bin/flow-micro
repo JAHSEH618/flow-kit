@@ -207,7 +207,8 @@ if [ "$APPLY" = 1 ]; then
   cut -f3 "$TMP/sum" | while IFS= read -r p; do
     [ -n "$p" ] || continue
     if grep -v '^[[:space:]]*#' "$DECLARED" | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' | grep -qxF -- "$p" \
-       && grep -v '^[[:space:]]*#' "$DECLARED" | grep -F -- "$p" | LC_ALL=C grep -qE '#[^#]*裁决[- ]*[0-9]+'; then echo "  已有(带裁决号): $p"
+       && grep -v '^[[:space:]]*#' "$DECLARED" | grep -F -- "$p" | LC_ALL=C grep -qE '#[^#]*裁决[- ]*[0-9]+'; then
+      echo "  已有(带 $(grep -v '^[[:space:]]*#' "$DECLARED" | grep -F -- "$p" | LC_ALL=C grep -oE '裁决[- ]*[0-9]+' | head -1),不追加 裁决-$VERDICT): $p"
     else printf '%s  # 裁决-%s micro\n' "$p" "$VERDICT" >> "$DECLARED"; echo "  + $p  # 裁决-$VERDICT micro"; fi
   done
   hdr "复现命令清单(每份 patch 头部 diff --git 之前以 # 起的行;编排方逐条复跑对期望读数)"

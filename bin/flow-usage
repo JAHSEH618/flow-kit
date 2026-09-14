@@ -30,6 +30,8 @@
 #     p4e 实测旧窗(首次提到目录 = 派单 mkdir 那一步起、--write 那一刻止)只盖住编排方 142 请求里的 65:开工 11 min 与收口 16 min 全在窗外,
 #     「独占关键路径 14m ✅」是切窗产物,真值 ≈40 min。flow-close --ship --dir 末尾重跑一次,窗才含 commit / PR。
 #     父会话一次都没提到流程目录 ⟹ 不切窗(备注写明),跨批时数字偏大 —— 但「切了却切错」比「没切」更坏。
+#     1.0.2:收口另起的零 sub-agent 会话也并进编排方行(同项目目录下、mtime ≥ 首个 sub-agent 起点、某条工具输入同时有 flow-close 与本流程目录);
+#     从 sub-agent 反推父会话永远扫不到它,--ship --dir 重跑的窗因此一直止于主会话末(p4t 实测收口 23 min 不在账上)。
 # sub-agent 开销三列(1.0.0 / D3):每个请求按它的 tool_use 归一类 —— 打回件(cat >> 回件 / 三态表,Write / Edit 同)> 仪式(flow-freeze · 手写 .declared ·
 #   自跑 manifest verify / fact-lint / doc-budget / flow-step · shasum -c · 复跑 route-debts / receipts / trace;不含 flow-gates / flow-micro / flow-ev,那是任务)> 读 kit
 #   (读 flow-kit 的 bin / lib / 模板 / flow.config.sh)。轮次行加三个请求数,合计行加开销占比,开销请求 > 15% WARN(是账不是门)。
@@ -399,6 +401,17 @@ def parent_requests(path):
     out.sort(key=lambda x: x[0])
     return out
 
+# 1.0.2 / F-64:收口常是另起的一个零 sub-agent 会话(commit / push / PR),从 sub-agent 反推 parents 永远扫不到它 ——
+#   p4t 实测:主会话 14 个 sub-agent 12:09 收,收口会话 12:10–12:33 零 sub-agent、提到 .flow/p4t 82 次、跑了真 --ship,账上没它。
+#   补扫 parent 同项目目录下的顶层会话:mtime ≥ 首个 sub-agent 起点(挡住 177 MB 目录的大头),且某一条工具输入**同时**有 flow-close
+#   与本流程目录(`flow-close --wrap <目录>` / `--ship … --dir <目录>`);只提到目录不算 —— 下一批读本批回件也会提到它。
+if slo:
+    for pd in {os.path.dirname(p) for p in parents}:
+        for f in glob.glob(os.path.join(pd, '*.jsonl')):
+            if f in parents or datetime.datetime.fromtimestamp(os.path.getmtime(f), datetime.timezone.utc) < slo: continue
+            if any('flow-close' in x and mentions(x) for _, x in parent_requests(f)): parents.add(f)
+
+nowin = 0
 for p in sorted(parents):
     if not os.path.isfile(p): continue
     a, b = span(p, flowdir)
@@ -418,9 +431,10 @@ for p in sorted(parents):
             if other_batch(x) or (t - cur).total_seconds() > IDLE: break
             cur = t
             if CLOSE_RE.search(x) or mentions(x): hi2 = t
-        hi = hi2; win = (lo, hi); win_lo, win_hi = lo, hi
-        winnote = '(窗 ' + lo.astimezone().strftime('%m-%d %H:%M') + '–' + hi.astimezone().strftime('%H:%M') + ':开工序起 → 收口末;父会话提到本流程目录 ∪ sub-agent 时段,两头按开工 / 收口标记延)'
-    else:   winnote = '(无窗:父会话零次提到本流程目录,跨批时数字偏大)'
+        hi = hi2; win = (lo, hi)
+        win_lo = lo if (win_lo is None or lo < win_lo) else win_lo      # 多个父会话(主会话 + 收口会话)取并:窗 = 最早起 → 最晚收
+        win_hi = hi if (win_hi is None or hi > win_hi) else win_hi
+    else: nowin += 1
     st = stats(p, win)
     add('编排方', st); orch_cats += st['cats']
     # 独占关键路径:编排方的请求区间与任何 sub-agent 活动区间不相交的那部分(它一个人在跑,别人都在等它);按位置拆 开工 / 轮间 / 收口
@@ -431,6 +445,8 @@ for p in sorted(parents):
         elif shi and a2 >= shi: solo_close += d
         else: solo_between += d
 orch_solo = solo_open + solo_between + solo_close
+if win_lo: winnote = '(窗 ' + win_lo.astimezone().strftime('%m-%d %H:%M') + '–' + win_hi.astimezone().strftime('%H:%M') + ':开工序起 → 收口末;父会话提到本流程目录 ∪ sub-agent 时段,两头按开工 / 收口标记延' + (f';另 {nowin} 个父会话零次提到本流程目录、未切窗' if nowin else '') + ')'
+else: winnote = '(无窗:父会话零次提到本流程目录,跨批时数字偏大)'
 if matched == 0:
     print(f'FATAL: {tdir} 下扫了 {len(files)} 份 sub-agent transcript,没有一份的首条 user 消息含 {flowdir} —— 空集不算绿', file=sys.stderr); sys.exit(2)
 

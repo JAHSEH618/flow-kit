@@ -7,7 +7,7 @@
       · 冻结核对 + 非空转 + 交付态哈希(after-hashes = 最后一轮 close 打的 .after;收口前按裁决动过的仓内文件,申报行写成 `path  # 裁决-N <为什么>`,
         步 1 印「编排方收口编辑(裁决-N)」不红,WRAP OK 后 kit 就地重打 .after(旧件 .pre-wrap);无号的 FAILED 照红,不再手工 flow-freeze)· 预算 · 规则书棘轮 · 轮数账 --write · 状态档事实段
    末行 WRAP OK 才往下,它后面印的就是剩余手工步(2–7),照它做;RED 逐项看,规则书变长即 RED
-2. 账本(判断步):按 dry-run 做 diff 审 → flow-ledger apply <三态表> --write · append <标记> "<一行>" · add --owner … --due … --touches … --title … --body-file <正文文件>
+2. 账本(判断步):按 dry-run 做 diff 审 → flow-ledger apply <三态表> --write · append <标记> "<一行>" · touches <标记> <a,b>(追写带触面变宽时)· add --owner … --due … --touches … --title … --body-file <正文文件>
    (正文多行一次落,整块带 `> ` 前缀也认;p4e 曾 add 只落机器头、正文再五次 python)已还条目正文里的开口项单开新条;owner 不锚已收工任务;新条落接收位(flow-receipts 能扫到)
 3. spec:任务节写「落地记录 <日期> · 收口」+ 下一刀接收位;历史句加注不改原文;REQ 状态已由 --mark-done 翻好,不手改
 4. 根文档:只改门读数与批次标签 —— wrap 印的「门读数(照抄进根文档…)」那一行照抄;叙事写项目的编年档
