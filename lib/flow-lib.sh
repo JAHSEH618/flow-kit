@@ -80,8 +80,13 @@ flow_load_config() {
   FLOW_FOLD_MAX=6
   FLOW_REQ_CAP=8
   FLOW_TURN_CAP=120                     # 单会话请求数上限(flow-usage 只 WARN):携带 ∝ 轮数 × 上下文,上下文又随轮数长 ⟹ 二次;按会话判,续轮单算
-  FLOW_DISPATCH_EXCERPT_BYTES=12000     # 派单里 plan 任务节选的字节封顶:超过只印 outline + REQ 行 + 节尾(本刀落位段),其余给「文件 + 行号」指针
-                                        # 实测一节 42 KB 横跨三刀,八个 agent 各读一遍 ≈ 该批携带 10%;②③④ 一律不印正文
+  FLOW_DISPATCH_EXCERPT_BYTES=16000     # 派单里 plan 任务节选的字节封顶:超过只印 outline + REQ 行 + 节尾(本刀落位段),其余给「文件 + 行号」指针
+                                        # 实测一节 42 KB 横跨三刀,八个 agent 各读一遍 ≈ 该批携带 10%;②③④ 一律不印正文。1.0.4:12000 → 16000(只有 ①写 读正文;
+                                        # 节尾切点对齐段落边界),单次覆盖走 flow-dispatch --excerpt-bytes,不走环境变量(默认值 → source config 的次序是有意的)
+  FLOW_RECEIPT_MARK_RE='接收位|强制条款|开口项'   # 接收位标记词(ERE):flow-receipts 轴1(节内)与轴3(跨件)按它认行;项目 plan 用别的词就覆盖(1.0.4 从脚本搬进 config,契约 2)
+  FLOW_TEST_TITLE_RE='(^|[^A-Za-z0-9_.])(it|test|describe)(\.[A-Za-z]+)*[[:space:]]*\('
+                                        # 测试标题行(ERE):flow-trace 只把**标题行**(或紧跟在以 `(` 结尾的标题行之后的那一行 —— prettier 把长标题折到下一行)里的
+                                        # `[REQ-ID]` 算测试命中;console.log / 注释里的不算(1.0.4,②A 实测 console.log 里的 [REQ-…] 被计成覆盖)。别的栈覆盖(go: `func Test`)
   FLOW_MICRO_FIX_LINES=16               # 微改通道:审轮(② 与 ④)必闭里非生产条的**非测试新增行合计**上限(1.0.0 / C2;测试行单列印出不计,删除行不计)。
                                         # 行数由 `flow-micro` 从审方附的 patch `git apply --numstat` 求和,不由审方估:P3-1 实测裁决-700 估 16 行 / 实做 55 行(偏 3.4×)。
                                         # 没附 patch 的条目一律不算微改,自动落回 ③
@@ -121,8 +126,8 @@ flow_load_config() {
          FLOW_MAP_DEBT FLOW_MAP_DEBT_PATH FLOW_LOCAL_DOC FLOW_LOCAL_DOC_PATH \
          FLOW_FACT_LINT_BASELINE FLOW_FACT_LINT_BASELINE_PATH FLOW_FACT_LINT_ROOTS FLOW_FACT_LINT_EXCLUDE \
          FLOW_GATE_SUMMARY_RE FLOW_INFRA_FAIL_RE FLOW_INFRA_FAIL_GATES FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_BYTES FLOW_DOC_BUDGET_SELF FLOW_DOC_BUDGET_DIR FLOW_DOC_BUDGET_HOTPATH FLOW_DOC_BUDGET_RULEBOOK \
-         FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_FIX_BY_WRITER FLOW_FOLD_MAX FLOW_MERGE_STRATEGY FLOW_REQ_CAP FLOW_TURN_CAP FLOW_DISPATCH_EXCERPT_BYTES FLOW_MICRO_FIX_LINES FLOW_TEST_GLOBS FLOW_TEST_SKIP_RE FLOW_BARE_PATH_RE FLOW_STALL_SEC FLOW_ROLE_MODELS FLOW_TRANSCRIPTS_DIR \
-         FLOW_KEEP_PLUGINS FLOW_KEEP_MCP
+         FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_FIX_BY_WRITER FLOW_FOLD_MAX FLOW_MERGE_STRATEGY FLOW_REQ_CAP FLOW_TURN_CAP FLOW_DISPATCH_EXCERPT_BYTES FLOW_MICRO_FIX_LINES FLOW_TEST_GLOBS FLOW_TEST_SKIP_RE FLOW_TEST_TITLE_RE FLOW_BARE_PATH_RE FLOW_STALL_SEC FLOW_ROLE_MODELS FLOW_TRANSCRIPTS_DIR \
+         FLOW_RECEIPT_MARK_RE FLOW_KEEP_PLUGINS FLOW_KEEP_MCP
 }
 
 # —— kit 自己的记账件(队列 / 基线 / 流程目录 / 门缓存)落在仓内(单仓布局)时,不算任何一轮的实改集 ——
@@ -189,7 +194,7 @@ flow_find_handoff() {   # 用法: flow_find_handoff <流程目录(绝对)> <轮�
   ( cd "$1" 2>/dev/null || exit 0
     for m in *.md; do
       [ -f "$m" ] || continue
-      case "$(head -1 "$m")" in "# $2 回件"*) printf '%s\n' "$m"; break ;; esac
+      case "$(head -1 -- "$m")" in "# $2 回件"*) printf '%s\n' "$m"; break ;; esac   # `--`:以 - 开头的残件不许被 head 当成选项(1.0.4;flow_check_flow_dir 另在入口判死)
     done )
 }
 
@@ -197,17 +202,41 @@ flow_find_handoff() {   # 用法: flow_find_handoff <流程目录(绝对)> <轮�
 #   表列:`| 符号 | 文件:行段 | 性质 | 对应 | 例外 |`。第二列 = 路径[:行段](反引号可有可无);性质 新增 / 改 / 删 才算实改,
 #   顶回 / 核过 之类不进申报;例外列写 `裁决-N` ⟹ 行尾 `# 裁决-N`(越面与测试锁的例外通道,与 flow-manifest verify 同一条)。
 #   审轮的〇是正面结论不是表 ⟹ 零行(视为零改动)。只读 `## 〇` 节;表头行与分隔行跳过。
+#   1.0.4:性质按**前缀**认(`改(编排方预改)` 能过);不认的性质而第二列像路径的行,由 flow_handoff_skipped 印给 flow-round close 作 WARN
+#     (P4-T ①写 把 debts-index.md 的性质写成「编排方预改(基线内)」⟹ 静默不进申报 ⟹ close 只见 RED 漏申报,病因看不见)。
+#     不放宽到「有路径就进申报」:申报 ⊆ 面 是越面判据,「核过 / 顶回」行进表会把没改的面外文件判成越面 RED。
 flow_handoff_paths() {   # 用法: flow_handoff_paths <回件(绝对)>
   LC_ALL=C awk -F'|' '
     /^## /{ on = ($0 ~ /^## 〇/); next }
     !on || $0 !~ /^\|/ || NF < 5 { next }
     { for (i = 1; i <= NF; i++) { gsub(/^[ \t]+|[ \t]+$/, "", $i) }
       f = $3; k = $4; e = (NF >= 6 ? $6 : "")
-      if (k != "新增" && k != "改" && k != "删") next          # 表头行(性质)与分隔行(---)也在这里被跳过
+      if (k !~ /^(新增|改|删)/) next          # 表头行(性质)与分隔行(---)也在这里被跳过
       gsub(/`/, "", f); sub(/:[0-9][^\/]*$/, "", f)
       if (f == "" || f ~ /[ \t]/ || f ~ /^[0-9][0-9,–-]*$/) next   # 纯行段(旧四列体例把路径写在第一列)不是路径:跳过,让 verify 报漏申报
       if (e ~ /裁决[- ]*[0-9]+/) { sub(/.*裁决[- ]*/, "", e); sub(/[^0-9].*/, "", e); printf "%s  # 裁决-%s\n", f, e }
       else print f }' "$1"
+}
+# 〇表里**没进申报却像有路径**的行:`<行号>\t<性质>\t<路径>`(与 flow_handoff_paths 同一套列解析;只给 close 印 WARN,不判)
+flow_handoff_skipped() {   # 用法: flow_handoff_skipped <回件(绝对)>
+  LC_ALL=C awk -F'|' '
+    /^## /{ on = ($0 ~ /^## 〇/); next }
+    !on || $0 !~ /^\|/ || NF < 5 { next }
+    { for (i = 1; i <= NF; i++) { gsub(/^[ \t]+|[ \t]+$/, "", $i) }
+      f = $3; k = $4
+      if (k ~ /^(新增|改|删)/ || k == "性质" || k ~ /^-+$/) next
+      gsub(/`/, "", f); sub(/:[0-9][^\/]*$/, "", f)
+      if (f == "" || f ~ /[ \t]/ || f !~ /[\/.]/) next            # 像路径 = 含 / 或 .(纯行段与空格串不算)
+      printf "%d\t%s\t%s\n", NR, k, f }' "$1"
+}
+
+# —— 流程目录守卫(1.0.4):以 `-` 开头的 md 件当场 FATAL ——
+#   病根:`flow-dispatch … > "$DIR/$ROUND-dispatch.md"` 里 $ROUND 为空(zsh 变量没设)⟹ 塌出 `-dispatch.md` 0 字节残件,
+#   之后每次扫目录的 `head` / `ls` 都把它当选项报 usage(P4-T 实测每次 dispatch 都报)。0 字节件**不能**判死:同一条重定向在 flow-dispatch
+#   起进程之前就把输出件截成 0 字节,扫目录必撞见自己的输出件 —— 0 字节静默跳过(首行空串本就认不出)。
+flow_check_flow_dir() {   # 用法: flow_check_flow_dir <流程目录(绝对)>
+  _fcd_bad=$( ( cd "$1" 2>/dev/null || exit 0; for m in ./-*.md; do [ -f "$m" ] && printf '%s ' "${m#./}"; done ) )
+  [ -z "$_fcd_bad" ] || flow_die "流程目录里有以 - 开头的件(重定向时轮名变量为空塌出的残件),删掉再来: $_fcd_bad"
 }
 
 # —— 派生申报清单(1.0.0 / A1):本轮 = 〇表路径 ∪ 目录里**所有先前轮**的派生清单 ——

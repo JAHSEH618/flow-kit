@@ -8,7 +8,11 @@
 #
 # 用法:
 #   flow-dispatch <任务号> --tree <快照|活树-独占|禁入> --db <独占|只读|禁用> --seq <N> [--round <①写|②A|②B|③改|④A|④B>] \
-#       [--dir <流程目录绝对路径>] [--core <core写权限面>] [--plan <plan文件绝对路径>] [--cap-ok <理由>] <触面路径(仓库相对)...>
+#       [--dir <流程目录绝对路径>] [--core <core写权限面>] [--plan <plan文件绝对路径>] [--cap-ok <理由>] \
+#       [--face-from <.face-<轮名>.txt 绝对路径>] [--excerpt-bytes <N>] <触面路径(仓库相对)...>
+#   --face-from(1.0.4):触面从上一轮的 .face 件读(一行一路径;# 与空行略过),与命令行触面**取并**;扩面 = 指原件 + 多给几条。
+#     病根:触面每轮重打一遍(15–18 条路径手敲四次),zsh 不分词又塌出 `-dispatch.md` 0 字节残件。与 --lane-merge 互斥。
+#   --excerpt-bytes(1.0.4):单次覆盖 FLOW_DISPATCH_EXCERPT_BYTES(环境变量盖不过 config:lib 先赋默认值再 source config,那个次序是有意的)。
 #   flow-dispatch --resume <原派单件绝对路径> --dir <流程目录> [--round <原轮名>]  # 续轮派单:①写 从步骤账、②③④ 从回件已落的节 + log.tsv 生成接手点(1.0.0)
 #     轮名默认从原派单的「轮次 / 模型」行取(0.8.2);--round 给了必须与它一致,且**不许带 `-续`** —— 续轮不是新轮,
 #     它沿用原轮的基线 / 步骤账 / 申报清单,轮名只有一个。原派单件本身是续轮派单 ⟹ FATAL(续轮不接续轮,仍指最初那份)。
@@ -20,6 +24,8 @@
 #   1.0.0(A5):回件模板**整块印进生成段**,由 <!-- flow:tpl-begin/end --> 括起(smoke 的 GEN_CAP 量法排除它);config 的门名单印一行。
 #   任务节选按轴(0.6.0):①写(或未给 --round)印正文但按 FLOW_DISPATCH_EXCERPT_BYTES 封顶 —— 超过只印 节头 + outline + REQ 行 + 节尾
 #     (本刀的落位段住在节尾),中间给「文件 + 行号」指针;②③④ 一律只印 outline + REQ 行(它们读的是回件索引表,不是任务书正文)。
+#     节尾切点(1.0.4)对齐**段落边界**:按字节定的切点往前退到最近空行之后(blockquote / 段落不切半截;回退不超过节尾预算,窗内无空行就切在段中并点名)。
+#     P4-T 实测落位段是一整段 blockquote,旧切法把它中间截掉,读侧 / 写侧两条落位成了「按需 sed」—— 那是漏读入口。
 #     实测一节 42 KB 横跨三刀,八个 agent 各读一遍 ≈ 该批携带的 10%。REQ 行只印 open / deferred(0.7.0):[done] 行 p4e 实测占派单 10.3 KB。
 #   收工段的 flow-gates --reset 只印给 --db 独占 的轮(F-22);②③④ 的欠账必读**不**按申报清单路由 —— 实测过,账本触面是宽前缀,28 = 28 条,零收益。
 #   --round 只决定「轮次 / 模型」行:FLOW_ROLE_MODELS 里给了该轮就印 model=<x>(Agent 调用照抄),否则继承编排方。
@@ -49,6 +55,7 @@ if [ "${1:-}" = "--resume" ]; then
   [ -f "$ORIG" ] || flow_die "原派单件不存在: $ORIG"
   [ -n "$RDIR" ] || flow_die "--resume 必须给 --dir"
   case "$RDIR" in /*) ;; *) flow_die "--dir 须绝对路径: $RDIR" ;; esac
+  [ -d "$RDIR" ] && flow_check_flow_dir "$RDIR"   # 1.0.4:续轮也扫目录(回件认领),残件同样判死
   # —— 0.8.2:轮名从**原派单里**取,不由 --round 说了算(契约 3 两侧同源)——
   # 病根:编排方把上一次生成的续轮名(`①写-续`)又喂回 --round,下面那行无条件再拼一层 ⟹ `①写-续-续`。
   #   回件首行照它写,flow-round 认领不到,状态档那两格退回 ⚠glob猜;门读数还顺着 `①写-*gates*` 串进了 ①写 行(F-2 同一次实测)。
@@ -123,12 +130,14 @@ fi
 TASK="${1:-}"; [ -n "$TASK" ] || flow_die "缺任务号"
 shift
 TREE=""; DB=""; SEQ=""; CORE="(待填:两档之一 —— 「只许改 shell,核心库一个字节不许动」或「核心库限 <文件/性质>」,protocol §1)"
-PLAN=""; CAPOK=""; LANE=""; ROUND=""; DIR=""
+PLAN=""; CAPOK=""; LANE=""; ROUND=""; DIR=""; FACEFROM=""
 while [ $# -gt 0 ]; do
-  case "$1" in --tree|--db|--seq|--core|--plan|--cap-ok|--lane-merge|--round|--dir) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
+  case "$1" in --tree|--db|--seq|--core|--plan|--cap-ok|--lane-merge|--round|--dir|--face-from|--excerpt-bytes) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
   case "$1" in
     --round) ROUND="$2"; shift 2 ;;
     --dir) DIR="$2"; shift 2 ;;
+    --face-from) FACEFROM="$2"; shift 2 ;;
+    --excerpt-bytes) case "$2" in ''|*[!0-9]*) flow_die "--excerpt-bytes 须为正整数,得到:「$2」" ;; esac; FLOW_DISPATCH_EXCERPT_BYTES="$2"; shift 2 ;;
     --tree) TREE="$2"; shift 2 ;;
     --db)   DB="$2";   shift 2 ;;
     --seq)  SEQ="$2";  shift 2 ;;
@@ -140,12 +149,17 @@ while [ $# -gt 0 ]; do
     *) break ;;
   esac
 done
+if [ -n "$FACEFROM" ]; then
+  [ -z "$LANE" ] || flow_die "--face-from 与 --lane-merge 互斥(合并批的触面只从清单来)"
+  case "$FACEFROM" in /*) ;; *) flow_die "--face-from 须绝对路径(文件参数一律绝对路径): $FACEFROM" ;; esac
+  [ -f "$FACEFROM" ] || flow_die "--face-from 面清单不存在: $FACEFROM"
+fi
 if [ -n "$LANE" ]; then
   [ -z "$PLAN" ] || flow_die "--lane-merge 与 --plan 互斥:合并批不带功能触面,没有接收位可覆盖"
   case "$LANE" in /*) ;; *) flow_die "--lane-merge 须绝对路径(文件参数一律绝对路径): $LANE" ;; esac
   [ -f "$LANE" ] || flow_die "--lane-merge 清单不存在: $LANE"
 else
-  [ $# -ge 1 ] || flow_die "缺触面路径(仓库相对)"
+  [ $# -ge 1 ] || [ -n "$FACEFROM" ] || flow_die "缺触面路径(仓库相对;或 --face-from <上一轮 .face 件>)"
 fi
 case "$TREE" in 快照*|活树-独占|禁入) ;; *) flow_die "--tree 须为 快照|活树-独占|禁入(protocol §3),得到:「$TREE」" ;; esac
 case "$DB" in 独占|只读|禁用) ;; *) flow_die "--db 须为 独占|只读|禁用(protocol §3),得到:「$DB」" ;; esac
@@ -155,11 +169,21 @@ if [ -n "$DIR" ]; then
   case "$DIR" in /*) ;; *) flow_die "--dir 须绝对路径: $DIR" ;; esac
   [ -d "$DIR" ] || flow_die "--dir 流程目录不存在: $DIR"
   [ -n "$ROUND" ] || flow_die "--dir 必须与 --round 同给(约定文件名按轮名派生)"
+  flow_check_flow_dir "$DIR"   # 1.0.4:以 - 开头的残件当场 FATAL(0 字节件静默跳过 —— 本命令的输出件在起进程前就已是 0 字节)
   mkdir -p "$DIR/.evidence"
 fi
 
 TMP=$(mktemp -d "$(flow_tmpdir)/flow-dispatch.XXXXXX") || exit 2
 trap 'rm -rf "$TMP"' EXIT
+
+# --face-from:面件里的路径 ∪ 命令行触面(面件在前,保序;重复的只留一条)
+if [ -n "$FACEFROM" ]; then
+  sed -e 's/[[:space:]]*#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$FACEFROM" | grep . > "$TMP/facefrom"
+  [ -s "$TMP/facefrom" ] || flow_die "--face-from 面清单里零条路径: $FACEFROM"
+  for p in "$@"; do grep -qxF -- "$p" "$TMP/facefrom" || printf '%s\n' "$p" >> "$TMP/facefrom"; done
+  set --
+  while IFS= read -r l; do set -- "$@" "$l"; done < "$TMP/facefrom"
+fi
 
 # 合并批:触面 = 清单文件;命令行触面只许是清单的子集(合并批不带功能触面)
 if [ -n "$LANE" ]; then
@@ -301,8 +325,16 @@ if [ -n "$DIR" ]; then
       MUSTREAD="$MUSTREAD
     $r 回件 $DIR/$hh $hint"
     else
-      MUSTREAD="$MUSTREAD
+      # 1.0.4:④ 的「③改 回件」行 —— 目录里没有 ③改 回件、但申报清单里有 flow-micro 追加的 ` micro` 行 ⟹ 本批跳了 ③(C1 通道),印裁决号不留待填
+      mv_=""
+      case "$r" in ③改*) mv_=$(cat "$DIR"/.declared-*.txt 2>/dev/null | LC_ALL=C grep -E '#[^#]*裁决[- ]*[0-9]+(,[0-9]+)* micro' | LC_ALL=C grep -oE '裁决[- ]*[0-9]+(,[0-9]+)*' | sed 's/^裁决[- ]*//' | tr ',' '\n' | sort -un | tr '\n' ',' | sed 's/,$//') ;; esac
+      if [ -n "$mv_" ]; then
+        MUSTREAD="$MUSTREAD
+    $r 回件:本批跳 ③(微改通道已落笔,裁决-$mv_;patch 见 $DIR/.evidence/*-micro-<裁决号>.patch,复现头在 flow-micro 输出里)"
+      else
+        MUSTREAD="$MUSTREAD
     $r 回件:目录里没有首行为「# $r 回件」的件(待填:编排方补路径,或本轮不依赖它)"
+      fi
     fi
   done
   MUSTREAD="$MUSTREAD
@@ -398,10 +430,22 @@ print_excerpt() {
     # 节尾:本刀的落位段按惯例住在节尾;给剩余预算(封顶减去已印的节头 1.5 KB + outline + REQ 行),整行对齐
     used=$(( 1500 + $(awk '/^###/' "$TMP/sec" | wc -c | tr -d ' ') + $(LC_ALL=C grep -E "$REQ_RE" "$TMP/sec" | LC_ALL=C grep -v '\[done' | wc -c | tr -d ' ') ))
     rem=$(( FLOW_DISPATCH_EXCERPT_BYTES - used )); [ "$rem" -lt 2000 ] && rem=2000
-    tail -c "$rem" "$TMP/sec" | sed 1d > "$TMP/tail"
-    ntail=$(wc -l < "$TMP/tail" | tr -d ' '); nsec=$(wc -l < "$TMP/sec" | tr -d ' ')
-    echo ""; echo "#### 节尾(L$((SECS + nsec - ntail))–L$SECE;L$SECS–L$((SECS + nsec - ntail - 1)) 未印,按需 sed -n 读)"
-    cat "$TMP/tail"
+    # 1.0.4:按字节从节末往前数到 rem 的那一行是切点,再往前退到最近空行之后(段落 / blockquote 整段保留);回退最多 rem 字节,
+    #   窗内没有空行(如 smoke 那种 400 行连排的节)就切在字节点并点名 —— 无界回退会退到节头,整节印出,封顶失效
+    cut_=$(LC_ALL=C awk -v rem="$rem" '{ b[NR] = length($0) + 1; l[NR] = $0 } END {
+        n = NR; acc = 0; s = n + 1
+        for (i = n; i >= 1; i--) { acc += b[i]; if (acc > rem) break; s = i }
+        if (s > n) s = n
+        j = s; back = 0
+        while (j > 1 && l[j-1] != "") { back += b[j-1]; if (back > rem) { j = -1; break } j-- }
+        if (j == 1) j = -1                       # 退到了节头行 = 整节没有空行,不许把整节当节尾印(节头已单独印过)
+        if (j > 0) printf "%d %d\n", j, s - j; else printf "%d -1\n", s }' "$TMP/sec")
+    tl=${cut_%% *}; moved=${cut_##* }
+    note=""
+    if [ "$moved" = -1 ]; then note=";切在段中(往前 $rem 字节内无空行)"
+    elif [ "$moved" -gt 0 ]; then note=";切点已前移 $moved 行到段落边界"; fi
+    echo ""; echo "#### 节尾(L$((SECS + tl - 1))–L$SECE;L$SECS–L$((SECS + tl - 2)) 未印,按需 sed -n 读$note)"
+    sed -n "${tl},\$p" "$TMP/sec"
   fi
 }
 if [ -n "$PLAN" ]; then

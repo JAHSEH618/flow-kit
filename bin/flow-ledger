@@ -209,10 +209,11 @@ elif cmd == 'apply':
     for mk, v, ev in got:
         if v == '还':
             find(mk)   # 不存在当场 FATAL,别静默跳过
-            if write == '--write': do_close(mk, (ev[:100] + '…') if len(ev) > 100 else ev)
-            else: print(f'[dry-run] close {mk}(证据:{ev[:60]}…)')
+            # 1.0.4 / F-39:证据栏不截(§J 硬规矩①:探测器输出不截断)—— 截在 100 字节会把 `ev:<名>` / `file:line` 指针切成半截,写进账本就断链;dry-run 预览同理
+            if write == '--write': do_close(mk, ev)
+            else: print(f'[dry-run] close {mk}(证据:{ev})')
         elif v == '追写':
-            print(f'留给人 {mk} 追写 —— 正文是人写的散文:flow-ledger append {mk} "<一行>"(证据:{ev[:60]}…)')
+            print(f'留给人 {mk} 追写 —— 正文是人写的散文:flow-ledger append {mk} "<一行>"(证据:{ev})')
         else:
             print(f'不动   {mk}')
     if write == '--write': save()

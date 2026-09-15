@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # flow-receipts —— 接收位覆盖枚举(「任务书声称已覆盖接收位」的探测器)。
 # 任务书声称「已覆盖接收位」之前 / 复审核对之时,用本命令机械枚举后 diff 任务书 —— 漏一条当场可见。
-# 两条轴(= spec 复核两轴的同款结构):
-#   轴1 节内:该任务小节里的 接收位/强制条款/开口项 标记行
+# 三条轴(前两条 = spec 复核两轴的同款结构):
+#   轴1 节内:该任务小节里的标记行(标记词 FLOW_RECEIPT_MARK_RE,默认 接收位|强制条款|开口项;1.0.4 从脚本搬进 config)
 #   轴2 节外:整份 plan 里点名该任务的行 —— 别的节落给它的账(曾漏掉的那条正是归在别节的)
+#   轴3 跨件(1.0.4):FLOW_SPEC_DIRS 下**别的** md 里同时点名该任务且带标记词的行 —— 别的 plan 落给它的账。
+#     病根:【裁决 558】把 P4-T3 的接收位写在 p3 §P3-T6(owner 标 P4-T3),派 P4-T3 时只扫 p4 ⟹ 零字,五刀收工没人看见(#108)。
+#     轴2 的定义本就是「别处落给它的账」,只是「别处」止于同一份文件;扩到跨件零新约定。只列带标记词的行,不列所有提及(总表会把每个任务号都列一遍)。
 # 两种 plan 体例(FLOW_RECEIPT_MODE,默认 section):
 #   section:任务 = `## <任务号>` 小节(轴1 = 节内标记行)
 #   table  :任务 = 表行(轴1 = 以 `|` 开头且点名该任务号的行)—— ShipLedger 的 spec/P*.md 是这一种,
@@ -11,10 +14,13 @@
 # 用法: flow-receipts <plan文件(仓相对或绝对)> <任务号>
 #   例: flow-receipts specs/plan/p2-engine.md P2-T7
 # 仓根取自 FLOW_REPO_DIR(脚本自己 cd;plan 的相对路径以仓根为锚,不依赖调用方 cwd)。
-# 末行固定:`RECEIPTS OK: 轴1 <N> · 轴2 <M>`;两轴都空 ⟹ FATAL RC=2(「全覆盖」与「没扫到」不许同型)。
+# 末行固定:`RECEIPTS OK: 轴1 <N> · 轴2 <M> · 轴3 <K>`。
+#   section 体例:节找不到 ⟹ FATAL RC=2;节在而三轴全零 ⟹ `RECEIPTS N/A`(RC=3,契约 7 的第三态,同 TRACE N/A):印节的行数证明扫过(§J0),
+#     调用方按 info 处理 —— 1.0.4 之前它与「节不存在」同判 FATAL,并被原样印进派单给 agent 看。
+#   table 体例:三轴全零 = 任务号根本不在表里 ⟹ 仍 FATAL RC=2(表行体例下「节在」就是「轴1 非零」,分不出第三态)。
 # 摘录按 160 **字节**截(awk 在 LC_ALL=C 下按字节),截点若落在多字节字中间会产出非法 UTF-8(F-9,三批复发:派单件五份全中,
 #   编排方每批 iconv -c 清一遍)。utrunc 截完往回退到字边界:UTF-8 前导字节 ≥ \300、续字节 \200–\277,退不超过 3 字节。
-# 读的配置:FLOW_REPO_DIR FLOW_RECEIPT_MODE
+# 读的配置:FLOW_REPO_DIR FLOW_RECEIPT_MODE FLOW_RECEIPT_MARK_RE FLOW_SPEC_DIRS
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
 flow_load_config
@@ -27,6 +33,10 @@ MODE="${FLOW_RECEIPT_MODE:-section}"
 case "$MODE" in section|table) ;; *) flow_die "FLOW_RECEIPT_MODE 须为 section|table,得到:「$MODE」" ;; esac
 # 字边界截断(awk 函数,前置进每个 awk 程序;整个脚本的 awk 一律 LC_ALL=C,length/substr 按字节)
 UT=$(flow_awk_utrunc)
+MARK="$FLOW_RECEIPT_MARK_RE"
+[ -n "$MARK" ] || flow_die "FLOW_RECEIPT_MARK_RE 为空 —— 零标记词扫出零命中,会把「没扫到」判成「零接收位」"
+# 本 plan 的绝对路径(轴3 排除它自己;plan 参数仓相对或绝对都认)
+FABS="$(cd "$(dirname "$f")" && pwd)/$(basename "$f")"
 
 if [ "$MODE" = table ]; then
   echo "## 轴1 · $t 的任务表行(体例 table;以 | 开头且点名 $t)"
@@ -45,9 +55,9 @@ else
   sec_end=$(awk -v s="$sec_start" 'NR>s && /^## /{print NR-1; exit}' "$f")
   [ -n "$sec_end" ] || sec_end=$(wc -l < "$f" | tr -d ' ')
 
-  echo "## 轴1 · $t 节内标记行(L$sec_start–$sec_end)"
+  echo "## 轴1 · $t 节内标记行(L$sec_start–$sec_end;标记词 $MARK)"
   # ⚠ "$UT" 与程序体之间不许有反斜杠换行:续行后中间的缩进空格把两段拆成两个词,程序体就成了「文件名」,两轴静默零命中
-  a1=$(LC_ALL=C awk -v s="$sec_start" -v e="$sec_end" -v F="$f" "$UT"'NR>=s && NR<=e && /接收位|强制条款|开口项/ {printf "%s:%d: %s\n", F, NR, utrunc($0,160)}' "$f")
+  a1=$(LC_ALL=C awk -v s="$sec_start" -v e="$sec_end" -v F="$f" -v M="$MARK" "$UT"'NR>=s && NR<=e && $0 ~ M {printf "%s:%d: %s\n", F, NR, utrunc($0,160)}' "$f")
   [ -n "$a1" ] && printf '%s\n' "$a1"
   n1=$(printf '%s' "$a1" | grep -c . || true)
   echo ""
@@ -57,10 +67,25 @@ else
   n2=$(printf '%s' "$a2" | grep -c . || true)
 fi
 
+# 轴3 · 跨件:FLOW_SPEC_DIRS 下别的 md 里,同时点名任务号且带标记词的行(排除本 plan;子 shell 里 cd 仓根找,路径按仓相对印)
 echo ""
-if [ "$n1" -eq 0 ] && [ "$n2" -eq 0 ]; then
-  echo "FATAL: 两轴都零命中(体例 $MODE)—— 「全覆盖」与「没扫到」不许同型;核对任务号写法或 FLOW_RECEIPT_MODE" >&2
+echo "## 轴3 · 跨件点名 $t 且带标记词的行($FLOW_SPEC_DIRS 下别的 md;别的 plan 落给它的账)"
+a3=$(for d in $FLOW_SPEC_DIRS; do [ -d "$d" ] || continue
+       find "$d" -type f -name '*.md' | LC_ALL=C sort | while IFS= read -r g; do
+         gabs="$(cd "$(dirname "$g")" && pwd)/$(basename "$g")"; [ "$gabs" = "$FABS" ] && continue
+         LC_ALL=C awk -v t="$t" -v F="$g" -v M="$MARK" "$UT"'index($0,t) && $0 ~ M {printf "%s:%d: %s\n", F, NR, utrunc($0,160)}' "$g"
+       done; done)
+[ -n "$a3" ] && printf '%s\n' "$a3"
+n3=$(printf '%s' "$a3" | grep -c . || true)
+
+echo ""
+if [ "$n1" -eq 0 ] && [ "$n2" -eq 0 ] && [ "$n3" -eq 0 ]; then
+  if [ "$MODE" = section ]; then
+    echo "RECEIPTS N/A: 节 ## $t 在(L$sec_start–$sec_end,$((sec_end - sec_start + 1)) 行)零条标记($MARK)· 节外零点名 · 跨件零点名 —— 本任务没有接收位标记,不是错;标记词写法不同就覆盖 FLOW_RECEIPT_MARK_RE"
+    exit 3
+  fi
+  echo "FATAL: 三轴都零命中(体例 $MODE)—— 表里没有这个任务号;核对任务号写法或 FLOW_RECEIPT_MODE" >&2
   exit 2
 fi
-echo "RECEIPTS OK: 轴1 $n1 · 轴2 $n2(体例 $MODE)"
+echo "RECEIPTS OK: 轴1 $n1 · 轴2 $n2 · 轴3 $n3(体例 $MODE)"
 exit 0

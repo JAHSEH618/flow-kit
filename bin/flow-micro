@@ -27,6 +27,12 @@
 #     跳 ③ 的判据归编排方:②A 与 ②B 丙栏每一条都带 patch 且本命令 MICRO OK ⟹ 直接派 ④(交付态起点 = 重打后的冻结件)。
 #   · 多份 patch **先拼成一个流**再 --check / --numstat / apply:`git apply --check a b` 是逐文件对**原树**各查一遍,两份 patch 改同一行也 RC=0,
 #     而 `git apply a b` 会落下第一份、在第二份上失败 —— 半截落笔(实测)。一个流里 git 才按前一份的结果核下一份,且全落或全不落。
+# 1.0.4 两处改:
+#   · 行内删字按协议量(dispatch-block「写文档 / 注释」节:自证用子序列判据 new ⊂ old ⟹ 新增字符 0):kind=注释 的文件,把 patch 落进临时副本,
+#     整文件 new 是 old 的字符子序列 ⟹ 该文件新增计 0;不成立照 numstat。此前 numstat 把「一行里删几个字」记成 +1 −1,只删不写的 6 行读成「非测试新增 6」
+#     —— 量法与协议不同源。范围只在 注释 kind(生产恒 RED、测试不计),「删字伪装改语义」的口子只在文档 / 注释行。副本用 POSIX patch 不用 git apply(仓外路径)。
+#   · 申报清单里已有带裁决号的路径,再落一次微改 ⟹ 号**累加**成 `# 裁决-4703,4800 micro`,不再「已有,不追加」(第二个号丢了,派单里数出来的行数对不上)。
+#     三处消费者(flow-manifest 测试锁 / flow-close 越面与交付态 / lib 〇表)都只取首个号,向后兼容。
 # 用法:
 #   flow-micro <patch(绝对)>... --face <写权限面清单(绝对)> [--freeze <冻结件(绝对)>] [--apply --verdict <裁决号> [--declared <申报清单(绝对)>]]
 #     patch 由审轴落在 <流程目录>/.evidence/<轮名>-micro-<裁决号>.patch;写权限面清单 = flow-dispatch --dir 落的 .face-<轮名>.txt
@@ -141,6 +147,20 @@ in_face() {
   return 1
 }
 nc_of() { LC_ALL=C awk -F'\t' -v p="$1" '$1==p{v=$2} END{print v+0}' "$TMP/nc"; }
+# 1.0.4 行内删字:<路径> 在树里存在、patch 落进副本后 new ⊂ old(字节子序列)⟹ RC 0;其余(新文件 / patch 落不下 / 没有 patch 工具)RC 1
+#   单文件的 diff 段从合并流里按 `diff --git a/<p> b/<p>` 抠出来;副本树在 flow_tmpdir 下,POSIX patch -p1 落(git apply 在仓外要 --unsafe-paths,语义不稳)
+subseq_del() {
+  [ -f "$1" ] || return 1
+  command -v patch >/dev/null 2>&1 || { echo "  (无 patch 工具,行内删字判据不可用,按 numstat 计)"; return 1; }
+  mkdir -p "$TMP/tree/$(dirname "$1")" && cp "$1" "$TMP/tree/$1" || return 1
+  LC_ALL=C awk -v p="$1" '/^diff --git /{ on = ($0 == "diff --git a/" p " b/" p) } on' "$ALL" > "$TMP/one.patch"
+  [ -s "$TMP/one.patch" ] || return 1
+  ( cd "$TMP/tree" && patch -p1 -s -f -i "$TMP/one.patch" >/dev/null 2>&1 ) || return 1
+  LC_ALL=C awk 'FNR == 1 && NR > 1 { o = buf; buf = "" } { buf = buf $0 "\n" }
+    END { n = buf; j = 1; ln = length(n); lo = length(o)
+      for (i = 1; i <= lo && j <= ln; i++) if (substr(o, i, 1) == substr(n, j, 1)) j++
+      exit (j > ln) ? 0 : 1 }' "$1" "$TMP/tree/$1"
+}
 
 hdr "逐文件判(性质 · 面内;上限 $FLOW_MICRO_FIX_LINES 行**非测试**新增,面 $(basename "$FACE"))"
 addsum=0; addtest=0; nprod=0; nout=0; nfile=0
@@ -159,6 +179,10 @@ while IFS="$TAB" read -r a d p; do
   fi
   if in_face "$p"; then face=面内; else face=面外; nout=$((nout+1)); fi
   [ "$kind" = 生产 ] && nprod=$((nprod+1))
+  # 1.0.4:注释 kind 且有新增行 ⟹ 先按协议的子序列判据量一次;成立则该文件新增计 0(numstat 的 +N 是「改行」不是「加行」)
+  if [ "$kind" = 注释 ] && [ "$a" != "-" ] && [ "$a" -gt 0 ] && subseq_del "$p"; then
+    why="${why:+$why;}行内删字:new ⊂ old,新增计 0(numstat +$a 是改行)"; a=0
+  fi
   if [ "$a" != "-" ]; then if [ "$kind" = 测试 ]; then addtest=$((addtest + a)); else addsum=$((addsum + a)); fi; fi
   if [ "$kind" = 生产 ] || [ "$face" = 面外 ]; then
     printf 'RED  %s  +%s -%s  %s · %s%s\n' "$p" "$a" "$d" "$kind" "$face" "${why:+($why)}"
@@ -208,7 +232,15 @@ if [ "$APPLY" = 1 ]; then
     [ -n "$p" ] || continue
     if grep -v '^[[:space:]]*#' "$DECLARED" | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' | grep -qxF -- "$p" \
        && grep -v '^[[:space:]]*#' "$DECLARED" | grep -F -- "$p" | LC_ALL=C grep -qE '#[^#]*裁决[- ]*[0-9]+'; then
-      echo "  已有(带 $(grep -v '^[[:space:]]*#' "$DECLARED" | grep -F -- "$p" | LC_ALL=C grep -oE '裁决[- ]*[0-9]+' | head -1),不追加 裁决-$VERDICT): $p"
+      # 1.0.4:号累加到已有那行的号表(`裁决-4703` → `裁决-4703,4800`);已含本号就不重复。只动路径恰等于 p 的那一行
+      have=$(grep -v '^[[:space:]]*#' "$DECLARED" | grep -F -- "$p" | LC_ALL=C grep -oE '裁决[- ]*[0-9]+(,[0-9]+)*' | head -1 | sed 's/^裁决[- ]*//')
+      if printf '%s' ",$have," | grep -qF -- ",$VERDICT,"; then echo "  已有(裁决-$have 已含 $VERDICT,不重复): $p"
+      else
+        LC_ALL=C awk -v p="$p" -v v="$VERDICT" '{ line = $0; path = line; sub(/[ \t][ \t]*#.*$/, "", path); sub(/[ \t]*$/, "", path)
+            if (path == p && match(line, /裁决[- ]*[0-9]+(,[0-9]+)*/)) line = substr(line, 1, RSTART + RLENGTH - 1) "," v substr(line, RSTART + RLENGTH)
+            print line }' "$DECLARED" > "$DECLARED.tmp" && mv "$DECLARED.tmp" "$DECLARED"
+        echo "  已有(裁决-$have),追加 → 裁决-$have,$VERDICT: $p"
+      fi
     else printf '%s  # 裁决-%s micro\n' "$p" "$VERDICT" >> "$DECLARED"; echo "  + $p  # 裁决-$VERDICT micro"; fi
   done
   hdr "复现命令清单(每份 patch 头部 diff --git 之前以 # 起的行;编排方逐条复跑对期望读数)"

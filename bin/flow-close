@@ -24,9 +24,11 @@
 # 病根:轮间那套一直是手拼 5–7 条命令、每批 4 次(实测 ≈28 min/批,占编排固定开销的三分之一),
 #   而手拼时 RC 隔着管道取、判据进 && 链 —— 正是 §J 那两条硬规矩最常破的地方。
 # 用法: flow-close <流程目录(绝对)> <基线文件(绝对)> <申报清单(绝对)> [after-hashes(绝对)]
-#       flow-close --between <流程目录(绝对)> <基线(绝对)> <申报清单(绝对)> [--task <任务号>] [--plan <plan绝对>] [--face <.face-<轮名>.txt 绝对>] [--this <本轮路径清单 绝对>]
+#       flow-close --between <流程目录(绝对)> <基线(绝对)> <申报清单(绝对)> [--task <任务号>] [--plan <plan绝对>] [--face <.face-<轮名>.txt 绝对>] [--this <本轮路径清单 绝对>] [--snapshot]
 #         --task 给了才跑路由复跑(按申报清单里的路径),--task + --plan 都给了才跑 flow-trace;--face 给了才判越面(flow-round close 按约定名传);
 #         --this 给了越面只判它列的路径(本轮〇表路径),不判申报并集 —— ④A 拿 ③改 的清单过自己的面会把 ③ 的越面记到 ④ 头上。
+#         --snapshot(1.0.4,flow-round close 按派单「树权限」传):快照轮 —— verify · 非空转 · 假话门 · 越面 四步印 info 不跑(它们判的是活树实改集,
+#           而快照轮结构上写不到活树;并行的活树轮正在变异中间态时这四步只会红在别人身上);树读数 · 路由复跑 · REQ 对账 · 预算 照跑。
 #       flow-close --wrap <流程目录(绝对)> <基线(绝对)> <申报清单(绝对)> [after-hashes(绝对)] [--task <号>] [--plan <plan绝对>] [--verdicts <三态表绝对>]
 #       flow-close --ship <commit> --subject <PR 标题> [--verdicts <三态表绝对>] [--dir <流程目录绝对>]
 # 逐项打印 RC;任一红 ⟹ 末行 `ROUND-CLOSE RED` / `BETWEEN RED` / `WRAP RED` 且 RC=1;全绿 ⟹ `… OK`。--ship 末行 `SHIP OK: PR #N …` / `SHIP RED`。
@@ -105,7 +107,7 @@ if [ "$MODE" = ship ]; then
 fi
 
 if [ "$MODE" = between ]; then
-  [ $# -ge 3 ] || flow_die "用法: flow-close --between <流程目录> <基线> <申报清单> [--task <任务号>] [--plan <plan绝对>] [--face <面>] [--this <本轮路径清单>]"
+  [ $# -ge 3 ] || flow_die "用法: flow-close --between <流程目录> <基线> <申报清单> [--task <任务号>] [--plan <plan绝对>] [--face <面>] [--this <本轮路径清单>] [--snapshot]"
 else
   [ $# -ge 3 ] || flow_die "用法: flow-close [--wrap] <流程目录(绝对)> <基线文件(绝对)> <申报清单(绝对)> [after-hashes(绝对)] [--task] [--plan] [--verdicts]"
 fi
@@ -114,10 +116,11 @@ AFTER=""
 case "${1:-}" in ""|--*) ;; *)
   [ "$MODE" != between ] || flow_die "1.0.0 起 --between 不收 after-hashes(得到 $1):交付态核对挪到 flow-round open,本轮 .after 由 close 全绿后打"
   AFTER="$1"; shift ;; esac
-TASK=""; PLAN=""; VERD=""; FACE=""; THIS=""
+TASK=""; PLAN=""; VERD=""; FACE=""; THIS=""; SNAP=0
 while [ $# -gt 0 ]; do
   case "$1" in --task|--plan|--verdicts|--face|--this) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
   case "$1" in
+    --snapshot) [ "$MODE" = between ] || flow_die "--snapshot 只在 --between 下认"; SNAP=1; shift ;;
     --task) TASK="$2"; shift 2 ;;
     --plan) PLAN="$2"; shift 2 ;;
     --verdicts) [ "$MODE" = wrap ] || flow_die "--verdicts 只在 --wrap 下认"; VERD="$2"; shift 2 ;;
@@ -380,7 +383,10 @@ step_state() {
 
 if [ "$MODE" = between ]; then
   # 1.0.0:交付态哈希那步不在这里 —— 上一轮的在 flow-round open 核,本轮的由 close 全绿后打
-  step_manifest; step_hollow; step_factlint; step_face; step_tree; step_route; step_trace; step_budget
+  if [ "$SNAP" = 1 ]; then
+    echo "== (快照轮:verify · 非空转 · 假话门 · 越面 不跑 —— 本轮写不到活树,活树由下一轮 flow-round open 的交付态哈希核)=="
+  else step_manifest; step_hollow; step_factlint; step_face; fi
+  step_tree; step_route; step_trace; step_budget
   if [ "$red" = 0 ]; then echo "BETWEEN OK"; exit 0; else echo "BETWEEN RED"; exit 1; fi
 fi
 if [ "$MODE" = wrap ]; then

@@ -13,6 +13,8 @@
 #   table  :任务 = **首格恰等于任务号**的表行(可多行)。不用 flow-receipts 轴1 的全行 index():
 #           ShipLedger 的 `spec/P3.md` 里 P3.D 那行正文点名 P3.B,全行匹配会把别人的行算进本任务的节。
 # 测试文件 = git 看得见的 FLOW_TEST_GLOBS 命中件,含未跟踪(测试先行:新测试在提交前就该算数)。
+# 命中(1.0.4)只认**标题行**:含 `[REQ-ID]` 且本行匹配 FLOW_TEST_TITLE_RE(it( / test( / describe(,含 .each 等链式),或上一行匹配且以 `(` 结尾
+#   (prettier 把长标题折到下一行);console.log / 注释里的 `[REQ-ID]` 单列「非标题 M 处不计」—— ②A 实测它被计成覆盖。标题词进 config,别的栈覆盖。
 # 判定:
 #   · open / done 的 REQ 零测试 ⟹ RED(RC=1)
 #   · deferred 的 REQ 不计(它已转成欠账,由账本管)
@@ -25,7 +27,7 @@
 #     protocol §5 不许这么过关,所以要么工具认这个体例,要么退役这条判据。
 #   · 零个测试文件 ⟹ FATAL(RC=2)
 # 末行固定:`TRACE OK: …` / `TRACE RED: …` / `TRACE N/A: …`。判据纪律:grep 的 RC 与命令同层,不进 && 链;计数用 LC_ALL=C。
-# 读的配置:FLOW_REPO_DIR FLOW_SPEC_DIRS FLOW_RECEIPT_MODE FLOW_TEST_GLOBS
+# 读的配置:FLOW_REPO_DIR FLOW_SPEC_DIRS FLOW_RECEIPT_MODE FLOW_TEST_GLOBS FLOW_TEST_TITLE_RE
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
 flow_load_config
@@ -92,6 +94,7 @@ rc=$?
 [ "$rc" -eq 0 ] || flow_die "枚举测试文件失败(git ls-files RC=$rc),拒绝给结论"
 [ -s "$tmp/tests" ] || flow_die "仓里零个测试文件 —— 「全覆盖」与「没扫到」不许同型"
 ntests=$(LC_ALL=C grep -c . "$tmp/tests")
+[ -n "$FLOW_TEST_TITLE_RE" ] || flow_die "FLOW_TEST_TITLE_RE 为空 —— 零标题模式扫出零命中,会把「没扫到」判成「零覆盖」"
 
 red=0; covered=0; deferred=0; missing=0
 : > "$tmp/flip"
@@ -103,15 +106,21 @@ while IFS="$(printf '\t')" read -r id st; do
       echo "info $id [$st] 不计(已转欠账,由账本管)"
       continue ;;
   esac
-  tr '\n' '\0' < "$tmp/tests" | LC_ALL=C xargs -0 grep -nF -- "[$id]" > "$tmp/hits" 2>/dev/null   # ⚠ LC_ALL 放 xargs 前:放 grep 前会被 xargs 当成命令名,静默空集
-  n=$(LC_ALL=C grep -c . "$tmp/hits")
+  # 每个命中行印 `T<TAB>file:line`(标题行,或上一行是以 ( 结尾的标题行)或 `O<TAB>file:line`(其它:console.log / 注释);⚠ LC_ALL 放 xargs 前:放 awk 前会被 xargs 当成命令名,静默空集
+  tr '\n' '\0' < "$tmp/tests" | TITLE_RE="$FLOW_TEST_TITLE_RE" LC_ALL=C xargs -0 awk -v id="[$id]" '
+      BEGIN { re = ENVIRON["TITLE_RE"] }   # 带反斜杠的模式走 ENVIRON,不走 -v(-v 会再吃一层转义)
+      FNR == 1 { prev = "" }
+      index($0, id) { t = ($0 ~ re) || (prev ~ re && prev ~ /\([[:space:]]*$/); printf "%s\t%s:%d\n", (t ? "T" : "O"), FILENAME, FNR }
+      { prev = $0 }' > "$tmp/hits" 2>/dev/null
+  n=$(LC_ALL=C grep -c '^T' "$tmp/hits"); m=$(LC_ALL=C grep -c '^O' "$tmp/hits")
+  other=""; [ "$m" -gt 0 ] && other=" · 非标题 $m 处不计($(LC_ALL=C grep '^O' "$tmp/hits" | cut -f2 | head -2 | tr '\n' ' '))"
   if [ "$n" -gt 0 ]; then
     covered=$((covered+1))
     [ "$st" = open ] && printf '%s\n' "$id" >> "$tmp/flip"
-    echo "ok   $id [$st] $n 处:$(cut -d: -f1,2 "$tmp/hits" | head -3 | tr '\n' ' ')"
+    echo "ok   $id [$st] $n 处标题命中:$(LC_ALL=C grep '^T' "$tmp/hits" | cut -f2 | head -3 | tr '\n' ' ')$other"
   else
     missing=$((missing+1)); red=1
-    echo "RED  $id [$st] 0 处 —— 测试标题里没有 [$id](测试先行:先写红过的测试,再实现)"
+    echo "RED  $id [$st] 0 处标题命中 —— 测试标题(it / test / describe)里没有 [$id](测试先行:先写红过的测试,再实现)$other"
   fi
 done < "$tmp/defs"
 

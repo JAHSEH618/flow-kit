@@ -5,7 +5,7 @@
 ## 地图
 
 - `bin/` —— 全部命令,前缀 `flow-`,plugin 启用后进 Bash PATH,按名调用不写路径。每个脚本头注 = 它的说明书。编排方一轮:`flow-dispatch --dir` → `flow-round open` → (agent) → `flow-round close`;② / ④ 后 `flow-micro`;收口 `flow-close --wrap|--ship`;退役 `flow-rulebook`。agent 面向的只有 `flow-ev`(判据命令的唯一通道,1.0.0)、独占轮经它跑的 `flow-gates --reset`、快照轮的 `shasum -c`、①写 的 `flow-step done`。版本记事在 CHANGELOG.md。
-- `lib/flow-lib.sh` —— 唯一共享库:找配置(从 cwd 向上找 `.claude/flow.config.sh`,找不到 FATAL)、可移植 sha256、实改集 git 轴枚举(`flow_changed_paths`)、冻结(`flow_freeze_to`)、回件认领 / 〇表解析 / 派生申报(`flow_find_handoff` / `flow_handoff_paths` / `flow_derive_declared`,1.0.0)、欠账标记与 REQ-ID 模式(`flow_mark_re` / `flow_req_re`)、机器头字段提取、kit 自身根目录 `FLOW_KIT_DIR`。
+- `lib/flow-lib.sh` —— 唯一共享库:找配置(从 cwd 向上找 `.claude/flow.config.sh`,找不到 FATAL)、可移植 sha256、实改集 git 轴枚举(`flow_changed_paths`)、冻结(`flow_freeze_to`)、回件认领 / 〇表解析 / 派生申报(`flow_find_handoff` / `flow_handoff_paths` / `flow_derive_declared`,1.0.0;`flow_handoff_skipped` 列不进申报却像路径的行,1.0.4)、流程目录残件守卫(`flow_check_flow_dir`,1.0.4)、欠账标记与 REQ-ID 模式(`flow_mark_re` / `flow_req_re`)、机器头字段提取、kit 自身根目录 `FLOW_KIT_DIR`。
 - `skills/protocol/` —— 编排协议 SKILL.md(只留规矩 + `→ why §x`);`references/` 里是照抄用的模板(派单块 + 三行 prompt / 写改回件 / 复审回件 / 收口块 / 三态表 / 轮数账)与 `why.md`(每条规矩的实测与病根,编排方按需读,agent 不读)。
 - `skills/init/` —— 把 kit 装进一个工作区:写 config、装 git shim、建流程目录、建账本骨架、按 FLOW_KEEP_* 收窄会话(`flow-settings` 写 `.claude/settings.local.json`:关掉本项目不用的插件与用户级 MCP;实测开局 44k token 里 CLAUDE.md 只占 10k,其余是插件 skill 清单与工具表,sub-agent 每轮重付)。
 - `hooks/hooks.json` —— SessionStart 新鲜度检查(`flow-freshness`,全绿静默)。
@@ -23,7 +23,7 @@
 7. 出错形态:参数错 RC=2 且 FATAL;判据红 RC=1 且行首 RED;绿 RC=0 且行首 OK / lint OK / PASS。末行固定可 grep。RC=3 是**「这条判据在本仓不适用 / 这个任务过载」**的第三态,不是判据红,调用方按 info 处理:`flow-dispatch` 的 owner 欠账或 open REQ 超上限(拆任务或 `--cap-ok`)· `flow-trace` 整份 plan 零 REQ-ID(末行 `TRACE N/A`,0.7.1)。凡加 RC=3 的地方,「不适用」与「没扫到」必须能分开判(§J0),判据取全局不取局部。
 8. kit 自己的记账件(队列 / fact-lint 基线 / 流程目录 / 门缓存)落在仓内时不算任何一轮的实改集:实改集 git 轴一律经 `flow_changed_paths`(内含 `flow_filter_kit_owned`),且调用方同层捕获其 RC,失败不许当空集;门命令里要它就 `flow-changed`,不许自拼 `git status`。
 9. **每条质量判据只在一处跑,由不写代码的一方跑**(0.9.0):轮收工的判据全在 `flow-round close`(派生申报 → `flow-close --between`:verify(含树身份 + 测试锁)· 非空转 · 假话门 · 越面 · 路由 · REQ 对账 · 预算 → 全绿冻结 → 回件六判),上一轮交付态在 `flow-round open` 核,收口在 `--wrap`。派单里让 agent 自跑的那些命令是给它自己的提示,不是判据;判据的例外只走一条通道 —— 申报行尾 `# 裁决-N`。**每加一条机械判据就退一段派单散文**:`tests/smoke.sh` 里 `GEN_CAP` 是派单生成段字节的棘轮(量法排除 `flow:tpl` 段),只许往下改。
-10. **agent 面向的接口定型于 1.0.0,新判据只加在 close 一侧**:agent 收工只写回件(〇表第二列 = 路径,例外列 = 裁决号);判据命令一律经 `flow-ev`(全量 + 账 + 末行);独占轮另跑一次门整跑、快照轮另跑 `shasum -c`;①写 另有步骤账。申报由 `flow-round close` 从〇表派生、冻结在全绿后由 kit 打、上一轮交付态在 `flow-round open` 核。要加一条质量判据,加在 `flow-round close`(读回件 / log.tsv / 树),**不许**往派单散文里加一句、不许给 agent 加一条命令 —— 三批实测 agent 侧流程开销占请求三成,每一条都是这样长出来的。回件模板改了形状(〇表列、甲栏体例)要同步改 `flow_handoff_paths` 与 close 的判词计数,两侧同源(契约 3 同理)。
+10. **agent 面向的接口定型于 1.0.0,新判据只加在 close 一侧**:agent 收工只写回件(〇表第二列 = 路径,例外列 = 裁决号);判据命令一律经 `flow-ev`(全量 + 账 + 末行);独占轮另跑一次门整跑、快照轮另跑 `shasum -c`;①写 另有步骤账。申报由 `flow-round close` 从〇表派生、冻结在全绿后由 kit 打、上一轮交付态在 `flow-round open` 核。要加一条质量判据,加在 `flow-round close`(读回件 / log.tsv / 树),**不许**往派单散文里加一句、不许给 agent 加一条命令 —— 三批实测 agent 侧流程开销占请求三成,每一条都是这样长出来的。回件模板改了形状(〇表列、甲栏体例)要同步改 `flow_handoff_paths` / `flow_handoff_skipped` 与 close 的判词名集比,两侧同源(契约 3 同理)。快照轮的 close 不核活树也不冻结(`--between --snapshot`,按派单「树权限」行认,1.0.4):活树由下一轮 open 的交付态哈希核。
 
 ## 命令对照(StockSteer-Mono `.claude/scripts/` 旧名 → 新名)
 

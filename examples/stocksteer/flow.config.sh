@@ -92,10 +92,14 @@ FLOW_FOLD_MAX=6                        # 折轮条件:不阻塞条 ≤ 此数且
 FLOW_REQ_CAP=8                         # 任务节 open REQ 条数上限:①写是最长的会话,携带成本随轮数平方长,超了拆任务(或 --cap-ok)
 FLOW_TURN_CAP=120                      # 单会话请求数上限,flow-usage 只 WARN(不是门);按会话判,续轮单算(按轴合计时有续轮必红)。
 #                                        REQ 条数不是长度的代理量:p4c ①写只有 6 条 REQ,却长出 189 个请求、携带 51.8M(全批的 48%)
-FLOW_DISPATCH_EXCERPT_BYTES=12000      # 派单里 plan 任务节选的字节封顶。实测 §P4-T3 一节 42 KB 横跨三刀,八个 agent 各读一遍 ≈ 该批携带 10%;
-#                                        超过只印 outline + REQ 行 + 节尾(本刀的落位段住在节尾),其余「文件 + 行号」指针;②③④ 一律只给 outline + REQ 行
+FLOW_DISPATCH_EXCERPT_BYTES=16000      # 派单里 plan 任务节选的字节封顶(1.0.4 默认 12000 → 16000;只有 ①写 读正文)。实测 §P4-T3 一节 42 KB 横跨三刀;
+#                                        超过只印 outline + REQ 行 + 节尾(本刀的落位段住在节尾;切点对齐段落边界,blockquote 不切半截),其余「文件 + 行号」指针;
+#                                        ②③④ 一律只给 outline + REQ 行。单次覆盖:flow-dispatch --excerpt-bytes N(环境变量盖不过 config)
 FLOW_TEST_GLOBS='*.test.ts *.test.tsx *.spec.ts *.spec.tsx'   # 测试文件模式;flow-trace 当 pathspec、flow-micro 判「性质 = 测试」、flow-manifest 测试锁(0.9.0)
 # FLOW_TEST_SKIP_RE='\.(only|skip|todo)\(|(^|[^A-Za-z0-9_])x(it|test|describe)\('   # 测试锁:本轮动过的测试件含它 ⟹ verify RED(默认够 vitest / jest;别的栈覆盖)
+# FLOW_TEST_TITLE_RE='(^|[^A-Za-z0-9_.])(it|test|describe)(\.[A-Za-z]+)*[[:space:]]*\('   # 测试标题行(1.0.4):flow-trace 只把标题行(或紧跟以 ( 结尾的标题行的下一行)里的
+#                                        [REQ-ID] 算命中,console.log / 注释里的不算;默认够 vitest / jest,go 写 '^func Test' 之类
+# FLOW_RECEIPT_MARK_RE='接收位|强制条款|开口项'   # 接收位标记词(1.0.4 从 flow-receipts 脚本搬进 config):轴1 节内与轴3 跨件按它认行
 # FLOW_BARE_PATH_RE='…'   # flow-ledger add --title 的裸文件名守卫(ERE,反引号外);仓侧有纯文本指针棘轮的按同式覆盖
 FLOW_MICRO_FIX_LINES=16                # 微改通道:行数由 flow-micro 从审轴附的 patch numstat 量(不由审方估);1.0.0 起**只数非测试文件的新增行**(测试行单列印出不计,
                                        # 删除行不计);② 后与 ④ 后都跑;非生产条合计 ≤ 此行数、且全在写轮的写权限面内

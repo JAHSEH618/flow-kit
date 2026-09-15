@@ -63,8 +63,8 @@ description: 四轮制(写 / 双轴审 / 改 / 复审)多 agent 工作流的编�
 - **边界给「类的枚举命令」,不给「实例清单」**;实例清单只当已知阳性用。
 - **派单前顺序固定**:清账 → spec 落位 → `flow-dispatch --dir` → Edit 待填 → `flow-round open` → 派单;② 收工后:`flow-micro` → 派 ③ 或直接 ④。baseline 之后编排方对仓内文件零编辑。→ why §3c
 - **CARRY 进派单前对树核一次**,或显式标「未核线索,先核再做」。
-- **收工件全是 dotfile**,「流程目录里没有冻结件」先 `ls -a`。`.after-<轮>-hashes.txt` 只覆盖该轮申报的文件,两份做差集不是实改集。
-- **接收位**:任务书声称「已覆盖」之前跑 `flow-receipts <plan> <任务号>`。
+- **收工件全是 dotfile**,「流程目录里没有冻结件」先 `ls -a`。`.after-<轮>-hashes.txt` 只覆盖该轮申报的文件,两份做差集不是实改集。快照轮 close 不冻、不核活树(状态档印 `⊘快照不冻`),②A ‖ ②B 谁先收都行。
+- **接收位**:任务书声称「已覆盖」之前跑 `flow-receipts <plan> <任务号>`(三轴:节内 · 节外 · 跨件 —— 别的 plan 落给它的账也列;`RECEIPTS N/A` 是本任务零标记,不是错)。
 - **派单落文件,编排方零 heredoc**;生成段自带 plan 任务节选(①写正文按 `FLOW_DISPATCH_EXCERPT_BYTES` 封顶,②③④ 只 outline + REQ 行)、回件模板全文、门名、flow-ev 写法、必读骨架。→ why §3d
 - **并行支**四条隔离缺一不可:gitignore 件手工拷进去;引证一律读主树;第二支零 DB 面;文件层不相交,账本归主树支。支合并单独成批(`--lane-merge`),用 `flow-merge-lane plan|apply`,不用 `git merge-tree`。
 
@@ -110,7 +110,7 @@ description: 四轮制(写 / 双轴审 / 改 / 复审)多 agent 工作流的编�
 
 | 命令 | 用法 | 何时 |
 |---|---|---|
-| `flow-dispatch` | `flow-dispatch <任务号> --tree <快照\|活树-独占\|禁入> --db <独占\|只读\|禁用> --seq <N> --round <轮名> --dir <流程目录> [--core <面>] [--plan <plan>] [--cap-ok <理由>] <触面…> > <轮号>-dispatch.md` · `--resume <原派单> --dir <流程目录>` | 派单 / 续轮 |
+| `flow-dispatch` | `flow-dispatch <任务号> --tree <快照\|活树-独占\|禁入> --db <独占\|只读\|禁用> --seq <N> --round <轮名> --dir <流程目录> [--core <面>] [--plan <plan>] [--cap-ok <理由>] [--face-from <上一轮 .face>] [--excerpt-bytes <N>] <触面…> > <轮号>-dispatch.md` · `--resume <原派单> --dir <流程目录>` | 派单 / 续轮(②③④ 触面用 `--face-from .face-①写.txt`,扩面多给几条) |
 | `flow-round` | `open <流程目录> <轮名>` · `close <流程目录> <轮名> [--task] [--plan]` · `state <流程目录>` | 每轮开工 / 收工 / 刷状态档 |
 | `flow-ev` | `flow-ev <流程目录> <轮名> <名> [--show N\|all] -- <命令…>` | agent 跑任何判据命令 |
 | `flow-micro` | `flow-micro <patch…> --face <.face-<写轮名>.txt> [--freeze <最新 .after> --apply --verdict <N>]` | ② 与 ④ 收工后 |
