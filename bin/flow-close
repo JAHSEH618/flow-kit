@@ -1,7 +1,8 @@
 #!/bin/sh
 # flow-close —— 编排方的核对与收口一键(四种模式)。
 #   默认(轮收工):§B5 冻结核对 + 非空转 + 交付态哈希 + 账本 lint + 文档预算 + 规则书棘轮。
-#   --between(轮间交接口):冻结核对 + 非空转 + 假话门(0.9.0)+ 越面(0.9.0,--face;1.0.0 加 --this 只判本轮〇表路径)+ 树读数 + 路由复跑 + REQ 对账 + 文档预算。
+#   --between(轮间交接口):冻结核对 + 非空转 + 假话门(0.9.0)+ 越面(0.9.0,--face;1.0.0 加 --this 只判本轮〇表路径)+(--writer,1.1.0 / B7:只写 / 改轮)路由复跑 + REQ 对账。
+#       1.1.0 / B7 退出 between 的:树读数(状态档首行已有)· 文档预算(热路径线由 flow-round close 判本轮回件,全文线留 wrap)。
 #       (flow-round close 按约定名调它。)1.0.0 起**不再收 after-hashes**:交付态哈希核对挪到 flow-round open(核上一轮的 .after,抓轮间动树),
 #       本轮的 .after 由 close 在 BETWEEN OK 之后打 —— 收工那一刻的交付态哈希核的是 agent 刚 freeze 的树,恒绿,从来不是判据。
 #       REQ 对账拿到 RC=3(TRACE N/A,本仓 plan 不写 REQ 行)印 info 不判红 —— 「不适用」与「不达标」不许同型(0.7.1)。
@@ -24,8 +25,8 @@
 # 病根:轮间那套一直是手拼 5–7 条命令、每批 4 次(实测 ≈28 min/批,占编排固定开销的三分之一),
 #   而手拼时 RC 隔着管道取、判据进 && 链 —— 正是 §J 那两条硬规矩最常破的地方。
 # 用法: flow-close <流程目录(绝对)> <基线文件(绝对)> <申报清单(绝对)> [after-hashes(绝对)]
-#       flow-close --between <流程目录(绝对)> <基线(绝对)> <申报清单(绝对)> [--task <任务号>] [--plan <plan绝对>] [--face <.face-<轮名>.txt 绝对>] [--this <本轮路径清单 绝对>] [--snapshot]
-#         --task 给了才跑路由复跑(按申报清单里的路径),--task + --plan 都给了才跑 flow-trace;--face 给了才判越面(flow-round close 按约定名传);
+#       flow-close --between <流程目录(绝对)> <基线(绝对)> <申报清单(绝对)> [--task <任务号>] [--plan <plan绝对>] [--face <.face-<轮名>.txt 绝对>] [--this <本轮路径清单 绝对>] [--snapshot] [--writer]
+#         --writer(1.1.0 / B7,flow-round close 对 ①写 / ③改 传)才跑 路由复跑(按申报清单里的路径,需 --task)与 flow-trace(需 --task + --plan);审轮零改动不重付;--face 给了才判越面(flow-round close 按约定名传);
 #         --this 给了越面只判它列的路径(本轮〇表路径),不判申报并集 —— ④A 拿 ③改 的清单过自己的面会把 ③ 的越面记到 ④ 头上。
 #         --snapshot(1.0.4,flow-round close 按派单「树权限」传):快照轮 —— verify · 非空转 · 假话门 · 越面 四步印 info 不跑(它们判的是活树实改集,
 #           而快照轮结构上写不到活树;并行的活树轮正在变异中间态时这四步只会红在别人身上);树读数 · 路由复跑 · REQ 对账 · 预算 照跑。
@@ -107,7 +108,7 @@ if [ "$MODE" = ship ]; then
 fi
 
 if [ "$MODE" = between ]; then
-  [ $# -ge 3 ] || flow_die "用法: flow-close --between <流程目录> <基线> <申报清单> [--task <任务号>] [--plan <plan绝对>] [--face <面>] [--this <本轮路径清单>] [--snapshot]"
+  [ $# -ge 3 ] || flow_die "用法: flow-close --between <流程目录> <基线> <申报清单> [--task <任务号>] [--plan <plan绝对>] [--face <面>] [--this <本轮路径清单>] [--snapshot] [--writer]"
 else
   [ $# -ge 3 ] || flow_die "用法: flow-close [--wrap] <流程目录(绝对)> <基线文件(绝对)> <申报清单(绝对)> [after-hashes(绝对)] [--task] [--plan] [--verdicts]"
 fi
@@ -116,11 +117,12 @@ AFTER=""
 case "${1:-}" in ""|--*) ;; *)
   [ "$MODE" != between ] || flow_die "1.0.0 起 --between 不收 after-hashes(得到 $1):交付态核对挪到 flow-round open,本轮 .after 由 close 全绿后打"
   AFTER="$1"; shift ;; esac
-TASK=""; PLAN=""; VERD=""; FACE=""; THIS=""; SNAP=0
+TASK=""; PLAN=""; VERD=""; FACE=""; THIS=""; SNAP=0; WRITER=0
 while [ $# -gt 0 ]; do
   case "$1" in --task|--plan|--verdicts|--face|--this) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
   case "$1" in
     --snapshot) [ "$MODE" = between ] || flow_die "--snapshot 只在 --between 下认"; SNAP=1; shift ;;
+    --writer) [ "$MODE" = between ] || flow_die "--writer 只在 --between 下认"; WRITER=1; shift ;;
     --task) TASK="$2"; shift 2 ;;
     --plan) PLAN="$2"; shift 2 ;;
     --verdicts) [ "$MODE" = wrap ] || flow_die "--verdicts 只在 --wrap 下认"; VERD="$2"; shift 2 ;;
@@ -258,17 +260,12 @@ step_face() {
   [ "$nout" = 0 ] || red=1
 }
 
-step_tree() {
-  # 抓到过:无记录(读数不判红;1.0.5 A7 盘点)
-  hdr "树读数(HEAD + porcelain;读数不判红,交接口的对账靠它)"
-  echo "HEAD=$(git -C "$FLOW_REPO_DIR" rev-parse --short HEAD)"
-  git -C "$FLOW_REPO_DIR" -c core.quotepath=false status --porcelain -uall > "$TMP/porc"; prc=$?
-  echo "porcelain=$(LC_ALL=C grep -c . "$TMP/porc") RC=$prc"
-  [ "$prc" = 0 ] || { echo "  ⚠ porcelain 枚举失败 —— 空集不算绿"; red=1; }
-}
+# 1.1.0 / B7:step_tree(HEAD + porcelain 读数,不判红)退役 —— 同一读数在状态档事实段首行,between 里印它是每轮重付;STEP_CAP 17 → 16。
+#   step_route / step_trace 只在写 / 改轮跑(flow-round close 对 ①③ 传 --writer):审轮零改动,复跑路由 / 对账是重付(A7 盘点里两条都无出处)。
 
 step_route() {
-  # 抓到过:无记录(ShipLedger P3-3 实改集 15 条塌成 3 条是它的输入守卫红,不是漏路由;1.0.5 A7 盘点;归批候选)
+  # 抓到过:无记录(ShipLedger P3-3 实改集 15 条塌成 3 条是它的输入守卫红,不是漏路由;1.0.5 A7 盘点;1.1.0 / B7 归批:只 ①③)
+  [ "$MODE" != between ] || [ "$WRITER" = 1 ] || { echo "== (路由复跑跳过:审轮不路由,--writer 才跑)=="; return 0; }
   [ -n "$TASK" ] || { echo "== (路由复跑跳过:未给 --task)=="; return 0; }
   hdr "路由复跑(按申报清单的实改路径;diff 派单必读,漏路由当场红)"
   # 多行路径不进 -v / 不靠 zsh 分词:逐行读进位置参数
@@ -280,7 +277,8 @@ step_route() {
 }
 
 step_trace() {
-  # 抓到过:无记录(ShipLedger P3-1 六次 TRACE 假红 → 0.7.1 N/A;1.0.5 A7 盘点;归批候选)
+  # 抓到过:无记录(ShipLedger P3-1 六次 TRACE 假红 → 0.7.1 N/A;1.0.5 A7 盘点;1.1.0 / B7 归批:只 ①③)
+  [ "$MODE" != between ] || [ "$WRITER" = 1 ] || { echo "== (REQ 对账跳过:审轮不对账,--writer 才跑)=="; return 0; }
   { [ -n "$TASK" ] && [ -n "$PLAN" ]; } || { echo "== (REQ 对账跳过:需 --task 与 --plan)=="; return 0; }
   hdr "flow-trace REQ ↔ 测试对账"
   flow-trace "$PLAN" "$TASK" > "$TMP/trace" 2>&1; trc=$?
@@ -298,7 +296,7 @@ step_lint() {
 }
 
 step_budget() {
-  # 抓到过:无记录(0.8.0 目录合计线 · 0.8.2 自写近线 WARN 11 次零处置 —— 两条都是假红源;1.0.5 A7 盘点;between 里退役候选)
+  # 抓到过:无记录(0.8.0 目录合计线 · 0.8.2 自写近线 WARN 11 次零处置 —— 两条都是假红源;1.0.5 A7 盘点;1.1.0 / B7 从 between 退出,全文线只在 wrap / 默认收工)
   hdr "flow-doc-budget"
   flow-doc-budget "$DIR" > "$TMP/budget" 2>&1; rc5=$?
   grep -E '^RED|^FATAL|^WARN|^——|^info' "$TMP/budget"; echo "RC=$rc5"
@@ -401,7 +399,7 @@ if [ "$MODE" = between ]; then
   if [ "$SNAP" = 1 ]; then
     echo "== (快照轮:verify · 非空转 · 假话门 · 越面 不跑 —— 本轮写不到活树,活树由下一轮 flow-round open 的交付态哈希核)=="
   else step_manifest; step_hollow; step_factlint; step_face; fi
-  step_tree; step_route; step_trace; step_budget
+  step_route; step_trace   # 1.1.0 / B7:树读数退役、预算退出 between(热路径线在 flow-round close 判本轮回件,全文线留 wrap)
   if [ "$red" = 0 ]; then echo "BETWEEN OK"; exit 0; else echo "BETWEEN RED"; exit 1; fi
 fi
 if [ "$MODE" = wrap ]; then

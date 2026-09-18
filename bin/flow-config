@@ -45,6 +45,11 @@ if [ -n "${FLOW_KEEP_PLUGINS+x}" ] && [ -n "${FLOW_KEEP_MCP+x}" ]; then
 else
   echo "WARN: FLOW_KEEP_PLUGINS / FLOW_KEEP_MCP 未写,跳过会话瘦身核对(填上后 flow-settings --write)"
 fi
+# 1.1.0 / B7:预算线只剩 SELF 与 HOTPATH;config 里显式写了 FILE / BYTES / DIR 的印 deprecated(变量不删,读了也不用)
+for dv in FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_BYTES FLOW_DOC_BUDGET_DIR; do
+  cfg="$FLOW_WS/.claude/flow.config.sh"
+  LC_ALL=C grep -qE "^[[:space:]]*$dv=" "$cfg" && echo "WARN: $dv 已 deprecated(1.1.0 起预算线只剩 FLOW_DOC_BUDGET_SELF 与 FLOW_DOC_BUDGET_HOTPATH),config 里这一行可删: $cfg"
+done
 [ "$red" = 0 ] || { echo "RED: config 自检未过"; exit 1; }
 echo "OK: config 自检全过(账本 / 根文档 / 规格目录 / git shim / 会话瘦身 / ③改去向)"
 exit 0

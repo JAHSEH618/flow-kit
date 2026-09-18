@@ -7,16 +7,14 @@
 #   贵的是「模型逐字打出来的字节」。派单件 48 KB 里 46 KB 是 flow-dispatch 生成的,一个字节也不用模型打,
 #   却每批都要写一次 `budget-ok:` 把它带过 —— 同一条线同时判两种东西,于是对两种都判错。
 #   ⟹ 生成段用 `<!-- flow:gen-begin -->` / `<!-- flow:gen-end -->` 括起(flow-dispatch 自动打),预算按总字节减去它来判。
-# 三条结构规矩(§D)由本脚本机械执行其可数的那部分:
-#   · 单件**自写** > FLOW_DOC_BUDGET_FILE 行 **或** > FLOW_DOC_BUDGET_SELF 字节,且首 5 行无 `budget-ok:<理由>` ⟹ RED(RC=1)
+# 1.1.0 / B7:预算线只剩 FLOW_DOC_BUDGET_SELF(本命令)与 FLOW_DOC_BUDGET_HOTPATH(flow-round close 判本轮回件);FILE / BYTES / DIR 三条退役
+#   (行数是字节的代理量、总字节是生成段的函数、目录合计在数轮数 —— A7 盘点里三条都是假红 / 零处置源),变量留在 config,flow-config --check 印 deprecated。
+# 结构规矩(§D)由本脚本机械执行其可数的那部分:
+#   · 单件**自写** > FLOW_DOC_BUDGET_SELF 字节,且首 5 行无 `budget-ok:<理由>` ⟹ RED(RC=1)
 #     自写字节 > 红线的 90% ⟹ **info**(0.8.2 从 WARN 降级:同一份件在一个批次里被喊了 11 次、一次都没被处置 ——
 #       喊的时刻不对(件是上一轮的产出,作者早已下线)、对象也不对(全文长度是交付面的函数,不是写作浪费的函数)。
 #       该判的是热路径节,由 flow-round close 在收工那一刻只判本轮自己那份件:FLOW_DOC_BUDGET_HOTPATH,RED)
-#     (字节线是主判据:token 按字节计,一份 112 KB 的复验件靠长行躲过了 400 行线;行数线只挡「行多」这一种胀法)
-#   · 单件**总字节** > FLOW_DOC_BUDGET_BYTES ⟹ WARN(读取面还是它:一份派单件五个 agent 各读一遍)。总量线不 RED —— 生成段不是作者写的。
-#   · 目录热路径合计 > FLOW_DOC_BUDGET_DIR 行 ⟹ WARN。**线按轮数归一**(0.8.0):轮数 > 6 时线 = DIR × 轮数 / 6,
-#     轮数取本目录 .manifest-baseline-<轮名>.txt 的份数。原线是按标准单支六轮定的,而两支批次天然是它的两倍多 ——
-#     实测 P3-1(14 轮)合计 5022 > 4000 恒 WARN 而件件绿,那条线在数轮数不在数膨胀。件数问题仍多半是轮次问题,先看 §B-severity。
+#     (字节线是主判据:token 按字节计,一份 112 KB 的复验件靠长行躲过了 400 行线)
 #   · `.evidence/` 子目录 = 旁证区,不设限不计入 —— 命令全量输出落这里,移交件贴摘录+路径。
 #     (与 §J 硬规矩 1「探测器输出不许截断」是配套:全量都在,判读看旁证件,热路径不背它。)
 # 标记不成对(begin 没有 end,或 end 多出来)⟹ WARN 并把 begin 之后整段算生成段:有人编辑进了生成块,要重跑 flow-dispatch。
@@ -24,7 +22,7 @@
 # 空目录守卫(§J0):目录里零个 md ⟹ FATAL RC=2 —— 「没超预算」与「没扫到东西」不许长一个样。
 #
 # 用法: flow-doc-budget <流程目录>...        每件逐行给判定(贴 N 件 / 判 N 件),RC: 0 绿 / 1 有 RED / 2 FATAL
-# 读的配置:FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_SELF FLOW_DOC_BUDGET_BYTES FLOW_DOC_BUDGET_DIR FLOW_DOC_BUDGET_RULEBOOK FLOW_LOCAL_DOC_PATH FLOW_ROOT_DOC_PATH
+# 读的配置:FLOW_DOC_BUDGET_SELF FLOW_DOC_BUDGET_RULEBOOK FLOW_LOCAL_DOC_PATH FLOW_ROOT_DOC_PATH(FILE / BYTES / DIR 1.1.0 起不读)
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
 flow_load_config
@@ -55,8 +53,9 @@ for d in "$@"; do
     [ "$nbegin" -eq "$nend" ] || echo "WARN flow:gen 标记不成对(begin $nbegin / end $nend):$f —— begin 之后整段按生成段计;有人编辑进了生成块就重跑 flow-dispatch"
     size="自写 $sl 行 $sb 字节(总 $lines 行 $bytes 字节)"
     over=""
-    if [ "$sl" -gt "$FLOW_DOC_BUDGET_FILE" ]; then over="自写 $sl 行 > $FLOW_DOC_BUDGET_FILE"; fi
-    if [ "$sb" -gt "$FLOW_DOC_BUDGET_SELF" ]; then over="${over:+$over;}自写 $sb 字节 > $FLOW_DOC_BUDGET_SELF"; fi
+    # 1.1.0 / B7:只剩自写字节一条线(FILE 行数线 / BYTES 总字节 WARN / DIR 目录合计 全退役 —— 行数是字节的代理量,总字节是生成段的函数,
+    #   目录合计在数轮数;三条在 A7 盘点里都是假红 / 零处置源)。变量留在 config 不删,flow-config --check 印 deprecated
+    if [ "$sb" -gt "$FLOW_DOC_BUDGET_SELF" ]; then over="自写 $sb 字节 > $FLOW_DOC_BUDGET_SELF"; fi
     if [ -n "$over" ]; then
       # ⚠ LC_ALL=C + -a:派单件的 plan 节选可能带非 UTF-8 字节,普通 grep 判成 binary 后静默不匹配(实测 p4c 01-dispatch.md)
       if head -5 "$f" | LC_ALL=C grep -qa 'budget-ok:'; then
@@ -73,25 +72,13 @@ for d in "$@"; do
       # 真正被下游每一轮重付的只有热路径节(〇 + 丙栏,占全文 9%–35%),那条线改由 `flow-round close` 在收工那一刻
       # 只判本轮自己那份件、判 RED(FLOW_DOC_BUDGET_HOTPATH)—— 那时作者还在,而且改法是挪位置不是删内容。
       echo "info $size $f(自写 > 字节线的 90%;热路径节那条线在 flow-round close 上判,本行只做仪表盘)"
-    elif [ "$bytes" -gt "$FLOW_DOC_BUDGET_BYTES" ]; then
-      echo "WARN $size $f(总字节 > $FLOW_DOC_BUDGET_BYTES:自写没超,读取面还是它 —— 五个 agent 每人读一遍)"
     else
       echo "ok   $size $f"
     fi
   done
   [ "$n" -gt 0 ] || { echo "FATAL: $d 里零个 md —— 「没超预算」与「没扫到」不许同型(§J0)" >&2; exit 2; }
-  # 目录合计按**轮数**归一(0.8.0):FLOW_DOC_BUDGET_DIR 是按标准单支六轮定的,而一个两支批次天然是它的两倍多。
-  # 实测 ShipLedger P3-1(两支 × 七轮 = 14 轮)合计 5022 行 > 4000 恒 WARN,单件却件件绿 —— 这条线在数轮数,不是在数膨胀。
-  # 轮数取本目录的 .manifest-baseline-<轮名>.txt 份数(与 flow-round 事实段同源);≤6 轮按原线,不放宽。
   rounds=$(ls "$d"/.manifest-baseline-*.txt 2>/dev/null | LC_ALL=C grep -c .)
-  cap=$FLOW_DOC_BUDGET_DIR; norm=""
-  if [ "$rounds" -gt 6 ]; then
-    cap=$(( FLOW_DOC_BUDGET_DIR * rounds / 6 )); norm="(按 $rounds 轮归一:$FLOW_DOC_BUDGET_DIR × $rounds / 6)"
-  fi
-  if [ "$total" -gt "$cap" ]; then
-    echo "WARN 目录热路径合计 $total 行 > $cap$norm:$d(件数多半是轮次问题 —— 先看 §B-severity 分级有没有执行)"
-  fi
-  echo "—— $d:$n 件 / 自写 $stotal 行 $sbytes_sum 字节 / 总 $total 行 $tbytes 字节 / 轮 $rounds · 合计线 $cap$norm(贴 $n 件 / 判 $n 件;.evidence/ 旁证区不计)"
+  echo "—— $d:$n 件 / 自写 $stotal 行 $sbytes_sum 字节 / 总 $total 行 $tbytes 字节 / 轮 $rounds(贴 $n 件 / 判 $n 件;.evidence/ 旁证区不计;1.1.0 起只判自写字节线 $FLOW_DOC_BUDGET_SELF)"
 done
 
 for rb in "$FLOW_LOCAL_DOC_PATH" "$FLOW_ROOT_DOC_PATH"; do

@@ -67,17 +67,16 @@ FLOW_KEEP_PLUGINS="vtsls claude-hud impeccable"   # 裸 name 或 name@marketplac
 FLOW_KEEP_MCP="exa"                                               # 用户级 MCP 名;写空串 = 全关
 
 # ── 预算与阈值 ───────────────────────────────────────────────────────────────
-FLOW_DOC_BUDGET_FILE=400               # 单个流程件**自写**行数红线
-FLOW_DOC_BUDGET_SELF=40000             # 单个流程件**自写**字节红线(RED)= 总字节 − <!-- flow:gen-* --> 段。
+# FLOW_DOC_BUDGET_FILE=400             # deprecated(1.1.0 / B7):行数是字节的代理量,线退役;写了 flow-config --check 印 WARN
+FLOW_DOC_BUDGET_SELF=40000             # 单个流程件**自写**字节红线(RED)= 总字节 − <!-- flow:gen-* --> 段。1.1.0 起预算线只剩它与 HOTPATH。
 #                                        为什么改判自写:墙钟拟合 延迟(s) ≈ 1.5 + 1.4×(上下文/100k) + 1.3×(输出/100 token),
 #                                        四条复审轴各有 21–34% 的墙钟耗在 `cat >> 回件 <<EOF` 上(单次最慢 144 s);
 #                                        而派单件 48 KB 里 46 KB 是 flow-dispatch 生成的,一个字节也不用模型打 —— 从前每批六句 budget-ok 全花在这上面。
 #                                        为什么线还是 40000 而不是按墙钟推的 12000:p4c 六份回件逐节量过,没有一节超 14%,
 #                                        最大的单条 4.6 KB、中位 0.8–2.8 KB —— 没有胖条目可砍。要砍到 12 KB 只能删必答四组数 /
 #                                        事实句三层 / 非空转,而那三项每条后面都挂着一次记过账的假绿(protocol §4)。回件的字节买的是结论本身。
-FLOW_DOC_BUDGET_BYTES=40000            # 总字节 WARN 线(不 RED):读取面还是它,一份派单件五个 agent 各读一遍
-#                                        实测两份 ④ 回件卡在旧线 32000 的 99% ⟹ 红线在塑造内容;自写超 90% 会先 WARN
-FLOW_DOC_BUDGET_DIR=4000               # 流程目录热路径合计行数 WARN 线
+# FLOW_DOC_BUDGET_BYTES=40000          # deprecated(1.1.0 / B7):总字节是生成段的函数,WARN 零处置;线退役
+# FLOW_DOC_BUDGET_DIR=4000             # deprecated(1.1.0 / B7):目录合计在数轮数不在数膨胀(0.8.0 按轮数归一也没救回来);线退役
 FLOW_DOC_BUDGET_HOTPATH=8000           # 回件**热路径节**(〇 索引表 / 正面结论 + 丙栏)的字节上限,RED。
                                        # `flow-round close` 在收工那一刻只判**本轮自己那份**回件 —— 那时作者还在,改法是挪位置不是删内容。
                                        # 为什么不判全文:实测九份回件全文 16–37 KB,按申报件归一是 609–1498 B/件,

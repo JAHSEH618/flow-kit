@@ -19,7 +19,7 @@
 #   · 甲栏判词 ≠ log 时印**两个集合**(log 有 / 甲栏无 · 甲栏有 / log 无),判词行也认 `- 名(…):` 形(F-58 第五次 RED 时只印「24 ≠ 25」,差在哪一行要人手工 diff)。
 #   · 〇表里性质不认、第二列像路径的行印 WARN 点名行号(否则只见 RED 漏申报,病因看不见)。
 # 用法:
-#   flow-round open  <流程目录(绝对)> <轮名>                      # 开工:fact-lint verify(F-13)→ 上一轮交付态 shasum -c → manifest baseline → doc-budget → 步骤账在否(①写)→ 状态档事实段
+#   flow-round open  <流程目录(绝对)> <轮名>                      # 开工:fact-lint verify(F-13;只 ①写)→ 上一轮交付态 shasum -c → manifest baseline → doc-budget(只 ①写)→ 步骤账在否(①写)→ 状态档事实段
 #   flow-round close <流程目录(绝对)> <轮名> [--task <号>] [--plan <plan绝对>]
 #                                                                   # 收工交接口:回件认领 → 派生申报 → flow-close --between → 全绿冻结 → 步骤账(①写)→ 回件六判 → 状态档事实段
 #   flow-round state <流程目录(绝对)>                             # 只刷状态档事实段(00-ORCH-STATE.md 的 <!-- flow:gen-* --> 段;段外是编排方的裁决,不动)
@@ -166,8 +166,11 @@ open)
     *-续) flow_die "轮名不许带 -续(得到「${ROUND}」)—— 续轮不开新轮:直接 flow-dispatch --resume <原派单> --dir $DIR(轮名它自己从原派单取),收工时仍 flow-round close <原轮名>" ;;
   esac
   BASE=$(flow_round_file "$DIR" "$ROUND" baseline)
-  hdr "flow-fact-lint verify(F-13:落位段自带的 RED 在这里炸,不潜到写轮)"
-  if [ -z "$FLOW_FACT_LINT_ROOTS" ]; then echo "  跳过:FLOW_FACT_LINT_ROOTS 未配置"
+  # 1.1.0 / B7:批级仪表归批两端 —— fact-lint verify 与 doc-budget 只在 ①写 open 跑(落位段刚写完那一刻;②③④ open 时 specs/ 没人再动,重跑是每轮重付)
+  case "$ROUND" in ①写*) WRITER1=1 ;; *) WRITER1=0 ;; esac
+  hdr "flow-fact-lint verify(F-13:落位段自带的 RED 在这里炸,不潜到写轮;只 ①写)"
+  if [ "$WRITER1" = 0 ]; then echo "  info ②③④ 不跑(1.1.0 / B7:落位段在 ①写 open 已核;假话门每轮在 close 判)"
+  elif [ -z "$FLOW_FACT_LINT_ROOTS" ]; then echo "  跳过:FLOW_FACT_LINT_ROOTS 未配置"
   elif [ ! -f "$FLOW_FACT_LINT_BASELINE_PATH" ]; then echo "  跳过:基线不存在 $FLOW_FACT_LINT_BASELINE_PATH(先 flow-fact-lint baseline)"
   else
     ( cd "$FLOW_REPO_DIR" && flow-fact-lint verify > "$EV/$ROUND-open-factlint.txt" 2>&1 ); rc=$?
@@ -190,9 +193,11 @@ open)
   hdr "flow-manifest baseline → $(basename "$BASE")"
   if [ -f "$BASE" ]; then echo "  FATAL:基线已存在(重开一轮要显式 rm,不静默覆盖)"; red=1
   else ( cd "$FLOW_REPO_DIR" && flow-manifest baseline "$BASE" ); rc=$?; echo "RC=$rc"; [ "$rc" = 0 ] || red=1; fi
-  hdr "flow-doc-budget(派单件自写字节)"
-  flow-doc-budget "$DIR" > "$EV/$ROUND-open-budget.txt" 2>&1; rc=$?
-  LC_ALL=C grep -E '^RED|^FATAL|^WARN' "$EV/$ROUND-open-budget.txt"; echo "RC=$rc"; [ "$rc" = 0 ] || red=1
+  hdr "flow-doc-budget(派单件自写字节;只 ①写)"
+  if [ "$WRITER1" = 1 ]; then
+    flow-doc-budget "$DIR" > "$EV/$ROUND-open-budget.txt" 2>&1; rc=$?
+    LC_ALL=C grep -E '^RED|^FATAL|^WARN' "$EV/$ROUND-open-budget.txt"; echo "RC=$rc"; [ "$rc" = 0 ] || red=1
+  else echo "  info ②③④ 不跑(1.1.0 / B7:热路径线由 flow-round close 判本轮回件;全文线留 wrap)"; fi
   hdr "步骤账 .steps-$ROUND.md(1.0.0:只 ①写 建;②③④ 的断点从回件已落的节读)"
   if [ -f "$(flow_round_file "$DIR" "$ROUND" steps)" ]; then flow-step show "$DIR" "$ROUND" | tail -1
   else case "$ROUND" in ①写*) echo "  WARN:无步骤账 —— flow-dispatch --dir 会建;没有它 ①写 就没有按 REQ 的断点" ;; *) echo "  info ②③④ 不建步骤账(--resume 从回件节头与 log.tsv 生成接手点)" ;; esac; fi
@@ -233,9 +238,10 @@ close)
     快照*) SNAP=1 ;;
     '')    [ -n "$(find_dispatch "$ROUND")" ] || flow_warn "目录里没有生成段带「轮次 / 模型:${ROUND}」的派单,树权限认不出 —— 按活树收(快照轮请用 flow-dispatch --dir 出派单)" ;;
   esac
-  if [ "$SNAP" = 1 ]; then hdr "flow-close --between --snapshot(快照轮:verify · 非空转 · 假话门 · 越面 不跑 —— 本轮写不到活树,活树由下一轮 open 的交付态哈希核;跑 树读数 · 路由复跑 · REQ 对账 · 预算)"
-  else hdr "flow-close --between(verify(含树身份 + 测试锁)· 非空转 · 假话门 · 越面(只判本轮〇表路径)· 树读数 · 路由复跑 · REQ 对账 · 预算)"; fi
+  if [ "$SNAP" = 1 ]; then hdr "flow-close --between --snapshot(快照轮:verify · 非空转 · 假话门 · 越面 不跑 —— 本轮写不到活树,活树由下一轮 open 的交付态哈希核;审轮也不路由 / 对账)"
+  else hdr "flow-close --between(verify(含树身份 + 测试锁)· 非空转 · 假话门 · 越面(只判本轮〇表路径);写 / 改轮另跑 路由复跑 · REQ 对账)"; fi
   set -- "$DIR" "$BASE" "$DECL" --this "$THIS"
+  case "$ROUND" in ①写*|③改*) set -- "$@" --writer ;; esac   # 1.1.0 / B7:路由复跑 · REQ 对账 只在写 / 改轮(审轮零改动,复跑是重付)
   [ -n "$TASK" ] && set -- "$@" --task "$TASK"
   [ -n "$PLAN" ] && set -- "$@" --plan "$PLAN"
   FACE_=$(flow_round_file "$DIR" "$ROUND" face); [ -f "$FACE_" ] && set -- "$@" --face "$FACE_"   # 0.9.0 越面:面由 flow-dispatch --dir 落,按约定名传
