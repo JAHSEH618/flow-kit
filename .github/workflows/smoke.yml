@@ -1,0 +1,24 @@
+# smoke —— 两 OS × 两 locale 跑 tests/smoke.sh(1.0.5 / A5)。
+# ubuntu 的 sh 是 dash:它顺手验契约 4 的 POSIX 纪律;红了是真的,不许改成 bash tests/smoke.sh 绕。
+# ubuntu 没有 en_US.UTF-8(要 locale-gen),用 C.UTF-8;macOS 用 en_US.UTF-8(真实会话的 locale)。
+name: smoke
+on:
+  push:
+    branches: [master]
+  pull_request:
+jobs:
+  smoke:
+    name: ${{ matrix.os }} · ${{ matrix.locale }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, locale: C }
+          - { os: ubuntu-latest, locale: C.UTF-8 }
+          - { os: macos-latest,  locale: C }
+          - { os: macos-latest,  locale: en_US.UTF-8 }
+    steps:
+      - uses: actions/checkout@v4
+      - name: smoke (${{ matrix.locale }})
+        run: LC_ALL=${{ matrix.locale }} sh tests/smoke.sh

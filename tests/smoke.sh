@@ -770,7 +770,7 @@ H16="$FR/01-write-handoff.md"
 printf '# ①写 回件 · 冒烟\n\n## 〇 · 改动索引表\n| 符号 | 文件:行段 | 性质 | 对应 | 例外 |\n|---|---|---|---|---|\n| `a` | src/a.ts:1-2 | 改 | REQ-T1-01 | |\n| `b` | src/b.ts:1 | 改 | REQ-T1-01 | |\n\n## 丙栏 · 自报三处最没把握\n- a.ts 那行\n' > "$H16"
 expect_rc 1 "flow-round close 越面 RED" flow-round close "$FR" ①写 --task T1
 printf '%s' "$LAST_OUT" | grep -q 'RED 越面: src/b.ts' && ok "点名越面路径并给修法" || fail "越面未点名: $(printf '%s' "$LAST_OUT" | grep -E '越面|RED')"
-[ "$(stat -f %m "$FR/.after-①写-hashes.txt")" -le "$(stat -f %m "$FR/.evidence/①写-close-between.txt")" ] && ok "between 红时不重打 .after(红了不冻)" || fail "红了还冻了"
+[ ! "$FR/.after-①写-hashes.txt" -nt "$FR/.evidence/①写-close-between.txt" ] && ok "between 红时不重打 .after(红了不冻)" || fail "红了还冻了"   # -nt 而不是 stat -f(GNU stat 无 -f %m;dash / bash 都认 -nt)
 printf '# ①写 回件 · 冒烟\n\n## 〇 · 改动索引表\n| 符号 | 文件:行段 | 性质 | 对应 | 例外 |\n|---|---|---|---|---|\n| `a` | src/a.ts:1-2 | 改 | REQ-T1-01 | |\n| `b` | src/b.ts:1 | 改 | REQ-T1-01 | 裁决-3 |\n\n## 丙栏 · 自报三处最没把握\n- a.ts 那行\n' > "$H16"
 expect_rc 0 "flow-round close 越面带裁决号放行(例外列 → 申报行尾)" flow-round close "$FR" ①写 --task T1
 grep -q '^src/b.ts  # 裁决-3$' "$FR/.declared-①写.txt" && ok "例外列派生成行尾 # 裁决-3" || fail "例外列未派生: $(cat "$FR/.declared-①写.txt")"

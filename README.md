@@ -1,5 +1,7 @@
 # flow-kit
 
+[![smoke](https://github.com/JAHSEH618/flow-kit/actions/workflows/smoke.yml/badge.svg)](https://github.com/JAHSEH618/flow-kit/actions/workflows/smoke.yml) —— `tests/smoke.sh` 在 ubuntu(dash)/ macOS × C / UTF-8 四格跑,PR 红了不合。
+
 四轮制(写 / 双轴审 / 改 / 复审)多 agent 工作流,打包成 Claude Code plugin。工作区只留两份文件:`.claude/flow.config.sh`(参数)与 `.claude/flow-local.md`(本项目实录)。
 
 ## 安装(本机,用户级)
