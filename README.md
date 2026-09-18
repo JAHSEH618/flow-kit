@@ -14,7 +14,7 @@ claude plugin marketplace add ~/CodeSpace/flow-kit
 claude plugin install flow-kit@flow-kit-local --scope user
 ```
 
-装进一个工作区:在工作区根跑 `flow-init --repo <仓路径|.>`,或调 `/flow-kit:init` 走引导式。派单 / 复审 / 收口前读 `/flow-kit:protocol`。一批的编排方只在三个点动手(1.1.0):`flow-batch open <流程目录> <任务号> --seq <N> --plan <plan> <触面…>` 开批 → 每轮回件落了就 `flow-batch next <流程目录>`(它收上一轮、派开下一轮、印 Agent prompt;② 后收审方的 patch 跑微改通道,停在 `待裁决` 等你给 `--verdict N` 落笔;③④ 按需 —— 零阻塞零生产改动就直接收口)→ 末行 `收口` 时照抄它印的 `flow-close --wrap`,再 `flow-close --ship`。中断了 `flow-dispatch --resume`。agent 侧只剩:写回件、判据命令经 `flow-ev` 跑(1.0.0)。
+装进一个工作区:在工作区根跑 `flow-init --repo <仓路径|.>`,或调 `/flow-kit:init` 走引导式。派单 / 复审 / 收口前读 `/flow-kit:protocol`。一批的编排方只在三个点动手(1.1.0):`flow-batch open <流程目录> <任务号> --seq <N> --plan <plan> <触面…>` 开批 → 每轮回件落了就 `flow-batch next <流程目录>`(它收上一轮、派开下一轮、印 Agent prompt;② 后收审方的 patch 跑微改通道,停在 `待裁决` 等你给 `--verdict N` 落笔;③④ 按需 —— 零阻塞零生产改动就直接收口)→ 末行 `收口` 时照抄它印的 `flow-close --wrap`,再 `flow-close --ship`。裁决写在 ①写 派单待填段,一条一行 `【裁决 N】<文> → 判据 <命令> → RC=<n>`,写 / 改轮收工时 kit 跑随行判据,后轮派单自动抄入(1.2.0);给某轴换模型前一批带 `next --shadow ②A=<model>`,kit 自动 `flow-review-diff` 并印换不换。中断了 `flow-dispatch --resume`。agent 侧只剩:写回件、判据命令经 `flow-ev` 跑(1.0.0)。
 
 ## 升级
 
