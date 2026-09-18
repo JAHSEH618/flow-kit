@@ -695,7 +695,12 @@ printf '%s' "$LAST_OUT" | grep -qF '<!-- flow:tpl-begin -->' && printf '%s' "$LA
 printf '%s' "$LAST_OUT" | grep -A2 '^- \*\*必读\*\*' | grep -q '本地规矩 .*/\.claude/flow-local\.md' && ok "必读骨架印 flow-local 路径(B3)" || fail "必读骨架缺 flow-local: $(printf '%s' "$LAST_OUT" | grep -A2 '必读\*\*')"
 printf '%s' "$LAST_OUT" | grep -q 'specs/debts.md L[0-9]*–[0-9]*(#1)' && ok "必读骨架印账本行区间(#1)" || fail "账本行区间缺: $(printf '%s' "$LAST_OUT" | grep -A3 必读)"
 printf '%s' "$LAST_OUT" | grep -A1 '写权限面 · 许写' | grep -q '^    src/a.ts$' && ok "许写面从触面参数印出(与 .face 同源,不再手写)" || fail "许写面未印: $(printf '%s' "$LAST_OUT" | grep -A1 '许写')"
-printf '%s' "$LAST_OUT" | grep -q '^- 禁写面' && ok "禁写留在待填段" || fail "待填段缺禁写面"
+# 1.1.0 / B5:禁写 / 严重级 / 边界 由 kit 印默认(fail-closed),待填段只剩 裁决 与 必查;①写 的核心库权限以面为准
+printf '%s' "$LAST_OUT" | grep -q '^- \*\*禁写\*\*:许写之外全部(close 越面判据保底)' && ok "禁写默认印在生成段(B5)" || fail "禁写默认缺: $(printf '%s' "$LAST_OUT" | grep 禁写)"
+printf '%s' "$LAST_OUT" | grep -q '^- \*\*严重级\*\*:阻塞 = 生产行为错 / 门假绿 / 违反裁决;不阻塞 = ' && ok "严重级三档默认印在生成段" || fail "严重级默认缺"
+printf '%s' "$LAST_OUT" | grep -qF -- "- **边界**:类的枚举命令 = \`git -C $(cd "$WS" && pwd) -c core.quotepath=false ls-files -- src/a.ts\`" && ok "边界 = ls-files 连触面实参" || fail "边界默认错: $(printf '%s' "$LAST_OUT" | grep '^- \*\*边界')"
+printf '%s' "$LAST_OUT" | grep -q '^- \*\*核心库写权限面\*\*:以写权限面为准' && ok "①写 核心库权限默认以面为准" || fail "①写 CORE 默认错: $(printf '%s' "$LAST_OUT" | grep 核心库)"
+printf '%s' "$LAST_OUT" | grep -q '禁写面:逐条写明\|严重级:本轮哪些\|(待填:两档之一' && fail "待填段仍留着旧三处" || ok "待填段只剩裁决与必查"
 printf '%s' "$LAST_OUT" | grep -q '变异实测是交付条件' && fail "待填段仍要求①写变异" || ok "①写不再要求变异电池"
 grep -q '^- \[ \] 1 · 设计:全部 open REQ' "$FR/.steps-①写.md" && grep -q '^- \[ \] 2 · REQ-T1-01 判据甲' "$FR/.steps-①写.md" && [ "$(grep -c '^- \[ \]' "$FR/.steps-①写.md")" = 4 ] && ok "①写步骤账 = 设计 + 2 REQ + 回件(0.9.0 设计步在前;1.0.0 收工核对步退出)" || fail "①写步骤账错: $(cat "$FR/.steps-①写.md")"
 [ -d "$FR/.evidence" ] && ok ".evidence 已建" || fail ".evidence 未建"
@@ -846,13 +851,19 @@ printf '%s' "$LAST_OUT" | grep -q 'REQ-T10-01 \[done\]' && fail "[done] REQ 行�
 printf '%s' "$LAST_OUT" | grep -q '\[done\] 1 条不印' && ok "REQ 段头报 done 条数" || fail "REQ 段头未报 done 条数"
 printf '%s' "$LAST_OUT" | grep -q '门整跑不归你' && ok "--db 禁用:收工段不给 flow-gates(F-22)" || fail "--db 禁用 收工段错"
 printf '%s' "$LAST_OUT" | grep -q 'flow-gates --reset >' && fail "--db 禁用 仍印 flow-gates --reset(F-22)" || ok "--db 禁用 零 flow-gates 命令"
+# 1.1.0 / B5:审轮的 patch 落点连实参印在生成段;体例与「没附 patch 不算微改」在 tpl 段的复审模板里
+printf '%s' "$LAST_OUT" | grep -qF -- "- **patch 落点**:\`$FR/.evidence/②A-micro-<裁决号>.patch\`(头两行 \`# repro: <命令> → RC=<n> [末行含 <子串>]\` · \`# ev:<名>\`;上限 非测试 16 · 生产 0 行;" && ok "②A 派单 patch 落点连实参 + 两桶上限" || fail "patch 落点行错: $(printf '%s' "$LAST_OUT" | grep 'patch 落点')"
+printf '%s' "$LAST_OUT" | grep -q '没附 patch 的条目一律不算微改' && ok "patch 门槛在派单里(tpl 段 + 落点行)" || fail "缺 patch 门槛"
+printf '%s' "$LAST_OUT" | grep -q '^- \*\*核心库写权限面\*\*:审轮零改动(patch 落 .evidence/,不落树)' && ok "审轮 CORE 默认 = 零改动" || fail "审轮 CORE 默认错: $(printf '%s' "$LAST_OUT" | grep 核心库)"
 expect_rc 0 "flow-dispatch ③改 --db 独占" flow-dispatch T10 --tree 活树-独占 --db 独占 --seq 1 --round ③改 --dir "$FR" --plan "$WS/specs/plan-done.md" src/a.ts
 printf '%s' "$LAST_OUT" | grep -q "flow-ev $FR ③改 gates -- flow-gates --reset" && ok "--db 独占:门整跑连实参且经 flow-ev" || fail "--db 独占 收工段缺门: $(printf '%s' "$LAST_OUT" | grep 门整跑)"
 [ -f "$FR/.steps-③改.md" ] && fail "③改 建了步骤账(A3)" || ok "③改 零步骤账"
-printf '%s' "$LAST_OUT" | grep -q 'flow-micro <patch>... --face' && ok "待填段:微改通道走换量法(行数由 patch 量)" || fail "待填段微改通道文案未更新: $(printf '%s' "$LAST_OUT" | grep -c 改动估计)"
 printf '%s' "$LAST_OUT" | grep -q '改动估计 N 行' && fail "待填段还留着 0.7.0 的自报估计" || ok "待填段不再要自报估计"
-printf '%s' "$LAST_OUT" | grep -q '没附 patch 的条目一律不算微改' && ok "待填段写明没 patch 就不算微改" || fail "待填段缺 patch 门槛"
+printf '%s' "$LAST_OUT" | grep -q '^- \*\*核心库写权限面\*\*:只许改 shell,核心库一个字节不许动(默认;--core 覆盖' && ok "③改 核心库权限默认只许 shell(B5)" || fail "③ CORE 默认错: $(printf '%s' "$LAST_OUT" | grep 核心库)"
+printf '%s' "$LAST_OUT" | grep -q 'patch 落点' && fail "③改 派单印了审轮的 patch 落点行" || ok "③改 派单无 patch 落点行(改轮不出 patch)"
 printf '%s' "$LAST_OUT" | grep -q '^## 〇 · 改动索引表' && ok "③改 tpl 段是写 / 改模板" || fail "③改 tpl 段不是写模板"
+expect_rc 0 "flow-dispatch ③改 --core 覆盖" flow-dispatch T10 --tree 活树-独占 --db 独占 --seq 1 --round ③改 --dir "$FR" --core "核心库限 src/a.ts" src/a.ts
+printf '%s' "$LAST_OUT" | grep -q '^- \*\*核心库写权限面\*\*:核心库限 src/a.ts$' && ok "--core 覆盖默认" || fail "--core 未覆盖: $(printf '%s' "$LAST_OUT" | grep 核心库)"
 printf '%s' "$LAST_OUT" | grep -A3 '^- \*\*必读\*\*' | grep -q '②A 回件:目录里没有首行为' && ok "必读骨架:上一轮回件缺时留待填而不静默(B3)" || fail "必读骨架缺 ②A 行: $(printf '%s' "$LAST_OUT" | grep -A3 必读)"
 rm -f "$WS/specs/plan-done.md" "$FR/.steps-③改.md" "$FR/.steps-④B.md" "$FR/.face-③改.txt" "$FR/.face-④B.txt"
 # flow-ledger add --body-file:多行正文一次落,整块带 > 前缀也认,反引号与 $() 逐字

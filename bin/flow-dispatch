@@ -32,7 +32,8 @@
 #   带 --plan 时另数任务节的 REQ:open > FLOW_REQ_CAP ⟹ RC=3(①写是最长的会话,携带成本随轮数平方长;拆任务,或 --cap-ok 带过,理由进派单)。
 #   flow-dispatch <任务号> --tree … --db … --seq … --lane-merge <路径清单文件(绝对)> [触面路径...]
 #       合并批模式:触面从清单文件读(一行一路径;# 注释与空行略过);命令行再给的触面必须都在清单里,否则 FATAL;拒绝 --plan。
-# 输出:整块 markdown 到 stdout,重定向成 <流程目录>/<轮号>-dispatch.md 就是派单;「(待填)」标记的行由编排方 Edit 补,其余勿手改 —— 要改就重跑。
+# 输出:整块 markdown 到 stdout,重定向成 <流程目录>/<轮号>-dispatch.md 就是派单;待填段只剩 裁决 与 必查(1.1.0 / B5:禁写 / 严重级 / 边界 / ③ 核心库权限
+#   都由 kit 印默认 —— 禁写 = 许写之外全部(close 越面判据保底)、严重级三档、边界 = `git ls-files -- <触面…>`、③ 只许 shell;要改档才 Edit),其余勿手改 —— 要改就重跑。
 #   生成段由 `<!-- flow:gen-begin -->` / `<!-- flow:gen-end -->` 括起(止标记落在「编排方待填」之前):flow-doc-budget 按总字节减去它判自写预算。
 #   派单件 48 KB 里 46 KB 是这里生成的,一个字节也不用模型打 —— 从前它每批都要一句 `budget-ok:` 带过,那是同一条线同时判两种东西。
 #   Agent prompt 只给这个文件的路径(编排方零 heredoc:它的输出按输出价计,一批里占它携带上下文的 33%)。
@@ -129,7 +130,7 @@ fi
 
 TASK="${1:-}"; [ -n "$TASK" ] || flow_die "缺任务号"
 shift
-TREE=""; DB=""; SEQ=""; CORE="(待填:两档之一 —— 「只许改 shell,核心库一个字节不许动」或「核心库限 <文件/性质>」,protocol §1)"
+TREE=""; DB=""; SEQ=""; CORE=""   # 1.1.0 / B5:默认按轮印(③ 只许 shell · ① 以面为准 · 审轮零改动),--core 覆盖
 PLAN=""; CAPOK=""; LANE=""; ROUND=""; DIR=""; FACEFROM=""
 while [ $# -gt 0 ]; do
   case "$1" in --tree|--db|--seq|--core|--plan|--cap-ok|--lane-merge|--round|--dir|--face-from|--excerpt-bytes) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
@@ -258,6 +259,21 @@ if [ -n "$ROUND" ]; then
   else ROUNDLINE="- **轮次 / 模型**:$ROUND · 继承编排方(FLOW_ROLE_MODELS 未给 $ROUND)"; fi
 else ROUNDLINE="- **轮次 / 模型**:(未给 --round;Agent 调用 model 继承编排方)"; fi
 
+# 1.1.0 / B5:三处待填默认化(fail-closed)—— 禁写 / 严重级 / 边界曾是每轮三处 Edit × 6 轮;0.9.0 起越面判据已机械判 申报 ⊆ 面,散文禁写只是提示。
+#   默认由 kit 印在生成段;编排方要改档 / 点名陷阱 / 扩类才在待填段追加。③ 的核心库写权限默认「只许 shell」(protocol §1),--core 覆盖。
+if [ -z "$CORE" ]; then
+  case "$ROUND" in
+    ③改*) CORE="只许改 shell,核心库一个字节不许动(默认;--core 覆盖为「核心库限 <文件 / 性质>」)" ;;
+    ②*|④*) CORE="审轮零改动(patch 落 .evidence/,不落树)" ;;
+    *) CORE="以写权限面为准(触面含核心库文件即许;--core 收窄)" ;;
+  esac
+fi
+LSF="git -C $FLOW_REPO_DIR -c core.quotepath=false ls-files --"
+for p in "$@"; do LSF="$LSF $p"; done
+DEFAULTS="- **禁写**:许写之外全部(close 越面判据保底);要点名的陷阱(gitignore / DB / 生成物)见待填段
+- **严重级**:阻塞 = 生产行为错 / 门假绿 / 违反裁决;不阻塞 = 注释 · 措辞 · 补测试(微改);记账 = 触面外
+- **边界**:类的枚举命令 = \`$LSF\`(扩类见待填段)"
+
 # 回件模板(1.0.0 / A5):--round 给了就**整块印进生成段**,由 <!-- flow:tpl-begin/end --> 括起 —— agent 少一个读模板的请求,
 #   「不许手打插件缓存路径」那条禁令随之作废;smoke 的 GEN_CAP 量法排除 tpl 段。没给 --round 只印两份的路径(kit 自算,带版本号的缓存路径升级即断)。
 TPL_H="$FLOW_KIT_DIR/skills/protocol/references/handoff-template.md"
@@ -307,7 +323,7 @@ if [ -n "$DIR" ]; then
   esac
 else
   FREEZELINE="- **判据命令一律经 flow-ev**:\`flow-ev <流程目录> <轮名> <名> -- <命令>\`;收工件只有回件(申报与冻结由编排方 flow-round close 派生)
-  (未给 --dir:命令没印实参;给 --dir 才有约定文件名与 ①写 的步骤账)"
+  (未给 --dir:命令没印实参)"
 fi
 
 # 必读骨架(1.0.0 / B3;--dir 才有):上一轮回件按首行认领 · flow-local · 路由到的账本行区间。手写段只剩裁决与必查
@@ -394,6 +410,7 @@ $HEAD
 - **库权限**:$DB
 - **核心库写权限面**:$CORE
 - **写权限面 · 许写**(= 触面;close 判 〇表路径 ⊆ 面,越面 RED,例外走〇表「例外」列 \`裁决-N\`):$FACE_TXT
+$DEFAULTS
 - **裁决号段**:从 $SEQ 起
 $ROUNDLINE
 - **门**:$GATELIST(config flow_gates;读数取 .evidence/*-gates.txt 末行)
@@ -401,11 +418,11 @@ $TPLLINE
 $FREEZELINE
 ${MUSTREAD:+$MUSTREAD
 }- **扫描纪律**:全仓口径判据须 \`command grep\` 或显式含 $SPECS(范围轴);零命中先过非空转
-- **移交件预算**:回件自写 ≤$FLOW_DOC_BUDGET_FILE 行 / ≤$FLOW_DOC_BUDGET_SELF 字节,〇 + 丙栏 ≤$FLOW_DOC_BUDGET_HOTPATH 字节(close 判);件内只贴判词 + 指针,不抄正文
-- **读取纪律**:按上一轮回件〇表只读文件区间,整读一个文件要在回件给一行理由;定位用 LSP / \`grep -n\`;plan 只读本块节选,账本只读必读段
+- **移交件预算**:回件自写 ≤$FLOW_DOC_BUDGET_SELF 字节,〇 + 丙栏 ≤$FLOW_DOC_BUDGET_HOTPATH 字节(close 判);只贴判词 + 指针,不抄正文
+- **读取纪律**:按上一轮回件〇表跳读,整读一个文件要在回件给一行理由;plan 只读本块节选,账本只读必读段
 - **工具纪律**:多条命令合进同一个 Bash;判据命令走 flow-ev,判读只看末行 + RC;自造扫描逐行判
-- **证据源封闭**:只认树、上游 spec、本批流程目录;会话记录与 tool-results 不是证据源,不读不引
-- **回件边写边落**:每闭一条就追加落盘(断连时没落盘的全丢);不必回信;残留按三级标级,不标按阻塞
+- **证据源封闭**:只认树、上游 spec、本批流程目录;会话记录与 tool-results 不是证据源
+- **回件边写边落**:每闭一条就追加落盘(断连时没落盘的全丢);不必回信;不标级按阻塞
 - 三改轮:$FIX
 HDR
 
@@ -475,7 +492,7 @@ cat <<DH
 
 ### 欠账必读(同源生成:下面的输出就是紧邻命令的实跑结果,RC=$DRC)
 命令:\`$CMD\`
-路由条数:**$NDEBT**(其中 owner 归 $TASK 的 **$NOWN** 条;owner 上限 $FLOW_DEBT_CAP,必读总量 >$FLOW_DEBT_WARN 仅提醒)
+路由条数:**$NDEBT**(owner 归 $TASK **$NOWN** 条;上限 $FLOW_DEBT_CAP,总量 >$FLOW_DEBT_WARN 只提醒)
 DH
 cat "$TMP/debts"
 
@@ -510,16 +527,15 @@ if [ -n "$TPL" ]; then
   cat "$TPL"
   echo "<!-- flow:tpl-end -->"
 fi
+# 审轮的 patch 落点连实参印(1.1.0 / B5:从待填段挪进生成段;体例与上限在 tpl 段的模板里)
+case "$ROUND" in
+  ②*|④*) echo "- **patch 落点**:\`${DIR:-<流程目录>}/.evidence/$ROUND-micro-<裁决号>.patch\`(头两行 \`# repro: <命令> → RC=<n> [末行含 <子串>]\` · \`# ev:<名>\`;上限 非测试 $FLOW_MICRO_FIX_LINES · 生产 $FLOW_MICRO_PROD_LINES 行;没附 patch 的条目一律不算微改)" ;;
+esac
 cat <<FT
 <!-- flow:gen-end -->
 
-### 编排方待填(生成器管不到的判断项;不复述生成段)
-- 禁写面:逐条写明(许写已由生成段从触面印出;写「其余不许」不算)
-- 交付判据与任务书之外的裁决(任务书正文已在节选段,不再抄;①写不跑变异电池,变异归 ②B 与 ④B)
-- 自报三处「最没把握」的要求(①写轮)
-- 审轮丙栏每条必闭带:\`ev:<名>\`(复现命令的账)+ 期望读数 + **一份可 \`git apply\` 的 patch**(落 \`$DIR/.evidence/$ROUND-micro-<裁决号>.patch\`,头一行 \`# repro: <命令> → 期望 <读数>\`,正文 \`git -c core.quotepath=false diff\`)。
-  行数与性质由编排方 \`flow-micro <patch>... --face .face-<写轮名>.txt\` 从 patch 量(② 后与 ④ 后都跑;上限 $FLOW_MICRO_FIX_LINES 只数非测试新增行);**没附 patch 的条目一律不算微改**
-- 必查(必读之外本轮特有要核的;必读骨架已由生成段印出)
-- 若并行:H1/H2 隔离条件逐条核($SPECS 手工 cp / DB 单点 / 文件层不相交 / 号段)
+### 编排方待填(只放裁决与必查;禁写 / 严重级 / 边界的默认在生成段,改档 / 点名陷阱 / 扩类才在此追加)
+- 裁决:任务书之外的用户裁决正文(任务书节选已在生成段,不再抄)
+- 必查:必读之外本轮特有要核的(并行支另核 H1/H2 隔离:$SPECS 手工 cp / DB 单点 / 文件层不相交 / 号段)
 FT
 exit 0
