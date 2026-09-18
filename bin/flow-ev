@@ -12,13 +12,14 @@
 # 用法:
 #   flow-ev <流程目录(绝对)> <轮名> <名> [--show N|all] -- <命令…>
 #     名:[A-Za-z0-9_.-]+(进文件名);命令在 `--` 之后:**单实参**整串当 shell 串交给 bash -c(管道 / 重定向照写);
-#     **多实参**逐个保住调用方的引号边界(含特殊字符的实参重包成 POSIX 单引号串)再拼,只有裸操作符词
-#     `| || && ; & > >> < 2> 2>> 2>&1 ( )` 原样过 —— `-- sh -c 'a; b'` 的整串、`-- grep -F '"x"' src` 的双引号都保住(1.0.1)。
-#     病根:旧写法 `CMD="$*"` 把实参用空格拍扁再让 sh -c 二次分词,P2-4 ②B 两处假读数(内层 sh -c 只跑到 shasum;`"—"` 被剥成裸 — 数出 526 行)。
+#     **多实参**直接 exec(`"$@"`,零 shell、零重拼;1.0.5 / A3)—— 每个实参逐字到达命令,`-- sh -c 'a; b'` 的整串、`-- grep -F '"x"' src` 的双引号都保住;
+#     要管道 / 重定向就写单串。log 第五列把多实参重包成 POSIX 单引号串**只做展示**(可照抄进 shell)。
+#     病根:旧写法 `CMD="$*"` 把实参用空格拍扁再让 sh -c 二次分词,P2-4 ②B 两处假读数(内层 sh -c 只跑到 shasum;`"—"` 被剥成裸 — 数出 526 行);
+#     1.0.1 改成「重包 + 裸操作符词放行」仍是把 argv 重序列化成 shell 串,1.0.1 的引号 bug 全出在这一段 —— 1.0.5 起不再重拼,操作符放行随之删除。
 # 1.0.2 三修(P4-T 实测,同一个根:名在跑之前就被烧掉、RC 在管道里被换掉):
 #   · `bash -o pipefail -c` 跑 —— 旧 `sh -c` 下 `… | grep … | cut …` 的 RC 是 cut 的,恒 0(④A 一整组 rc-* 读数作废;与 §J 硬规矩② 同族)。
 #     代价:判据后接 `head` 截大流时上游 SIGPIPE 得 141 —— 那是响的错不是静默的 0,而 §J① 本就禁判据后接 head。
-#   · 跑前 `bash -n` 语法校验,与运行同一解析器 —— 旧版含 `\"` 的单实参串 `sh -c` 语法错 RC=2,而 OUT 已建、名已烧(scan-positives 只能起 scan-positives2)。
+#   · 跑前 `bash -n` 语法校验(只对单串;多实参无串可校),与运行同一解析器 —— 旧版含 `\"` 的单实参串 `sh -c` 语法错 RC=2,而 OUT 已建、名已烧(scan-positives 只能起 scan-positives2)。
 #   · 多实参里出现 `--show` 当场 FATAL —— 旧版把它重包进命令串(`sh: --show: No such file` RC 127),名同样烧掉。
 #   三条守卫都在建 OUT 之前:FATAL 不落件、不记账,同名可重来。
 # 末行固定:`RC=<n>`(命令自己的 RC 原样透传);参数错 FATAL RC=2。
@@ -44,14 +45,14 @@ while [ $# -gt 0 ]; do
 done
 [ $# -ge 1 ] || flow_die "-- 之后缺命令"
 case "$SHOW" in all|*[0-9]*) ;; *) flow_die "--show 只认数字或 all: $SHOW" ;; esac
-if [ $# -eq 1 ]; then CMD="$1"
+# 单串 ⟹ CMD 交给 bash -c;多实参 ⟹ 直接 exec "$@",CMD 只是 log 展示用的重包串(含特殊字符 / 空串的实参单引号重包,' → '\'')
+if [ $# -eq 1 ]; then CMD="$1"; MULTI=0
 else
-  CMD=""
+  MULTI=1; CMD=""
   for a in "$@"; do
     case "$a" in
-      --show) flow_die "--show 要放在 -- 之前(-- 之后的一切都是命令;它被重包进命令串会 RC 127 且烧掉名)" ;;
-      '|'|'||'|'&&'|';'|'&'|'>'|'>>'|'<'|'2>'|'2>>'|'2>&1'|'('|')') w="$a" ;;                       # 裸操作符词:让 `-- a '|' b` 的管道照通
-      ''|*[!A-Za-z0-9_.,:/=@%+-]*) w="'$(printf '%s' "$a" | sed "s/'/'\\\\''/g")'" ;;   # 含特殊字符 / 空串:单引号重包('→'\'')
+      --show) flow_die "--show 要放在 -- 之前(-- 之后的一切都是命令;它会被当成命令的实参跑,RC 不可解释且烧掉名)" ;;
+      ''|*[!A-Za-z0-9_.,:/=@%+-]*) w="'$(printf '%s' "$a" | sed "s/'/'\\\\''/g")'" ;;
       *) w="$a" ;;
     esac
     CMD="$CMD${CMD:+ }$w"
@@ -61,16 +62,19 @@ fi
 EV="$DIR/.evidence"; mkdir -p "$EV"
 OUT="$EV/$ROUND-$NAME.txt"; LOG="$EV/$ROUND-log.tsv"
 [ ! -e "$OUT" ] || flow_die "名重复: $NAME 在本轮已有证据($OUT)—— 一个名一份证据,重跑就换个名(如 ${NAME}2),旧的不许静默覆盖"
-# 语法先过(与运行同一解析器);错了 FATAL,不建 OUT、不记账,名留给修好的那次
-SYN="$(flow_tmpdir)/flow-ev-syn.$$"
-if ! bash -n -c "$CMD" 2> "$SYN"; then
-  m=$(sed 's/^bash: -c: //' "$SYN" | tr '\n' ' '); rm -f "$SYN"
-  flow_die "命令语法错(名 $NAME 未消耗,修好照名重跑):${m}—— 多引号命令先落 scratchpad 脚本再 -- \"sh <脚本>\""
+# 语法先过(只对单串,与运行同一解析器);错了 FATAL,不建 OUT、不记账,名留给修好的那次
+if [ "$MULTI" = 0 ]; then
+  SYN="$(flow_tmpdir)/flow-ev-syn.$$"
+  if ! bash -n -c "$CMD" 2> "$SYN"; then
+    m=$(sed 's/^bash: -c: //' "$SYN" | tr '\n' ' '); rm -f "$SYN"
+    flow_die "命令语法错(名 $NAME 未消耗,修好照名重跑):${m}—— 多引号命令先落 scratchpad 脚本再 -- \"sh <脚本>\""
+  fi
+  rm -f "$SYN"
 fi
-rm -f "$SYN"
 
-# 同层捕获:命令跑进文件,RC 紧跟其后;屏上的末 N 行是从文件读回来的,不是另跑一遍。pipefail:管道里任一段红就红
-( cd "$FLOW_REPO_DIR" && bash -o pipefail -c "$CMD" ) > "$OUT" 2>&1; rc=$?
+# 同层捕获:命令跑进文件,RC 紧跟其后;屏上的末 N 行是从文件读回来的,不是另跑一遍。单串 pipefail:管道里任一段红就红;多实参零 shell
+if [ "$MULTI" = 0 ]; then ( cd "$FLOW_REPO_DIR" && bash -o pipefail -c "$CMD" ) > "$OUT" 2>&1; rc=$?
+else ( cd "$FLOW_REPO_DIR" && "$@" ) > "$OUT" 2>&1; rc=$?; fi
 last=$(tail -1 "$OUT" 2>/dev/null | tr '\t' ' ')
 last=$(printf '%s' "$last" | LC_ALL=C awk "$(flow_awk_utrunc)"'{ print utrunc($0, 200) }')
 printf '%s\t%s\t%s\t%s\t%s\n' "$NAME" "$rc" "$last" "$(date +%FT%H:%M:%S)" "$(printf '%s' "$CMD" | tr '\t\n' '  ')" >> "$LOG"

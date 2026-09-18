@@ -293,11 +293,11 @@ if [ -n "$DIR" ]; then
   case "$TREE" in
     快照*)
       PREV=$(ls -t "$DIR"/.after-*-hashes.txt 2>/dev/null | head -1); [ -n "$PREV" ] || PREV="<上一轮 .after-*-hashes.txt>"
-      FREEZELINE="- **判据命令一律经 flow-ev**:\`$EVCMD\`(在仓根 sh -c 跑,全量落 .evidence/$ROUND-<名>.txt,账记 .evidence/$ROUND-log.tsv,屏上只印末 20 行 + RC;逐行判的扫描加 \`--show all\`;一个名一份证据,重名 FATAL)
+      FREEZELINE="- **判据命令一律经 flow-ev**:\`$EVCMD\`(仓根跑:单串经 bash -c,多实参直接 exec,要管道写单串;全量落 .evidence/$ROUND-<名>.txt,账记 .evidence/$ROUND-log.tsv,屏上只印末 20 行 + RC;逐行判的扫描加 \`--show all\`;一个名一份证据,重名 FATAL)
 - **树核对**:开工与收工各一次 \`$SHACHK $PREV | grep -vc ': OK\$'\`(应为 0:你的副本与上一轮交付态同构;基线 \`.manifest-baseline-$ROUND.txt\` 由编排方在活树打$ROOTLINE,verify 归编排方,副本里不跑)
 - **收工件只有回件**:申报与冻结由编排方 \`flow-round close\` 从回件〇表派生(审轮零改动,〇是正面结论);$GATELINE" ;;
     *)
-      FREEZELINE="- **判据命令一律经 flow-ev**:\`$EVCMD\`(在仓根 sh -c 跑,全量落 .evidence/$ROUND-<名>.txt,账记 .evidence/$ROUND-log.tsv,屏上只印末 20 行 + RC;逐行判的扫描加 \`--show all\`;一个名一份证据,重名 FATAL)
+      FREEZELINE="- **判据命令一律经 flow-ev**:\`$EVCMD\`(仓根跑:单串经 bash -c,多实参直接 exec,要管道写单串;全量落 .evidence/$ROUND-<名>.txt,账记 .evidence/$ROUND-log.tsv,屏上只印末 20 行 + RC;逐行判的扫描加 \`--show all\`;一个名一份证据,重名 FATAL)
 - **收工件只有回件**:申报清单 = 回件〇表第二列的路径(每个实改文件 ≥ 1 行;例外列写 \`裁决-N\`),冻结与 verify(含测试锁 · 假话门 · 越面)由编排方 \`flow-round close\` 跑;基线 \`.manifest-baseline-$ROUND.txt\` 由 \`flow-round open\` 打$ROOTLINE(不存在就停,别自己打);$GATELINE" ;;
   esac
   case "$ROUND" in

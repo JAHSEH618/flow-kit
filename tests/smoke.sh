@@ -1228,8 +1228,11 @@ expect_rc 0 "flow-ev 多实参:-- grep -F '\"x\"' <文件>(引号保住)" flow-e
 grep -qF "grep -F '\"x\"' src/q.txt" "$F10/.evidence/①写-log.tsv" && ok "log 第五列记的是重包后可照抄的命令" || fail "log 命令列错: $(tail -1 "$F10/.evidence/①写-log.tsv" | cut -f5)"
 expect_rc 0 "flow-ev 多实参:-- sh -c 'echo one; echo two'(整串保住)" flow-ev "$F10" ①写 q2 -- sh -c 'echo one; echo two'
 [ "$(cat "$F10/.evidence/①写-q2.txt")" = "$(printf 'one\ntwo')" ] && ok "内层 sh -c 跑完两句(拍扁只剩 two)" || fail "内层 sh -c 被拍扁: $(cat "$F10/.evidence/①写-q2.txt")"
-expect_rc 0 "flow-ev 多实参:裸 '|' 当管道" flow-ev "$F10" ①写 q3 -- echo abc '|' tr a-z A-Z
-[ "$(cat "$F10/.evidence/①写-q3.txt")" = ABC ] && ok "裸操作符词原样过,管道照通" || fail "裸 | 没当管道: $(cat "$F10/.evidence/①写-q3.txt")"
+# 1.0.5 / A3:多实参直接 exec,零 shell —— 裸 '|' 不再当管道,echo 收到四个实参(要管道写单串)
+expect_rc 0 "flow-ev 多实参:裸 '|' 是实参不是管道(直接 exec)" flow-ev "$F10" ①写 q3 -- echo abc '|' tr a-z A-Z
+[ "$(cat "$F10/.evidence/①写-q3.txt")" = 'abc | tr a-z A-Z' ] && ok "多实参零重拼:echo 收到四个实参,输出含 |" || fail "多实参被重拼成 shell 串: $(cat "$F10/.evidence/①写-q3.txt")"
+expect_rc 3 "flow-ev 多实参:-- sh -c 'exit 3' RC=3 透传" flow-ev "$F10" ①写 q5 -- sh -c 'exit 3'
+printf '%s' "$LAST_OUT" | grep -q '^RC=3$' && ok "多实参末行 RC=3" || fail "多实参末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
 expect_rc 0 "flow-ev 多实参:'*.txt' 按字面(不再被内层展开)" flow-ev "$F10" ①写 q4 -- printf '%s\n' 'src/*.txt'
 [ "$(cat "$F10/.evidence/①写-q4.txt")" = 'src/*.txt' ] && ok "调用方引住的通配按字面传" || fail "通配被展开: $(cat "$F10/.evidence/①写-q4.txt")"
 rm -f "$WS/src/q.txt"
