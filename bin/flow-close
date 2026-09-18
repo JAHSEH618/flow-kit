@@ -148,6 +148,7 @@ flow_declared_verdicts "$DECL" > "$TMP/declv"
 declv=$(cut -f1 "$TMP/declv")
 
 step_after() {
+  # 抓到过:P2-4 · 收口按裁决动过的仓内文件未申报(1.0.1 起走申报行尾 # 裁决-N 通道)
   [ -n "$AFTER" ] || return 0
   hdr "交付态哈希 sha256 -c $(basename "$AFTER")(FAILED 的例外只走申报行尾 # 裁决-N)"
   flow_sha256_check "$AFTER" > "$TMP/after" 2>/dev/null
@@ -182,6 +183,7 @@ refreeze_after() {
 }
 
 step_manifest() {
+  # 抓到过:StockSteer · 未申报的中文路径(quotepath 转义,0.8.x)· ShipLedger P3-4 · 副本树上跑 verify 与主树同型(0.9.0 树身份)· 削断言 / .only(0.9.0 测试锁)
   hdr "flow-manifest verify"
   # 同层捕获:命令一次跑进文件,RC 紧跟其后;判读只读那个文件
   flow-manifest verify "$BASE" "$DECL" > "$TMP/verify" 2>&1; rc=$?
@@ -190,6 +192,7 @@ step_manifest() {
 }
 
 step_hollow() {
+  # 抓到过:无记录 —— 它护的是 verify 的空集假绿;0.8.x BSD awk 吐空集那次是人眼发现的,当时它抽不到对象也没红(1.0.5 A7 盘点;归批 / 退役候选)
   hdr "非空转(抽掉一条确在实改集里的申报行,应 RED 且点名它)"
   victim=""
   changed=$(flow_changed_paths) || { echo "  ⚠ 实改集枚举失败(flow_changed_paths RC≠0)—— 非空转无对象可抽"; red=1; changed=""; }
@@ -220,6 +223,7 @@ step_hollow() {
 #   判据在 agent 自陈里,编排方从没独立跑过;P3-4 ②B-F 的微改 patch 带进一行 RED NEW QUANT,到下一轮 open 才炸。
 #   一个判据只在一处由不写代码的一方跑;agent 自跑的那次是给它自己的提示,不是判据。
 step_factlint() {
+  # 抓到过:ShipLedger P3-4 ②B-F · 微改 patch 带进一行 RED NEW QUANT,潜到下一轮 open 才炸(0.9.0 进 close)
   hdr "flow-fact-lint verify(假话门,编排方独立跑)"
   if [ -z "$FLOW_FACT_LINT_ROOTS" ]; then echo "  跳过:FLOW_FACT_LINT_ROOTS 未配置"; return 0; fi
   if [ ! -f "$FLOW_FACT_LINT_BASELINE_PATH" ]; then echo "  跳过:基线不存在 $FLOW_FACT_LINT_BASELINE_PATH(先 flow-fact-lint baseline)"; return 0; fi
@@ -232,6 +236,7 @@ step_factlint() {
 #   病根:.face 落了三个版本,唯一的消费者是 flow-micro;轮收工没有任何工具比过「实改集在不在面内」——
 #   P3-4 三轮的申报清单都含 apps/web/test/ 与 packages/core/src/index.ts,面里没有,没人量。例外只走申报行尾 `# 裁决-N`(与测试锁同一条通道)。
 step_face() {
+  # 抓到过:ShipLedger P3-4 · 三轮申报里 apps/web/test/ · packages/core/src/index.ts 面里都没有,没人量(0.9.0)
   [ -n "$FACE" ] || { echo "== (越面跳过:未给 --face;flow-dispatch --dir 才落 .face-<轮名>.txt)=="; return 0; }
   if [ -n "$THIS" ]; then facep=$(grep -v '^[[:space:]]*#' "$THIS" | sed 's/[[:space:]]*$//' | grep . | sort -u); scope="本轮〇表路径 $(printf '%s\n' "$facep" | grep -c . || true) 条"
   else facep="$declp"; scope="申报并集"; fi
@@ -254,6 +259,7 @@ step_face() {
 }
 
 step_tree() {
+  # 抓到过:无记录(读数不判红;1.0.5 A7 盘点)
   hdr "树读数(HEAD + porcelain;读数不判红,交接口的对账靠它)"
   echo "HEAD=$(git -C "$FLOW_REPO_DIR" rev-parse --short HEAD)"
   git -C "$FLOW_REPO_DIR" -c core.quotepath=false status --porcelain -uall > "$TMP/porc"; prc=$?
@@ -262,6 +268,7 @@ step_tree() {
 }
 
 step_route() {
+  # 抓到过:无记录(ShipLedger P3-3 实改集 15 条塌成 3 条是它的输入守卫红,不是漏路由;1.0.5 A7 盘点;归批候选)
   [ -n "$TASK" ] || { echo "== (路由复跑跳过:未给 --task)=="; return 0; }
   hdr "路由复跑(按申报清单的实改路径;diff 派单必读,漏路由当场红)"
   # 多行路径不进 -v / 不靠 zsh 分词:逐行读进位置参数
@@ -273,6 +280,7 @@ step_route() {
 }
 
 step_trace() {
+  # 抓到过:无记录(ShipLedger P3-1 六次 TRACE 假红 → 0.7.1 N/A;1.0.5 A7 盘点;归批候选)
   { [ -n "$TASK" ] && [ -n "$PLAN" ]; } || { echo "== (REQ 对账跳过:需 --task 与 --plan)=="; return 0; }
   hdr "flow-trace REQ ↔ 测试对账"
   flow-trace "$PLAN" "$TASK" > "$TMP/trace" 2>&1; trc=$?
@@ -284,11 +292,13 @@ step_trace() {
 }
 
 step_lint() {
+  # 抓到过:无记录(1.0.5 A7 盘点)
   hdr "flow-route-debts --lint"
   flow-route-debts --lint; rc4=$?; [ "$rc4" = 0 ] || red=1
 }
 
 step_budget() {
+  # 抓到过:无记录(0.8.0 目录合计线 · 0.8.2 自写近线 WARN 11 次零处置 —— 两条都是假红源;1.0.5 A7 盘点;between 里退役候选)
   hdr "flow-doc-budget"
   flow-doc-budget "$DIR" > "$TMP/budget" 2>&1; rc5=$?
   grep -E '^RED|^FATAL|^WARN|^——|^info' "$TMP/budget"; echo "RC=$rc5"
@@ -296,6 +306,7 @@ step_budget() {
 }
 
 step_rulebook() {
+  # 抓到过:无记录(0.8.1 归档裸名结构性假红 · 0.8.3 换单位;1.0.5 A7 盘点)
   hdr "规则书棘轮 $FLOW_LOCAL_DOC(字节只许降;行数上限 $FLOW_DOC_BUDGET_RULEBOOK)"
   if [ -f "$FLOW_LOCAL_DOC_PATH" ]; then
     cur=$(wc -c < "$FLOW_LOCAL_DOC_PATH" | tr -d ' ')
@@ -333,16 +344,19 @@ step_rulebook() {
 
 # —— 收口机械段(--wrap)——
 step_verdicts() {
+  # 抓到过:无记录(dry-run;体例错在 flow-ledger 入口就 FATAL;1.0.5 A7 盘点)
   [ -n "$VERD" ] || { echo "== (三态表 dry-run 跳过:未给 --verdicts)=="; return 0; }
   hdr "flow-ledger apply $(basename "$VERD")(dry-run;--write 归编排方 diff 审之后)"
   flow-ledger apply "$VERD" > "$TMP/verd" 2>&1; rc=$?
   LC_ALL=C grep -E 'dry-run|LEDGER|VERDICTS|RED|FATAL|WARN' "$TMP/verd" | head -40; echo "RC=$rc"; [ "$rc" = 0 ] || red=1
 }
 step_index() {
+  # 写手,不是判据(1.0.5 A7 盘点)
   hdr "flow-render-index --write"
   flow-render-index --write > "$TMP/idx" 2>&1; rc=$?; tail -2 "$TMP/idx"; echo "RC=$rc"; [ "$rc" = 0 ] || red=1
 }
 step_gates() {
+  # 抓到过:每批(门是交付条件;0.9.0 补 cached 出处 —— 命中缓存时读数是上一次整跑的)
   hdr "flow-gates --reset(收口那一次整跑;命中缓存就不整跑)"
   mkdir -p "$DIR/.evidence"
   ( cd "$FLOW_REPO_DIR" && flow-gates --reset > "$DIR/.evidence/close-gates.txt" 2>&1 ); rc=$?
@@ -360,6 +374,7 @@ step_gates() {
   fi
 }
 step_markdone() {
+  # 写手,不是判据(1.0.5 A7 盘点)
   { [ -n "$TASK" ] && [ -n "$PLAN" ]; } || { echo "== (REQ 翻 done 跳过:需 --task 与 --plan)=="; return 0; }
   hdr "flow-trace --mark-done(open 且有测试的 REQ 翻 [done];逐条印行号,不该翻的手工改回;plan 须在申报清单里)"
   flow-trace "$PLAN" "$TASK" --mark-done > "$TMP/md" 2>&1; rc=$?
@@ -368,12 +383,14 @@ step_markdone() {
   [ "$rc" = 0 ] || red=1
 }
 step_usage() {
+  # 账,不是门(零会话命中只 WARN;1.0.5 A7 盘点)
   hdr "flow-usage --write(轮数账;零会话命中只 WARN,账不是门)"
   flow-usage "$DIR" --write > "$TMP/usage" 2>&1; rc=$?
   LC_ALL=C grep -E '^USAGE|^FATAL|^WARN' "$TMP/usage" | head -20; echo "RC=$rc"
   [ "$rc" = 0 ] || echo "  WARN:轮数账没生成(transcripts 没扫到本批)—— 不判红"
 }
 step_state() {
+  # 刷新,不是判据(1.0.5 A7 盘点)
   hdr "状态档事实段"
   flow-round state "$DIR" | tail -1
 }

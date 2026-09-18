@@ -30,6 +30,11 @@ n_=$(grep -nE '"\$[A-Za-z_]+/\.(after|declared|manifest-baseline|face|steps)-' "
 # lib 单测:八种约定名与反向取轮名
 rf=$(sh -c ". '$KIT/lib/flow-lib.sh'; for k in baseline declared after face steps log gates evdir; do flow_round_file /d ②B \$k; done; flow_round_of /d/.after-①写-hashes.txt; flow_round_of /d/.declared-③改.txt; flow_round_of /d/x.md || echo none" 2>&1 | tr '\n' ' ')
 [ "$rf" = "/d/.manifest-baseline-②B.txt /d/.declared-②B.txt /d/.after-②B-hashes.txt /d/.face-②B.txt /d/.steps-②B.md /d/.evidence/②B-log.tsv /d/.evidence/②B-gates.txt /d/.evidence ①写 ③改 none " ] && ok "flow_round_file 八种 + flow_round_of 反向" || fail "flow_round_file 错: $rf"
+# A7:flow-close 的 step_* 数是棘轮 —— 每加一条判据退一条(每个 step 头一行 `# 抓到过:` 是它的出处;无出处的是归批 / 退役候选)
+STEP_CAP=17
+ns_=$(grep -c '^step_[a-z_]*()' "$KIT/bin/flow-close")
+[ "$ns_" -le "$STEP_CAP" ] && ok "flow-close step_* $ns_ 个 ≤ 棘轮 $STEP_CAP(只许往下改)" || fail "flow-close step_* $ns_ 个 > 棘轮 $STEP_CAP —— 每加一条判据退一条,别把常数往上改"
+[ "$(grep -A1 '^step_[a-z_]*()' "$KIT/bin/flow-close" | grep -c '^  # \(抓到过\|写手\|账\|刷新\)')" = "$ns_" ] && ok "每个 step_* 头一行有出处注(抓到过 / 写手 / 账 / 刷新)" || fail "有 step_* 缺出处注: $(grep -A1 '^step_[a-z_]*()' "$KIT/bin/flow-close" | grep -B1 -v '^  # \(抓到过\|写手\|账\|刷新\)' | grep '^step_' | tr '\n' ' ')"
 
 # ── 1. 建仓 + init ──
 WS="$T/ws"; mkdir -p "$WS/src" "$WS/specs"
