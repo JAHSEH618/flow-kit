@@ -59,8 +59,8 @@ else
   done
 fi
 
-EV="$DIR/.evidence"; mkdir -p "$EV"
-OUT="$EV/$ROUND-$NAME.txt"; LOG="$EV/$ROUND-log.tsv"
+EV=$(flow_round_file "$DIR" "$ROUND" evdir); mkdir -p "$EV"
+OUT="$EV/$ROUND-$NAME.txt"; LOG=$(flow_round_file "$DIR" "$ROUND" log)
 [ ! -e "$OUT" ] || flow_die "名重复: $NAME 在本轮已有证据($OUT)—— 一个名一份证据,重跑就换个名(如 ${NAME}2),旧的不许静默覆盖"
 # 语法先过(只对单串,与运行同一解析器);错了 FATAL,不建 OUT、不记账,名留给修好的那次
 if [ "$MULTI" = 0 ]; then

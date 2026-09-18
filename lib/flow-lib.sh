@@ -230,6 +230,38 @@ flow_handoff_skipped() {   # 用法: flow_handoff_skipped <回件(绝对)>
       printf "%d\t%s\t%s\n", NR, k, f }' "$1"
 }
 
+# —— 轮级约定文件名(1.0.5 / A6):只在这一处拼;flow-dispatch 印进派单的名字、flow-round / flow-ev / flow-micro / flow-close / flow-step 派生的名字全经它 ——
+#   病根:契约 3 的「四处派生,改一边就要改另一边」是 1.0.4 三处 bug 的同一根;字面 `.after-$R-hashes.txt` 之类散在五个脚本里。
+#   种类:baseline · declared · after · face · steps · log · gates · evdir;别的 FATAL。stdout 印绝对路径(evdir 不带尾斜杠)。
+#   smoke 有棘轮:bin/lib 里 `"$VAR/.(after|declared|manifest-baseline|face|steps)-` 的代码形命中数只许为 0(枚举用的 glob 不算)。
+flow_round_file() {   # 用法: flow_round_file <流程目录(绝对)> <轮名> <baseline|declared|after|face|steps|log|gates|evdir>
+  case "$3" in
+    baseline) printf '%s/.manifest-baseline-%s.txt\n' "$1" "$2" ;;
+    declared) printf '%s/.declared-%s.txt\n' "$1" "$2" ;;
+    after)    printf '%s/.after-%s-hashes.txt\n' "$1" "$2" ;;
+    face)     printf '%s/.face-%s.txt\n' "$1" "$2" ;;
+    steps)    printf '%s/.steps-%s.md\n' "$1" "$2" ;;
+    log)      printf '%s/.evidence/%s-log.tsv\n' "$1" "$2" ;;
+    gates)    printf '%s/.evidence/%s-gates.txt\n' "$1" "$2" ;;
+    evdir)    printf '%s/.evidence\n' "$1" ;;
+    *) flow_die "flow_round_file:不认的种类「$3」(只认 baseline|declared|after|face|steps|log|gates|evdir)" ;;
+  esac
+}
+# 反向:从约定名取轮名(只认 after / declared / baseline / face / steps 五种;认不出印空,RC 1)。flow-micro 拿 .after-X ↔ .declared-X 配对用它
+flow_round_of() {   # 用法: flow_round_of <文件路径>
+  _ro_b=$(basename "$1")
+  case "$_ro_b" in
+    .after-*-hashes.txt)     _ro_r=${_ro_b#.after-}; _ro_r=${_ro_r%-hashes.txt} ;;
+    .declared-*.txt)         _ro_r=${_ro_b#.declared-}; _ro_r=${_ro_r%.txt} ;;
+    .manifest-baseline-*.txt) _ro_r=${_ro_b#.manifest-baseline-}; _ro_r=${_ro_r%.txt} ;;
+    .face-*.txt)             _ro_r=${_ro_b#.face-}; _ro_r=${_ro_r%.txt} ;;
+    .steps-*.md)             _ro_r=${_ro_b#.steps-}; _ro_r=${_ro_r%.md} ;;
+    *) return 1 ;;
+  esac
+  [ -n "$_ro_r" ] || return 1
+  printf '%s\n' "$_ro_r"
+}
+
 # —— 申报清单解析(1.0.5 / A2):四处消费者(flow-close 越面与交付态 / flow-manifest 测试锁 / 派生并集 / flow-micro 追号)只走这一条 ——
 #   病根:`path  # 裁决-4703,4800 micro` 这一行曾有四套 sed / awk 各剥一遍,任一处正则漂了就是静默漏(1.0.4 第二个裁决号丢失就是这一族)。
 #   行形三种都认:`<hash>  path`(shasum 体例)/ `git XY path`(porcelain 体例,rename 取箭头右侧)/ 裸 `path`;行尾 `␣+# …` 是注释。
@@ -271,7 +303,7 @@ flow_derive_declared() {   # 用法: flow_derive_declared <流程目录(绝对)>
   { [ -n "$_dd_h" ] && [ -f "$_dd_h" ] && flow_handoff_paths "$_dd_h" | sed 's/^/0\t/'
     for f in "$_dd_dir"/.declared-*.txt; do
       [ -f "$f" ] || continue
-      [ "$f" = "$_dd_dir/.declared-$_dd_round.txt" ] && continue
+      [ "$f" = "$(flow_round_file "$_dd_dir" "$_dd_round" declared)" ] && continue
       flow_declared_rows "$f" | LC_ALL=C awk -F'\t' '{ print ($3 != "" ? $1 "  # " $3 : $1) }' | sed 's/^/1\t/'   # 1.0.5 / A2:经同一条解析,行重写成规范形 `path  # 注释`
     done; } > "$_dd_tmp"
   { echo "# declared · $_dd_round(flow-round close 派生 $(date +%F\ %H:%M):〇表路径 ∪ 先前轮清单;勿手改,重跑 close 重生)"

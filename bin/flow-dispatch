@@ -72,7 +72,7 @@ if [ "${1:-}" = "--resume" ]; then
   fi
   [ -n "$RROUND" ] || RROUND="$ORIGROUND"
   [ -n "$RROUND" ] || flow_die "原派单里没有「轮次 / 模型」行,取不到轮名($ORIG)—— 显式给 --round <原轮名>(不带 -续)"
-  STEPS="$RDIR/.steps-$RROUND.md"
+  STEPS=$(flow_round_file "$RDIR" "$RROUND" steps)
   if [ -f "$STEPS" ]; then
     LAST=$(flow-step show "$RDIR" "$RROUND" | tail -1)
     case "$LAST" in "STEPS DONE"*) flow_die "步骤账已全勾($LAST)—— 不是断点,是收工;走 flow-round close" ;; esac
@@ -81,7 +81,7 @@ if [ "${1:-}" = "--resume" ]; then
   else
     # 1.0.0 / A3:②③④ 没有步骤账,接手点从回件已落的节头与 flow-ev 的账生成。回件一个字没落就从头 —— 那本来就没有断点
     RH=$(flow_find_handoff "$RDIR" "$RROUND")
-    RLOG="$RDIR/.evidence/$RROUND-log.tsv"; nlog=0; [ -f "$RLOG" ] && nlog=$(grep -c . "$RLOG" || true)
+    RLOG=$(flow_round_file "$RDIR" "$RROUND" log); nlog=0; [ -f "$RLOG" ] && nlog=$(grep -c . "$RLOG" || true)
     if [ -n "$RH" ]; then
       have=""; lack=""
       for sec in 〇 甲栏 乙栏 丙栏 丁栏 戊栏; do
@@ -170,7 +170,7 @@ if [ -n "$DIR" ]; then
   [ -d "$DIR" ] || flow_die "--dir 流程目录不存在: $DIR"
   [ -n "$ROUND" ] || flow_die "--dir 必须与 --round 同给(约定文件名按轮名派生)"
   flow_check_flow_dir "$DIR"   # 1.0.4:以 - 开头的残件当场 FATAL(0 字节件静默跳过 —— 本命令的输出件在起进程前就已是 0 字节)
-  mkdir -p "$DIR/.evidence"
+  mkdir -p "$(flow_round_file "$DIR" "$ROUND" evdir)"
 fi
 
 TMP=$(mktemp -d "$(flow_tmpdir)/flow-dispatch.XXXXXX") || exit 2
@@ -213,7 +213,7 @@ if [ -n "$DIR" ]; then
   { echo "# 写权限面 · $ROUND(flow-dispatch 生成 $(date +%F);= 派单里的触面路径,一行一条)"
     echo "# flow-micro --face 按它判微改 patch 的路径是否面内;编排方要扩面得以裁决显式扩,别在这里手加"
     for p in "$@"; do printf '%s\n' "$p"; done
-  } > "$DIR/.face-$ROUND.txt"
+  } > "$(flow_round_file "$DIR" "$ROUND" face)"
 fi
 
 # 写权限面的散文行(0.9.0)也从同一组 "$@" 印:P3-4 的许写面是编排方手写的,与 .face 零互校,漏了 apps/web/test/ 三轮没人量。
@@ -288,21 +288,22 @@ if [ "$DB" = 独占 ]; then
 else
   GATELINE="库权限 $DB:门整跑不归你 —— 不跑 flow-gates --reset / dbreset / 集成;要读数引上一轮 .evidence/*-gates.txt 的末行"
 fi
+BASENAME_=""; [ -n "$DIR" ] && BASENAME_=$(basename "$(flow_round_file "$DIR" "$ROUND" baseline)")   # 1.0.5 / A6:印进派单的约定名与 flow-round 同源
 ROOTLINE=""; [ -n "$DIR" ] && ROOTLINE="(基线打在 root \`$(git -C "$FLOW_REPO_DIR" rev-parse --show-toplevel)\`)"
 if [ -n "$DIR" ]; then
   case "$TREE" in
     快照*)
       PREV=$(ls -t "$DIR"/.after-*-hashes.txt 2>/dev/null | head -1); [ -n "$PREV" ] || PREV="<上一轮 .after-*-hashes.txt>"
       FREEZELINE="- **判据命令一律经 flow-ev**:\`$EVCMD\`(仓根跑:单串经 bash -c,多实参直接 exec,要管道写单串;全量落 .evidence/$ROUND-<名>.txt,账记 .evidence/$ROUND-log.tsv,屏上只印末 20 行 + RC;逐行判的扫描加 \`--show all\`;一个名一份证据,重名 FATAL)
-- **树核对**:开工与收工各一次 \`$SHACHK $PREV | grep -vc ': OK\$'\`(应为 0:你的副本与上一轮交付态同构;基线 \`.manifest-baseline-$ROUND.txt\` 由编排方在活树打$ROOTLINE,verify 归编排方,副本里不跑)
+- **树核对**:开工与收工各一次 \`$SHACHK $PREV | grep -vc ': OK\$'\`(应为 0:你的副本与上一轮交付态同构;基线 \`$BASENAME_\` 由编排方在活树打$ROOTLINE,verify 归编排方,副本里不跑)
 - **收工件只有回件**:申报与冻结由编排方 \`flow-round close\` 从回件〇表派生(审轮零改动,〇是正面结论);$GATELINE" ;;
     *)
       FREEZELINE="- **判据命令一律经 flow-ev**:\`$EVCMD\`(仓根跑:单串经 bash -c,多实参直接 exec,要管道写单串;全量落 .evidence/$ROUND-<名>.txt,账记 .evidence/$ROUND-log.tsv,屏上只印末 20 行 + RC;逐行判的扫描加 \`--show all\`;一个名一份证据,重名 FATAL)
-- **收工件只有回件**:申报清单 = 回件〇表第二列的路径(每个实改文件 ≥ 1 行;例外列写 \`裁决-N\`),冻结与 verify(含测试锁 · 假话门 · 越面)由编排方 \`flow-round close\` 跑;基线 \`.manifest-baseline-$ROUND.txt\` 由 \`flow-round open\` 打$ROOTLINE(不存在就停,别自己打);$GATELINE" ;;
+- **收工件只有回件**:申报清单 = 回件〇表第二列的路径(每个实改文件 ≥ 1 行;例外列写 \`裁决-N\`),冻结与 verify(含测试锁 · 假话门 · 越面)由编排方 \`flow-round close\` 跑;基线 \`$BASENAME_\` 由 \`flow-round open\` 打$ROOTLINE(不存在就停,别自己打);$GATELINE" ;;
   esac
   case "$ROUND" in
     ①写*) FREEZELINE="$FREEZELINE
-- **步骤账**:\`$DIR/.steps-$ROUND.md\`(每完成一步 \`flow-step done $DIR $ROUND <N> \"<一句>\"\`;中断时续轮从第一个未勾步骤接手)" ;;
+- **步骤账**:\`$(flow_round_file "$DIR" "$ROUND" steps)\`(每完成一步 \`flow-step done $DIR $ROUND <N> \"<一句>\"\`;中断时续轮从第一个未勾步骤接手)" ;;
   esac
 else
   FREEZELINE="- **判据命令一律经 flow-ev**:\`flow-ev <流程目录> <轮名> <名> -- <命令>\`;收工件只有回件(申报与冻结由编排方 flow-round close 派生)
@@ -351,7 +352,7 @@ if [ -n "$DIR" ]; then
 fi
 
 # 步骤账:--dir 给了、是 ①写 且尚无账就建(按 open REQ 一条一步);1.0.0 起 ②③④ 不建 —— 它们的四步是固定文案不是断点,续轮从回件读
-if [ -n "$DIR" ] && [ ! -f "$DIR/.steps-$ROUND.md" ] && [ "${ROUND#①写}" != "$ROUND" ]; then
+if [ -n "$DIR" ] && [ ! -f "$(flow_round_file "$DIR" "$ROUND" steps)" ] && [ "${ROUND#①写}" != "$ROUND" ]; then
   STEPARGS="$TMP/steps"; : > "$STEPARGS"
   case "$ROUND" in
     ①写*)

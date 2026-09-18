@@ -21,7 +21,7 @@ CMD="${1:-}"; DIR="${2:-}"; ROUND="${3:-}"
 case "$DIR" in /*) ;; *) flow_die "流程目录须绝对路径: $DIR" ;; esac
 [ -d "$DIR" ] || flow_die "流程目录不存在: $DIR"
 shift 3
-F="$DIR/.steps-$ROUND.md"
+F=$(flow_round_file "$DIR" "$ROUND" steps)
 
 count_lines() {   # 打印 "已勾 总数 下一步号 下一步文字"
   LC_ALL=C awk -v F="$F" '

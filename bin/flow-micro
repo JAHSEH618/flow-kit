@@ -76,7 +76,7 @@ if [ "$APPLY" = 1 ]; then
   case "$VERDICT" in ''|*[!0-9]*) flow_die "--apply 必须同给 --verdict <裁决号(数字)>:落笔占裁决号,追进申报清单的行尾与冻结件备份名都要它" ;; esac
   if [ -z "$DECLARED" ]; then
     # 冻结件与申报清单按约定名配对:.after-<轮名>-hashes.txt ↔ .declared-<轮名>.txt(flow-round 两侧同源)
-    DECLARED=$(printf '%s' "$FREEZE" | sed -n 's|/\.after-\(.*\)-hashes\.txt$|/.declared-\1.txt|p')
+    case "$(basename "$FREEZE")" in .after-*-hashes.txt) DECLARED=$(flow_round_file "$(dirname "$FREEZE")" "$(flow_round_of "$FREEZE")" declared) ;; *) DECLARED="" ;; esac   # 1.0.5 / A6:配对经 lib
     [ -n "$DECLARED" ] || flow_die "--freeze 不是约定名 .after-<轮名>-hashes.txt,推不出配对的申报清单;显式给 --declared <申报清单(绝对)>"
   fi
   case "$DECLARED" in /*) ;; *) flow_die "--declared 须绝对路径: $DECLARED" ;; esac

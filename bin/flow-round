@@ -50,7 +50,7 @@ if [ "$CMD" != state ]; then
     case "$1" in --task) TASK="$2"; shift 2 ;; --plan) PLAN="$2"; shift 2 ;; *) flow_die "未知参数 $1" ;; esac
   done
 fi
-EV="$DIR/.evidence"; mkdir -p "$EV"
+EV=$(flow_round_file "$DIR" _ evdir); mkdir -p "$EV"
 red=0; step=0
 hdr() { step=$((step+1)); echo "== $step. $1 =="; }
 
@@ -117,18 +117,18 @@ gen_state() {
       dcell="—"; [ -n "$d" ] && dcell="$d $(kb "$DIR/$d")$dg"
       rsm=$(find_resume "$r"); [ -n "$rsm" ] && dcell="$dcell · 续 $rsm"
       hcell="—"; [ -n "$h" ] && hcell="$h $(kb "$DIR/$h")$hg"
-      if [ -f "$DIR/.steps-$r.md" ]; then scell=$(flow-step show "$DIR" "$r" 2>/dev/null | tail -1 | sed -e 's/^STEPS OK: //' -e 's/^STEPS DONE: //' -e 's/ · 下一步.*//')
+      if [ -f "$(flow_round_file "$DIR" "$r" steps)" ]; then scell=$(flow-step show "$DIR" "$r" 2>/dev/null | tail -1 | sed -e 's/^STEPS OK: //' -e 's/^STEPS DONE: //' -e 's/ · 下一步.*//')
       else case "$r" in ①写*) scell="无" ;; *) scell="—" ;; esac; fi   # 1.0.0:②③④ 不建步骤账,格子留横线不留「无」
       fcell=""
-      if [ -f "$DIR/.after-$r-hashes.txt" ]; then fcell="after ✓"
+      if [ -f "$(flow_round_file "$DIR" "$r" after)" ]; then fcell="after ✓"
       else case "$(tree_of "$r")" in 快照*) fcell="after ⊘快照不冻" ;; *) fcell="after ✗" ;; esac; fi   # 1.0.4:快照轮 close 不冻,格子说清不是漏冻
-      [ -f "$DIR/.declared-$r.txt" ] && fcell="$fcell declared ✓" || fcell="$fcell declared ✗"
+      [ -f "$(flow_round_file "$DIR" "$r" declared)" ] && fcell="$fcell declared ✓" || fcell="$fcell declared ✗"
       # 门读数只认**约定的那一个**件名(0.8.2)。从前是 glob `"$r"-*gates*.txt`:`①写-` 前缀吃到了 `①写-续-gates.txt`,
       # 于是 ①写 那行印着一次它根本没跑过的 PASS(该轮门整跑 0 次)。派单印进去的名字就是 `<轮名>-gates.txt`,按名取,取不到就是「没跑」。
       # 末行也不再 `cut -c1-60`:那一刀把 out= 路径切成半截,既没用也违 §J 硬规矩①;要短就整段去掉 out=,别切字节。
       # 0.9.0:只删 `out=<路径>` 那一个词。0.8.2 写成 `s/ out=.*//` 把后面的 `(cached…)` 一并删了 ⟹ 状态档里缓存命中与整跑同型,
       #   编排方从状态档看不出「这轮门根本没跑」(P3-4 四个审轴把上一轮读数报成自己的,状态档没给过一点提示)。
-      g="$EV/$r-gates.txt"
+      g=$(flow_round_file "$DIR" "$r" gates)
       gcell="—"
       if [ -f "$g" ]; then
         gcell=$(LC_ALL=C grep -E '^FLOW-GATES' "$g" | tail -1 | sed 's/ out=[^ ]*//')
@@ -165,7 +165,7 @@ open)
   case "$ROUND" in
     *-续) flow_die "轮名不许带 -续(得到「${ROUND}」)—— 续轮不开新轮:直接 flow-dispatch --resume <原派单> --dir $DIR(轮名它自己从原派单取),收工时仍 flow-round close <原轮名>" ;;
   esac
-  BASE="$DIR/.manifest-baseline-$ROUND.txt"
+  BASE=$(flow_round_file "$DIR" "$ROUND" baseline)
   hdr "flow-fact-lint verify(F-13:落位段自带的 RED 在这里炸,不潜到写轮)"
   if [ -z "$FLOW_FACT_LINT_ROOTS" ]; then echo "  跳过:FLOW_FACT_LINT_ROOTS 未配置"
   elif [ ! -f "$FLOW_FACT_LINT_BASELINE_PATH" ]; then echo "  跳过:基线不存在 $FLOW_FACT_LINT_BASELINE_PATH(先 flow-fact-lint baseline)"
@@ -194,7 +194,7 @@ open)
   flow-doc-budget "$DIR" > "$EV/$ROUND-open-budget.txt" 2>&1; rc=$?
   LC_ALL=C grep -E '^RED|^FATAL|^WARN' "$EV/$ROUND-open-budget.txt"; echo "RC=$rc"; [ "$rc" = 0 ] || red=1
   hdr "步骤账 .steps-$ROUND.md(1.0.0:只 ①写 建;②③④ 的断点从回件已落的节读)"
-  if [ -f "$DIR/.steps-$ROUND.md" ]; then flow-step show "$DIR" "$ROUND" | tail -1
+  if [ -f "$(flow_round_file "$DIR" "$ROUND" steps)" ]; then flow-step show "$DIR" "$ROUND" | tail -1
   else case "$ROUND" in ①写*) echo "  WARN:无步骤账 —— flow-dispatch --dir 会建;没有它 ①写 就没有按 REQ 的断点" ;; *) echo "  info ②③④ 不建步骤账(--resume 从回件节头与 log.tsv 生成接手点)" ;; esac; fi
   hdr "状态档事实段"; gen_state
   if [ "$red" = 0 ]; then echo "ROUND-OPEN OK: $ROUND(基线 $(basename "$BASE") 打在 $(git -C "$FLOW_REPO_DIR" rev-parse --show-toplevel);此后编排方对仓内文件零编辑;verify 只许在这棵树跑)"; exit 0; else echo "ROUND-OPEN RED: $ROUND"; exit 1; fi ;;
@@ -202,7 +202,7 @@ close)
   case "$ROUND" in
     *-续) flow_warn "轮名带 -续(「${ROUND}」):续轮本不该单开一轮(0.8.2 起 flow-round open 判死)。这里照收,只是这一轮的读数是半轮的" ;;
   esac
-  BASE="$DIR/.manifest-baseline-$ROUND.txt"; DECL="$DIR/.declared-$ROUND.txt"; AFTER="$DIR/.after-$ROUND-hashes.txt"
+  BASE=$(flow_round_file "$DIR" "$ROUND" baseline); DECL=$(flow_round_file "$DIR" "$ROUND" declared); AFTER=$(flow_round_file "$DIR" "$ROUND" after)
   [ -f "$BASE" ] || flow_die "基线缺失: $BASE(flow-round open 打的;没开过工的轮收不了)"
   case "$ROUND" in ②*|④*) AXIS=1 ;; *) AXIS=0 ;; esac   # 审轮:〇是正面结论不是表;log 必须非空
   h=$(find_handoff "$ROUND"); HP=""; [ -n "$h" ] && HP="$DIR/$h"
@@ -237,7 +237,7 @@ close)
   set -- "$DIR" "$BASE" "$DECL" --this "$THIS"
   [ -n "$TASK" ] && set -- "$@" --task "$TASK"
   [ -n "$PLAN" ] && set -- "$@" --plan "$PLAN"
-  [ -f "$DIR/.face-$ROUND.txt" ] && set -- "$@" --face "$DIR/.face-$ROUND.txt"   # 0.9.0 越面:面由 flow-dispatch --dir 落,按约定名传
+  FACE_=$(flow_round_file "$DIR" "$ROUND" face); [ -f "$FACE_" ] && set -- "$@" --face "$FACE_"   # 0.9.0 越面:面由 flow-dispatch --dir 落,按约定名传
   [ "$SNAP" = 1 ] && set -- "$@" --snapshot
   flow-close --between "$@" > "$EV/$ROUND-close-between.txt" 2>&1; rc=$?
   LC_ALL=C grep -E '^== |^RED|^FATAL|^BETWEEN|^OK=|^info |RC=' "$EV/$ROUND-close-between.txt" | sed 's/^/  /'
@@ -253,7 +253,7 @@ close)
     else echo "  跳过:between 红了,树不是交付态,不冻(修完重跑 close)"; fi
   fi
   hdr "步骤账(只 ①写;②③④ 为 info)"
-  if [ -f "$DIR/.steps-$ROUND.md" ]; then
+  if [ -f "$(flow_round_file "$DIR" "$ROUND" steps)" ]; then
     last=$(flow-step show "$DIR" "$ROUND" | tail -1); echo "  $last"
     case "$ROUND" in
       ①写*) case "$last" in "STEPS DONE"*) ;; *) echo "  RED:步骤账未全勾 —— 要么 agent 没收工,要么漏勾;先核回件再定"; red=1 ;; esac ;;
@@ -293,7 +293,7 @@ close)
       echo "       (判的不是你写了多少,是下游每一轮要重读多少;全文多长不在这条线上)"; red=1
     fi
     # —— 1.0.0 / A2:甲栏由 flow-ev 的账生成,回件只留判词 ——
-    LOG="$EV/$ROUND-log.tsv"
+    LOG=$(flow_round_file "$DIR" "$ROUND" log)
     nlog=0; [ -f "$LOG" ] && nlog=$(grep -c . "$LOG" || true)
     if [ "$nlog" = 0 ]; then
       if [ "$AXIS" = 1 ]; then echo "  RED:审轮零条 flow-ev 账($LOG 不存在或为空)—— 判据命令一律经 flow-ev 跑,甲栏才有账可指;没跑过一条命令的审查不是审查"; red=1

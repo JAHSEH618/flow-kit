@@ -24,6 +24,12 @@ expect_rc() { # $1 期望 RC  $2 描述  $3.. 命令
 # A1:`$VAR` 后紧跟非 ASCII 字符 ⟹ 必须写 `${VAR}`;命中数只许为 0(perl 按字节扫,与 locale 无关;本文件也扫 —— set -u 下它会让 smoke 半途 abort)
 n_=$(perl -ne 'print "$ARGV:$.\n" while /\$[A-Za-z_][A-Za-z0-9_]*(?=[\x80-\xff])/g' "$KIT"/bin/* "$KIT"/lib/*.sh "$KIT"/tests/*.sh | wc -l | tr -d ' ')
 [ "$n_" = 0 ] && ok "bin/lib/tests 里 \$VAR 后紧跟非 ASCII 的写法 0 处(棘轮:写 \${VAR})" || { fail "bin/lib/tests 里 $n_ 处 \$VAR 后紧跟非 ASCII 字符(bash 3.2 UTF-8 下吃进变量名),改成 \${VAR}:"; perl -ne 'print "     $ARGV:$.\n" while /\$[A-Za-z_][A-Za-z0-9_]*(?=[\x80-\xff])/g' "$KIT"/bin/* "$KIT"/lib/*.sh "$KIT"/tests/*.sh; }
+# A6:轮级约定文件名只在 lib flow_round_file 一处拼;bin/lib 里 `"$VAR/.(after|declared|manifest-baseline|face|steps)-` 的代码形命中数只许为 0(注释不算;枚举 glob `"$DIR"/.after-*` 不在此形)
+n_=$(grep -nE '"\$[A-Za-z_]+/\.(after|declared|manifest-baseline|face|steps)-' "$KIT"/bin/* "$KIT"/lib/*.sh | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | wc -l | tr -d ' ')
+[ "$n_" = 0 ] && ok "bin/lib 里字面拼约定文件名的代码形 0 处(棘轮:经 flow_round_file)" || { fail "bin/lib 里 $n_ 处字面拼约定文件名,改调 flow_round_file:"; grep -nE '"\$[A-Za-z_]+/\.(after|declared|manifest-baseline|face|steps)-' "$KIT"/bin/* "$KIT"/lib/*.sh | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | sed 's/^/     /'; }
+# lib 单测:八种约定名与反向取轮名
+rf=$(sh -c ". '$KIT/lib/flow-lib.sh'; for k in baseline declared after face steps log gates evdir; do flow_round_file /d ②B \$k; done; flow_round_of /d/.after-①写-hashes.txt; flow_round_of /d/.declared-③改.txt; flow_round_of /d/x.md || echo none" 2>&1 | tr '\n' ' ')
+[ "$rf" = "/d/.manifest-baseline-②B.txt /d/.declared-②B.txt /d/.after-②B-hashes.txt /d/.face-②B.txt /d/.steps-②B.md /d/.evidence/②B-log.tsv /d/.evidence/②B-gates.txt /d/.evidence ①写 ③改 none " ] && ok "flow_round_file 八种 + flow_round_of 反向" || fail "flow_round_file 错: $rf"
 
 # ── 1. 建仓 + init ──
 WS="$T/ws"; mkdir -p "$WS/src" "$WS/specs"
