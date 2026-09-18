@@ -1554,4 +1554,72 @@ grep -q '⚠glob猜' "$F28/00-ORCH-STATE.md" && fail "链9 状态档有 ⚠glob�
 [ -z "$( ( cd "$F28" && for m in ./-*; do [ -e "$m" ] && printf '%s' "$m"; done ) )" ] && ok "链9 目录零个以 - 开头的件" || fail "链9 有残件: $(ls -a "$F28" | grep '^-')"
 rm -f "$WS/specs/plan28.md"; git checkout -q -- . 2>/dev/null
 
+# ── 28. 1.1.0 / B2 + B3:微改通道收生产行(FLOW_MICRO_PROD_LINES)· 落笔后 kit 复跑 oracle(repro 头 → RC=<n> [末行含 <子串>])──
+cd "$WS"
+git checkout -q -- . 2>/dev/null; git add -A >/dev/null 2>&1; git commit -qm 'r110 起点' >/dev/null 2>&1
+F29="$WS/.flow/r110"; mkdir -p "$F29/.evidence"
+printf '# 面\nsrc\n' > "$F29/.face-①写.txt"
+M9="$T/micro110"; mkdir -p "$M9"
+printf 'export const p1 = 1;\nexport const p2 = 2;\nexport const p3 = 3;\n' >> src/a.ts
+{ printf "# repro: grep -c 'export const p' src/a.ts → RC=0 末行含 3\n# ev:unit\n"; git -c core.quotepath=false diff -- src/a.ts; } > "$M9/prod-ok.patch"
+{ printf "# ev:unit\n"; git -c core.quotepath=false diff -- src/a.ts; } > "$M9/prod-norepro.patch"
+{ printf "# repro: grep -c 'export const p' src/a.ts → 期望 3\n# ev:unit\n"; git -c core.quotepath=false diff -- src/a.ts; } > "$M9/prod-oldrepro.patch"
+{ printf "# repro: grep -c 'export const p' src/a.ts → RC=0\n"; git -c core.quotepath=false diff -- src/a.ts; } > "$M9/prod-noev.patch"
+{ printf "# repro: grep -c 'export const p' src/a.ts → RC=1\n# ev:unit\n"; git -c core.quotepath=false diff -- src/a.ts; } > "$M9/prod-badrc.patch"
+{ printf "# repro: grep -c 'export const p' src/a.ts → RC=0 末行含 99\n# ev:unit\n"; git -c core.quotepath=false diff -- src/a.ts; } > "$M9/prod-badsub.patch"
+git checkout -q -- src/a.ts
+# 默认 0 = 关:生产条 RED,末行体例与 1.0.x 一致
+expect_rc 1 "flow-micro 生产 patch,FLOW_MICRO_PROD_LINES=0 ⟹ RED(旧行为)" flow-micro "$M9/prod-ok.patch" --face "$F29/.face-①写.txt"
+printf '%s' "$LAST_OUT" | grep -q '^MICRO RED: 生产 1 条 · 面外 0 条 · 新增 非测试 0 · 测试 0 行(上限 16 只数非测试)' && ok "通道关着:末行体例不变(无生产桶)" || fail "关着时末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+printf 'FLOW_MICRO_PROD_LINES=16\n' >> "$WS/.claude/flow.config.sh"
+expect_rc 0 "flow-micro 生产 3 行 + repro(→ RC=)+ ev ⟹ MICRO OK(B2)" flow-micro "$M9/prod-ok.patch" --face "$F29/.face-①写.txt"
+printf '%s' "$LAST_OUT" | grep -q '^ok   src/a.ts  +3 -0  生产 · 面内(patch 里有 3 条非注释改动行;repro + ev 头齐,生产行经 ④ 复审)' && ok "生产条头齐 ⟹ ok 行点明去向 ④" || fail "生产 ok 行错: $(printf '%s' "$LAST_OUT" | grep 'src/a.ts')"
+printf '%s' "$LAST_OUT" | grep -q '^MICRO OK: 新增 非测试 0 · 测试 0 · 生产 3 行(上限 16 只数非测试)· 文件 1(生产 1 条 · 全面内)—— .* ⟹ 生产 3 行 ⟹ 须派 ④(面 = 申报里的 prod 行)$' && ok "末行印生产桶 + 「须派 ④」" || fail "末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+expect_rc 1 "flow-micro 生产条缺 repro 头 ⟹ RED" flow-micro "$M9/prod-norepro.patch" --face "$F29/.face-①写.txt"
+printf '%s' "$LAST_OUT" | grep -q 'RED  src/a.ts .*patch 头缺 # repro —— 生产条要机械 oracle 才收' && ok "点名缺 repro" || fail "缺 repro 未点名: $(printf '%s' "$LAST_OUT" | grep 'src/a.ts')"
+printf '%s' "$LAST_OUT" | grep -q '^MICRO RED: 生产 1 条(头不齐 1)' && ok "RED 末行印头不齐数" || fail "RED 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+expect_rc 1 "flow-micro 生产条缺 ev 头 ⟹ RED" flow-micro "$M9/prod-noev.patch" --face "$F29/.face-①写.txt"
+printf '%s' "$LAST_OUT" | grep -q 'patch 头缺 # ev —— ' && ok "点名缺 ev" || fail "缺 ev 未点名: $(printf '%s' "$LAST_OUT" | grep 'src/a.ts')"
+expect_rc 1 "flow-micro 生产条 repro 旧体例(→ 期望)⟹ RED(B3 复跑不了)" flow-micro "$M9/prod-oldrepro.patch" --face "$F29/.face-①写.txt"
+printf '%s' "$LAST_OUT" | grep -q 'patch 头缺 # repro体例(须 → RC=<n>)' && ok "旧体例 repro 在生产条上判死" || fail "旧体例未判: $(printf '%s' "$LAST_OUT" | grep 'src/a.ts')"
+printf 'FLOW_MICRO_PROD_LINES=2\n' >> "$WS/.claude/flow.config.sh"
+expect_rc 1 "flow-micro 生产 3 行 > 上限 2 ⟹ RED" flow-micro "$M9/prod-ok.patch" --face "$F29/.face-①写.txt"
+printf '%s' "$LAST_OUT" | grep -q '^RED  生产新增合计 3 行 > 上限 2(FLOW_MICRO_PROD_LINES;生产行单列一桶' && ok "生产桶单独判上限" || fail "生产上限未判: $(printf '%s' "$LAST_OUT" | grep 合计)"
+sed -i.bak '/FLOW_MICRO_PROD_LINES=2/d' "$WS/.claude/flow.config.sh"; rm -f "$WS/.claude/flow.config.sh.bak"
+# B3:--apply 落笔后复跑 oracle;不符 ⟹ 整流回退、无 .pre、申报不动
+printf 'dirty\n' >> src/b.ts
+expect_rc 0 "flow-freeze(B3 前交付态)" flow-freeze "$F29/.after-②B-hashes.txt"
+printf '# declared · ②B\nsrc/b.ts\n' > "$F29/.declared-②B.txt"
+expect_rc 1 "flow-micro --apply repro 期望 RC=1 而实 RC=0 ⟹ MICRO RED oracle 不符" flow-micro "$M9/prod-badrc.patch" --face "$F29/.face-①写.txt" --freeze "$F29/.after-②B-hashes.txt" --apply --verdict 21
+printf '%s' "$LAST_OUT" | grep -q 'RED  ev:micro-21-1 RC=0 ≠ 期望 1' && ok "oracle RC 不符点名 ev 名与两侧读数" || fail "oracle 判错: $(printf '%s' "$LAST_OUT" | grep -E 'ev:|oracle')"
+printf '%s' "$LAST_OUT" | grep -q '^MICRO RED: oracle 不符 1 条 —— patch 已整流回退' && ok "末行 MICRO RED: oracle 不符" || fail "末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+git status --porcelain -- src/a.ts | grep -q . && fail "oracle 不符却没回退(src/a.ts 仍脏)" || ok "git apply -R:树回到 apply 前"
+[ ! -f "$F29/.after-②B-hashes.txt.pre-21" ] && ok "不符时无 .pre-21(冻结件未动)" || fail "不符却备份了冻结件"
+grep -q 'src/a.ts' "$F29/.declared-②B.txt" && fail "不符却追加了申报" || ok "不符时申报不动"
+[ -f "$F29/.evidence/微改-micro-21-1.txt" ] && grep -q '^micro-21-1	0	3	' "$F29/.evidence/微改-log.tsv" && ok "oracle 全量落 .evidence/微改-micro-21-1.txt,账在 微改-log.tsv" || fail "oracle 证据缺: $(ls "$F29/.evidence"; cat "$F29/.evidence/微改-log.tsv" 2>/dev/null)"
+expect_rc 1 "flow-micro --apply 末行含 不符 ⟹ RED(同号重跑不烧名)" flow-micro "$M9/prod-badsub.patch" --face "$F29/.face-①写.txt" --freeze "$F29/.after-②B-hashes.txt" --apply --verdict 21
+printf '%s' "$LAST_OUT" | grep -q 'RED  ev:micro-21-1-r2 RC=0 ≠ 期望 0 / 末行「3」须含「99」' && ok "末行子串判到;同一裁决号第二次跑名带 -r2" || fail "末行子串判错: $(printf '%s' "$LAST_OUT" | grep 'ev:')"
+expect_rc 0 "flow-micro --apply 生产 patch oracle 全符 ⟹ 落笔(B2 + B3)" flow-micro "$M9/prod-ok.patch" --face "$F29/.face-①写.txt" --freeze "$F29/.after-②B-hashes.txt" --apply --verdict 22
+printf '%s' "$LAST_OUT" | grep -q 'ok   ev:micro-22-1 RC=0 = 期望 · 末行含「3」' && ok "oracle 全符逐条印 ok" || fail "oracle ok 行错: $(printf '%s' "$LAST_OUT" | grep 'ev:')"
+grep -q '^src/a.ts  # 裁决-22 micro prod$' "$F29/.declared-②B.txt" && ok "申报行尾 # 裁决-22 micro prod(prod 词由 kit 打)" || fail "申报 prod 行错: $(cat "$F29/.declared-②B.txt")"
+printf '%s' "$LAST_OUT" | grep -q '^MICRO OK: 已落笔(裁决-22)· 新增 非测试 0 · 测试 0 · 生产 3 行.*· oracle 已复跑 · 冻结件已重打(旧件 .pre-22)· 申报已追加 ⟹ 生产 3 行 ⟹ 须派 ④' && ok "落笔末行:oracle 已复跑 + 须派 ④,不再让人手跑" || fail "落笔末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+grep -q 'export const p3 = 3;' src/a.ts && [ -f "$F29/.after-②B-hashes.txt.pre-22" ] && ok "patch 真落了 · .pre-22 在" || fail "落笔收尾缺"
+rows9=$(sh -c ". '$KIT/lib/flow-lib.sh'; flow_declared_rows '$F29/.declared-②B.txt'" | grep '^src/a.ts' | tr '\t' '|')
+[ "$rows9" = 'src/a.ts|22|裁决-22 micro prod' ] && ok "lib rows 把 prod 词原样带出(B4 / flow-batch 靠它判)" || fail "rows 错: $rows9"
+# 非生产 patch:无复现头 ⟹ info 零 oracle 照落;旧体例 repro ⟹ WARN 原样印;申报不带 prod 词
+git add -A >/dev/null 2>&1; git commit -qm 'r110 mid' >/dev/null 2>&1; printf 'dirty2\n' >> src/b.ts
+flow-freeze "$F29/.after-②B-hashes.txt" >/dev/null 2>&1
+printf 'export const t2 = 2;\n' >> src/x.test.ts; { printf '# repro: grep -c t2 src/x.test.ts → 期望 1\n'; git -c core.quotepath=false diff -- src/x.test.ts; } > "$M9/test-old.patch"; git checkout -q -- src/x.test.ts
+expect_rc 0 "flow-micro --apply 非生产条旧体例 repro ⟹ WARN 原样印,照落" flow-micro "$M9/test-old.patch" --face "$F29/.face-①写.txt" --freeze "$F29/.after-②B-hashes.txt" --apply --verdict 23
+printf '%s' "$LAST_OUT" | grep -q 'WARN 旧体例(不是 → RC=<n>),机械复跑不了,原样给人:# repro: grep -c t2' && ok "旧体例 repro 在非生产条上只 WARN" || fail "旧体例处置错: $(printf '%s' "$LAST_OUT" | grep -E 'WARN|repro')"
+grep -q '^src/x.test.ts  # 裁决-23 micro$' "$F29/.declared-②B.txt" && ok "非生产行不带 prod 词" || fail "非生产行错: $(grep x.test "$F29/.declared-②B.txt")"
+# 同一生产路径再落一次:号累加 + prod 词不重复
+git add -A >/dev/null 2>&1; git commit -qm 'r110 mid2' >/dev/null 2>&1; printf 'dirty3\n' >> src/b.ts
+flow-freeze "$F29/.after-②B-hashes.txt" >/dev/null 2>&1
+printf 'export const p4 = 4;\n' >> src/a.ts; { printf "# repro: grep -c 'export const p' src/a.ts → RC=0 末行含 4\n# ev:unit\n"; git -c core.quotepath=false diff -- src/a.ts; } > "$M9/prod-ok2.patch"; git checkout -q -- src/a.ts
+expect_rc 0 "flow-micro --apply 同一生产路径第二次(累加号)" flow-micro "$M9/prod-ok2.patch" --face "$F29/.face-①写.txt" --freeze "$F29/.after-②B-hashes.txt" --apply --verdict 24
+grep -q '^src/a.ts  # 裁决-22,24 micro prod$' "$F29/.declared-②B.txt" && [ "$(grep -c 'prod' "$F29/.declared-②B.txt")" = 1 ] && ok "累加成 裁决-22,24,prod 词只一个" || fail "累加 / prod 错: $(cat "$F29/.declared-②B.txt")"
+sed -i.bak '/FLOW_MICRO_PROD_LINES=16/d' "$WS/.claude/flow.config.sh"; rm -f "$WS/.claude/flow.config.sh.bak"
+git checkout -q -- . 2>/dev/null; git add -A >/dev/null 2>&1; git commit -qm 'r110 end' >/dev/null 2>&1
+
 [ "$red" = 0 ] && { echo "SMOKE OK"; exit 0; } || { echo "SMOKE RED"; exit 1; }

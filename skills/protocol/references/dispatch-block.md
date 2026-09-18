@@ -55,9 +55,10 @@ gitignore 件手工拷进副本;引证 spec 一律读主树,差异当 finding �
 ## 审轮丙栏的 patch(② 与 ④ 都适用;照 ②A ‖ ②B 的形制,④A 静态审 · ④B 变异审)
 ④A:--tree 快照 --db 禁用;逐条验收 + 逐欠账三态表 + 分级,零变异。④B:--tree 活树-独占 --db 独占;复跑关键变异 + 对③〇表里新增 / 改的行段自设变异 + build / 集成,抄「变异纪律」块。
 两轴零共享推理,后写的不读先写的;分级取并集,阻塞项各经编排方转达回③,复验归提出那条的轴。
-微改通道:丙栏每条必闭附一份可 `git apply` 的 patch(落 `.evidence/<轮名>-micro-<裁决号>.patch`,头一行 `# repro: <命令> → 期望 <读数>`,
-正文 `git -c core.quotepath=false diff`)+ ev:<名>。行数与性质不由你估,由编排方 `flow-micro <patch>... --face .face-<写轮名>.txt` 从 patch 量(只数非测试新增行)。
-MICRO OK ⟹ 编排方 --apply 落笔 + 复跑你写的复现命令对读数,不回来找你;**没附 patch 的条目一律不算微改**。
+微改通道:丙栏每条必闭附一份可 `git apply` 的 patch(落 `.evidence/<轮名>-micro-<裁决号>.patch`,头两行 `# repro: <命令> → RC=<n> [末行含 <子串>]` 与 `# ev:<名>`,
+正文 `git -c core.quotepath=false diff`)。行数与性质不由你估,由编排方 `flow-micro <patch>... --face .face-<写轮名>.txt` 从 patch 量(只数非测试新增行;生产行单列一桶,上限 `FLOW_MICRO_PROD_LINES`,0 = 本仓不收生产行)。
+patch **可含生产行**:生产条的 repro / ev 头缺一即 RED;落笔归编排方,复审归 ④(写≠审:写 patch 的不复审它)。
+MICRO OK ⟹ 编排方 --apply 落笔,kit 复跑你写的 repro(RC / 末行子串任一不符整流回退),不回来找你;**没附 patch 的条目一律不算微改**。
 ④B 在活树上出 patch:`cp` 备份到 scratchpad → 改 → `git diff --no-index <备份> <文件>` → 头两行的备份路径换成 `a/<仓库相对路径>`(一条 sed)→ 从备份还原 + 冻结件 `shasum -c`,读数写进回件;快照轴同一招。别用裸 `git diff`:本批已改过的文件它印的是 HEAD 起的整段,编排方 apply 会撞已落的 hunk。
 
 ## 双模型对照(给某轴换模型前必做一批)

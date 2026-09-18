@@ -4,7 +4,8 @@
 判据命令一律经 `flow-ev`(派单给了连实参的写法):它落全量、记账;甲栏只留每条一行判词,丙栏每条引 `ev:<名>`。判据要全、话要短。
 **首行逐字写成 `# <轮名> 回件 · …`**(轮名取派单「轮次 / 模型」行的字面):`flow-round close` 按它认领,认不出 RED。
 **〇 节不许留占位**(被判停也写下当下实况;续轮在原位补全)。**〇 + 丙栏 有字节红线**(`FLOW_DOC_BUDGET_HOTPATH`,close 判):丙栏每条只留判据 + ev 名 + 期望读数 + 严重级 + patch 指针。
-审轮零改动,〇 是正面结论不是表;申报与冻结由编排方 `flow-round close` 派生,你不跑收工命令。
+审轮零改动(patch 落在 `.evidence/`,不落树),〇 是正面结论不是表;申报与冻结由编排方 `flow-round close` 派生,你不跑收工命令。
+**审轮出 patch 可含生产行**(上限 `FLOW_MICRO_PROD_LINES`,0 = 本仓不收):生产 patch 头必须齐 `# repro:` 与 `# ev:` 两行,落笔归编排方 `flow-micro`,复审归 ④(写≠审:写 patch 的不复审它)。
 
 ```
 # <轮名> 回件 · <一句话是哪条轴>
@@ -19,8 +20,9 @@
 - <名>:<一行判词>        ← 每条 flow-ev 一行,不多不少(close 判 判词行数 = log 行数);命令 / RC / 末行 / 路径都在账里,不抄
 ## 乙栏 · 未验推断(没有 flow-ev 账佐证的,一条都不许当结论用;核不了就写「核不了」)
 ## 丙栏 · 必闭(每条:判据 · ev:<名>(复现命令的账,那一行就是 oracle,写在改动之前)· 期望读数 · 严重级 · patch 指针)
-    patch 落 `<流程目录>/.evidence/<轮名>-micro-<裁决号>.patch`:头一行 `# repro: <命令> → 期望 <读数>`,正文 `git -c core.quotepath=false diff`;件内只留一行指针
-    编排方 `flow-micro <patch>... --face .face-<写轮名>.txt` 从 patch 量行数(只数非测试新增行)与性质;MICRO OK ⟹ 编排方落笔 + 复跑复现命令,不回来找你
+    patch 落 `<流程目录>/.evidence/<轮名>-micro-<裁决号>.patch`:头两行逐字 `# repro: <命令> → RC=<n> [末行含 <子串>]` 与 `# ev:<名>`,正文 `git -c core.quotepath=false diff`;件内只留一行指针
+    (repro 是机器跑的 oracle:命令在仓根经 bash -c 跑,比 RC,可选再比末行含某子串;`→ 期望 <读数>` 那种旧写法机器跑不了,生产条上直接 RED)
+    编排方 `flow-micro <patch>... --face .face-<写轮名>.txt` 从 patch 量行数(只数非测试新增行;生产行单列一桶)与性质;MICRO OK ⟹ 编排方落笔,kit 复跑你的 repro,不回来找你
     —— **没附 patch 的条目一律不算微改**;写不出 patch 本来就说明它不是微改,别硬写
 ## 丁栏 · CARRY(发现了但按触面纪律没做的;进下批派单前要先对树核)
 ## 戊栏 · 给 flow-local.md 的新实录(踩到就写)

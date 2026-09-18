@@ -90,6 +90,10 @@ flow_load_config() {
   FLOW_MICRO_FIX_LINES=16               # 微改通道:审轮(② 与 ④)必闭里非生产条的**非测试新增行合计**上限(1.0.0 / C2;测试行单列印出不计,删除行不计)。
                                         # 行数由 `flow-micro` 从审方附的 patch `git apply --numstat` 求和,不由审方估:P3-1 实测裁决-700 估 16 行 / 实做 55 行(偏 3.4×)。
                                         # 没附 patch 的条目一律不算微改,自动落回 ③
+  FLOW_MICRO_PROD_LINES=0               # 微改通道收**生产行**的上限(1.1.0 / B2;0 = 关,行为同 1.0.x:有生产条整批 RED)。设 16 开:
+                                        # kind=生产 的文件要 patch 头齐 `# repro: <命令> → RC=<n>` 与 `# ev:<名>`、面内、生产新增合计 ≤ 此数,三者齐才 ok,
+                                        # 申报行尾 `# 裁决-N micro prod`,末行印「生产 N 行 ⟹ 须派 ④」(④ 的面就是这些行);缺一 ⟹ RED 照旧走 ③。
+                                        # 病根:近 7 批 ③ 的生产改动 3 批 ≤ 10 行,且 patch 本来就是审方写的(p4x 5172 是 ②B 出的生产 patch),旧流程另开一个会话把它抄上树
   FLOW_STALL_SEC=300                    # flow-usage 卡顿判据:一次工具调用 ≥ 此秒数单列 WARN(harness 卡顿实测 600 s 整、两轴同刻放行)
   FLOW_RECEIPT_MODE="section"           # plan 体例:section = `## <任务号>` 小节;table = 任务是表行
   FLOW_TEST_GLOBS='*.test.ts *.test.tsx *.spec.ts *.spec.tsx'   # 测试文件模式(空格分隔的 glob)。两处共用:flow-trace 拿它当 git ls-files 的 pathspec、
@@ -126,7 +130,7 @@ flow_load_config() {
          FLOW_MAP_DEBT FLOW_MAP_DEBT_PATH FLOW_LOCAL_DOC FLOW_LOCAL_DOC_PATH \
          FLOW_FACT_LINT_BASELINE FLOW_FACT_LINT_BASELINE_PATH FLOW_FACT_LINT_ROOTS FLOW_FACT_LINT_EXCLUDE \
          FLOW_GATE_SUMMARY_RE FLOW_INFRA_FAIL_RE FLOW_INFRA_FAIL_GATES FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_BYTES FLOW_DOC_BUDGET_SELF FLOW_DOC_BUDGET_DIR FLOW_DOC_BUDGET_HOTPATH FLOW_DOC_BUDGET_RULEBOOK \
-         FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_FIX_BY_WRITER FLOW_FOLD_MAX FLOW_MERGE_STRATEGY FLOW_REQ_CAP FLOW_TURN_CAP FLOW_DISPATCH_EXCERPT_BYTES FLOW_MICRO_FIX_LINES FLOW_TEST_GLOBS FLOW_TEST_SKIP_RE FLOW_TEST_TITLE_RE FLOW_BARE_PATH_RE FLOW_STALL_SEC FLOW_ROLE_MODELS FLOW_TRANSCRIPTS_DIR \
+         FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_FIX_BY_WRITER FLOW_FOLD_MAX FLOW_MERGE_STRATEGY FLOW_REQ_CAP FLOW_TURN_CAP FLOW_DISPATCH_EXCERPT_BYTES FLOW_MICRO_FIX_LINES FLOW_MICRO_PROD_LINES FLOW_TEST_GLOBS FLOW_TEST_SKIP_RE FLOW_TEST_TITLE_RE FLOW_BARE_PATH_RE FLOW_STALL_SEC FLOW_ROLE_MODELS FLOW_TRANSCRIPTS_DIR \
          FLOW_RECEIPT_MARK_RE FLOW_KEEP_PLUGINS FLOW_KEEP_MCP
 }
 

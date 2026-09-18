@@ -33,12 +33,22 @@
 #     —— 量法与协议不同源。范围只在 注释 kind(生产恒 RED、测试不计),「删字伪装改语义」的口子只在文档 / 注释行。副本用 POSIX patch 不用 git apply(仓外路径)。
 #   · 申报清单里已有带裁决号的路径,再落一次微改 ⟹ 号**累加**成 `# 裁决-4703,4800 micro`,不再「已有,不追加」(第二个号丢了,派单里数出来的行数对不上)。
 #     三处消费者(flow-manifest 测试锁 / flow-close 越面与交付态 / lib 〇表)都只取首个号,向后兼容。
+# 1.1.0 两处改(TODO B2 / B3):
+#   · B2 通道收生产行:config `FLOW_MICRO_PROD_LINES`(默认 0 = 关,行为同上;设 16 开)。kind=生产 的文件不再直接 RED,三条齐才 ok:
+#     ① 触到它的每份 patch 头都有 `# repro: <命令> → RC=<n>` 与 `# ev:<名>` 两行(repro 须是 → RC= 体例,否则 B3 复跑不了)· ② 面内 · ③ 生产新增行合计 ≤ 上限。
+#     ok 的生产路径申报行尾写 `# 裁决-N micro prod`(flow-batch / flow-dispatch ④ 靠 `prod` 词判「树上落了生产改动 ⟹ 派 ④,面 = 这些路径」);
+#     末行加「生产 N 行 ⟹ 须派 ④」。缺一 ⟹ RED 照旧整批走 ③。生产行不进「非测试」桶,单列一桶。
+#   · B3 落笔后 kit 复跑 oracle:repro 头体例收紧为 `# repro: <命令> → RC=<n> [末行含 <子串>]`;--apply 在 git apply 之后、重打冻结之前,
+#     对每份 patch 的每条 repro 行跑 `flow-ev <流程目录> 微改 micro-<裁决号>-<k>[-<j>] -- <命令>`(流程目录 = 冻结件所在目录;同名已在就加 -rN),
+#     比 RC(与可选末行子串);任一不符 ⟹ `git apply -R` 全流回退 + 不重打冻结 + 不追加申报 + `MICRO RED: oracle 不符`。全符 ⟹ 照旧三件。
+#     旧体例 `→ 期望 <读数>` 的 repro 行机械复跑不了:非生产条印 WARN 原样给人,生产条 RED(B2 ①)。没附复现头的非生产条零 oracle,只 info。
+#     病根:旧末行让编排方「逐条复跑上面的复现命令对读数」—— 收工路径上最后一段人肉判据。
 # 用法:
 #   flow-micro <patch(绝对)>... --face <写权限面清单(绝对)> [--freeze <冻结件(绝对)>] [--apply --verdict <裁决号> [--declared <申报清单(绝对)>]]
 #     patch 由审轴落在 <流程目录>/.evidence/<轮名>-micro-<裁决号>.patch;写权限面清单 = flow-dispatch --dir 落的 .face-<轮名>.txt
 #     多份 patch 一起给:门判的是**合计**,而合计只有一起判才算数。
 # 末行固定:`MICRO OK: …` / `MICRO RED: …`;参数错或 patch 落不下 ⟹ FATAL RC=2。
-# 读的配置:FLOW_REPO_DIR FLOW_MICRO_FIX_LINES FLOW_TEST_GLOBS
+# 读的配置:FLOW_REPO_DIR FLOW_MICRO_FIX_LINES FLOW_MICRO_PROD_LINES FLOW_TEST_GLOBS;子命令 flow-ev 按名调用(B3 oracle 复跑)。
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
 flow_load_config
@@ -136,6 +146,19 @@ LC_ALL=C awk '
   /^[+-]/ { if (cur=="") next; if (!iscomment(cur, substr($0,2))) nc[cur]++ ; next }
   END { for(i=1;i<=n;i++) printf "%s\t%d\n", ord[i], nc[ord[i]] }' "$@" > "$TMP/nc"
 
+# —— B2:每份 patch 的头(diff --git 之前以 # 起的行)齐不齐:`# repro:`(且是 → RC= 体例)与 `# ev:`;patch 触到的每个路径记一行 `path<TAB>缺什么`(齐 = 空)——
+#   生产条按路径查:触到它的任一份 patch 头不齐 ⟹ 该路径不齐(fail-closed)。numstat 只解析 diff 不落树,单份 patch 各自解析与合并流等价。
+: > "$TMP/hdr"
+for pf in "$@"; do
+  hd=$(LC_ALL=C awk '/^diff --git /{exit} /^#/{print}' "$pf")
+  lack=""
+  if ! printf '%s\n' "$hd" | LC_ALL=C grep -q '^# repro:'; then lack="repro"
+  elif ! printf '%s\n' "$hd" | LC_ALL=C grep '^# repro:' | LC_ALL=C grep -q ' → RC='; then lack="repro体例(须 → RC=<n>)"; fi
+  printf '%s\n' "$hd" | LC_ALL=C grep -q '^# ev:' || lack="${lack:+$lack/}ev"
+  git -c core.quotepath=false apply --numstat -- "$pf" 2>/dev/null | LC_ALL=C awk -F'\t' -v L="$lack" 'NF>=3 { printf "%s\t%s\n", $3, L }' >> "$TMP/hdr"
+done
+hdr_lack() { LC_ALL=C awk -F'\t' -v p="$1" '$1==p && $2!="" { if (!s[$2]++) o = (o=="" ? $2 : o "/" $2) } END { print o }' "$TMP/hdr"; }
+
 is_test() { for g in $FLOW_TEST_GLOBS; do case "$1" in $g) return 0 ;; esac; done; return 1; }
 in_face() {
   while IFS= read -r e; do
@@ -162,8 +185,11 @@ subseq_del() {
       exit (j > ln) ? 0 : 1 }' "$1" "$TMP/tree/$1"
 }
 
-hdr "逐文件判(性质 · 面内;上限 $FLOW_MICRO_FIX_LINES 行**非测试**新增,面 $(basename "$FACE"))"
-addsum=0; addtest=0; nprod=0; nout=0; nfile=0
+PRODCAP="$FLOW_MICRO_PROD_LINES"
+if [ "$PRODCAP" -gt 0 ]; then hdr "逐文件判(性质 · 面内;上限 非测试 $FLOW_MICRO_FIX_LINES 行 · 生产 $PRODCAP 行(须 repro + ev 头,B2),面 $(basename "$FACE"))"
+else hdr "逐文件判(性质 · 面内;上限 $FLOW_MICRO_FIX_LINES 行**非测试**新增,面 $(basename "$FACE"))"; fi
+addsum=0; addtest=0; addprod=0; nprod=0; nprodbad=0; nout=0; nfile=0
+: > "$TMP/prod"   # B2:ok 的生产路径(申报行尾带 prod 词)
 TAB=$(printf '\t')
 while IFS="$TAB" read -r a d p; do
   [ -n "$p" ] || continue
@@ -183,11 +209,23 @@ while IFS="$TAB" read -r a d p; do
   if [ "$kind" = 注释 ] && [ "$a" != "-" ] && [ "$a" -gt 0 ] && subseq_del "$p"; then
     why="${why:+$why;}行内删字:new ⊂ old,新增计 0(numstat +$a 是改行)"; a=0
   fi
-  if [ "$a" != "-" ]; then if [ "$kind" = 测试 ]; then addtest=$((addtest + a)); else addsum=$((addsum + a)); fi; fi
-  if [ "$kind" = 生产 ] || [ "$face" = 面外 ]; then
+  # B2:生产条 —— 通道开着(PRODCAP > 0)且非二进制 ⟹ 查头;头齐进生产桶,不齐 RED 点名缺什么;通道关着 ⟹ RED 照旧
+  prodok=0
+  if [ "$kind" = 生产 ] && [ "$PRODCAP" -gt 0 ] && [ "$a" != "-" ]; then
+    lack=$(hdr_lack "$p")
+    if [ -z "$lack" ]; then prodok=1; why="${why:+$why;}repro + ev 头齐,生产行经 ④ 复审"
+    else nprodbad=$((nprodbad+1)); why="${why:+$why;}patch 头缺 # ${lack} —— 生产条要机械 oracle 才收"; fi
+  fi
+  if [ "$a" != "-" ]; then
+    if [ "$kind" = 测试 ]; then addtest=$((addtest + a))
+    elif [ "$kind" = 生产 ]; then addprod=$((addprod + a))
+    else addsum=$((addsum + a)); fi
+  fi
+  if [ "$face" = 面外 ] || { [ "$kind" = 生产 ] && [ "$prodok" = 0 ]; }; then
     printf 'RED  %s  +%s -%s  %s · %s%s\n' "$p" "$a" "$d" "$kind" "$face" "${why:+($why)}"
     red=1
   else
+    [ "$prodok" = 1 ] && printf '%s\n' "$p" >> "$TMP/prod"
     printf 'ok   %s  +%s -%s  %s · %s%s\n' "$p" "$a" "$d" "$kind" "$face" "${why:+($why)}"
   fi
 done < "$TMP/sum"
@@ -196,10 +234,18 @@ if [ "$addsum" -gt "$FLOW_MICRO_FIX_LINES" ]; then
   echo "RED  非测试新增合计 $addsum 行 > 上限 $FLOW_MICRO_FIX_LINES(通道判的是合计,不是单条;测试行 $addtest 不计 —— 审方加断言是安全方向)"
   red=1
 fi
+if [ "$PRODCAP" -gt 0 ] && [ "$addprod" -gt "$PRODCAP" ]; then
+  echo "RED  生产新增合计 $addprod 行 > 上限 $PRODCAP(FLOW_MICRO_PROD_LINES;生产行单列一桶,不与非测试桶混算)"
+  red=1
+fi
+PRODNOTE=""; [ "$addprod" -gt 0 ] && PRODNOTE=" · 生产 $addprod"
 if [ "$red" != 0 ]; then
-  echo "MICRO RED: 生产 $nprod 条 · 面外 $nout 条 · 新增 非测试 $addsum · 测试 $addtest 行(上限 $FLOW_MICRO_FIX_LINES 只数非测试)—— 不走微改通道,整批起 ③(面外那几条另需编排方以裁决显式扩面)"
+  if [ "$PRODCAP" -gt 0 ]; then echo "MICRO RED: 生产 $nprod 条(头不齐 $nprodbad)· 面外 $nout 条 · 新增 非测试 $addsum · 测试 $addtest · 生产 $addprod 行(上限 非测试 $FLOW_MICRO_FIX_LINES · 生产 $PRODCAP)—— 不走微改通道,整批起 ③(面外那几条另需编排方以裁决显式扩面)"
+  else echo "MICRO RED: 生产 $nprod 条 · 面外 $nout 条 · 新增 非测试 $addsum · 测试 $addtest 行(上限 $FLOW_MICRO_FIX_LINES 只数非测试)—— 不走微改通道,整批起 ③(面外那几条另需编排方以裁决显式扩面)"; fi
   exit 1
 fi
+if [ "$nprod" -gt 0 ]; then FILENOTE="生产 $nprod 条 · 全面内"; else FILENOTE="全非生产 · 全面内"; fi
+PRODTAIL=""; [ "$addprod" -gt 0 ] && PRODTAIL=" ⟹ 生产 $addprod 行 ⟹ 须派 ④(面 = 申报里的 prod 行)"
 
 # —— 4. 落笔(判据全绿之后)——
 if [ "$APPLY" = 1 ]; then
@@ -217,6 +263,43 @@ if [ "$APPLY" = 1 ]; then
   [ -s "$TMP/apply" ] && sed 's/^/  /' "$TMP/apply"
   echo "RC=$rc"
   [ "$rc" = 0 ] || { echo "MICRO RED: git apply RC=$rc(--check 过了却落不下 —— 树在这两步之间变了)"; exit 1; }
+  # —— 1.1.0 / B3:落笔后 kit 复跑每份 patch 的 oracle(repro 头),任一不符全流回退;之后才重打冻结 / 追加申报 ——
+  FDIR=$(dirname "$FREEZE"); FEV=$(flow_round_file "$FDIR" 微改 evdir)
+  hdr "oracle 复跑(每条 \`# repro: <命令> → RC=<n> [末行含 <子串>]\` 经 flow-ev $FDIR 微改 micro-$VERDICT-<k>;不符 ⟹ git apply -R 全流回退)"
+  : > "$TMP/obad"; k=0
+  for pf in "$@"; do
+    k=$((k+1)); echo "  $pf"
+    LC_ALL=C awk '/^diff --git /{exit} /^# repro:/{print}' "$pf" > "$TMP/repro"
+    if [ ! -s "$TMP/repro" ]; then echo "      info 未附复现头 —— 零 oracle(非生产条放行;看回件丙栏该条的 ev:<名>)"; continue; fi
+    j=0; nrep=$(grep -c . "$TMP/repro")
+    while IFS= read -r line; do
+      j=$((j+1)); body=${line#"# repro: "}
+      case "$body" in
+        *" → RC="*) ;;
+        *) echo "      WARN 旧体例(不是 → RC=<n>),机械复跑不了,原样给人:$line"; continue ;;
+      esac
+      cmd=${body%% → RC=*}; rest=${body#"$cmd → RC="}; want=${rest%% *}; sub=""
+      case "$rest" in *" 末行含 "*) sub=${rest#* 末行含 } ;; esac
+      case "$want" in ''|*[!0-9]*) echo "      RED  RC 期望不是数字:「${want}」($line)"; echo x >> "$TMP/obad"; continue ;; esac
+      nm="micro-$VERDICT-$k"; [ "$nrep" -gt 1 ] && nm="$nm-$j"
+      base_=$nm; r_=1; while [ -e "$FEV/微改-$nm.txt" ]; do r_=$((r_+1)); nm="$base_-r$r_"; done   # 同一裁决号重跑(上次 oracle 不符修了 patch)不烧名
+      flow-ev "$FDIR" 微改 "$nm" -- "$cmd" > "$TMP/ev" 2>&1; erc=$?
+      last=$(tail -1 "$FEV/微改-$nm.txt" 2>/dev/null || true)
+      okk=1; [ "$erc" = "$want" ] || okk=0
+      if [ -n "$sub" ]; then case "$last" in *"$sub"*) ;; *) okk=0 ;; esac; fi
+      if [ "$okk" = 1 ]; then echo "      ok   ev:$nm RC=$erc = 期望${sub:+ · 末行含「${sub}」}"
+      else echo "      RED  ev:$nm RC=$erc ≠ 期望 $want${sub:+ / 末行「${last}」须含「${sub}」}(全量 $FEV/微改-$nm.txt)"; echo x >> "$TMP/obad"; fi
+    done < "$TMP/repro"
+  done
+  if [ -s "$TMP/obad" ]; then
+    nob=$(grep -c . "$TMP/obad")
+    git -c core.quotepath=false apply -R -- "$ALL" > "$TMP/rev" 2>&1; rrc=$?
+    [ -s "$TMP/rev" ] && sed 's/^/  /' "$TMP/rev"
+    flow_sha256_check "$FREEZE" > "$TMP/fz2" 2>/dev/null
+    echo "  git apply -R RC=$rrc;回退后冻结核对 OK=$(LC_ALL=C grep -c ': OK$' "$TMP/fz2") FAILED=$(LC_ALL=C grep -vc ': OK$' "$TMP/fz2")"
+    echo "MICRO RED: oracle 不符 $nob 条 —— patch 已整流回退,冻结件与申报未动(无 .pre-$VERDICT);让审方在原树上修 patch 或 repro 头再出一份"
+    exit 1
+  fi
   # —— 1.0.0 / C1:落笔后 kit 自己收尾三件,编排方不再手做 ——
   hdr "冻结件重打(备份 $(basename "$FREEZE").pre-$VERDICT;树变了交付态哈希跟着变)"
   cp "$FREEZE" "$FREEZE.pre-$VERDICT" || { echo "MICRO RED: 备份冻结件失败"; exit 1; }
@@ -230,32 +313,33 @@ if [ "$APPLY" = 1 ]; then
   # 1.0.5 / A2:读 rows(lib flow_declared_rows,与三处读方同一条解析)→ 改内存中那行 → 整件重写;不再对原件 awk 就地正则。
   #   已有带号的行:号累加(`裁决-4703` → `裁决-4703,4800`,已含本号不重复);已有无号的行:就地补 `# 裁决-N micro`;没有的行:追加。
   #   注释行(kit 头)原样保留在前;数据行按规范形 `path  # 注释` 重写(与派生并集同一形状)。
+  #   B2:ok 的生产路径行尾另带 `prod` 词(已有行缺它就补上)—— flow-batch / flow-dispatch ④ 按它认「树上落了生产改动」。
   cut -f3 "$TMP/sum" | while IFS= read -r p; do
     [ -n "$p" ] || continue
+    pw=""; grep -qxF -- "$p" "$TMP/prod" && pw=" prod"
     have=$(flow_declared_rows "$DECLARED" | P="$p" LC_ALL=C awk -F'\t' '$1 == ENVIRON["P"] { print $2; exit }')
     seen=$(flow_declared_rows "$DECLARED" | P="$p" LC_ALL=C awk -F'\t' '$1 == ENVIRON["P"] { print "y"; exit }')
-    if [ -n "$have" ] && printf '%s' ",$have," | grep -qF -- ",$VERDICT,"; then echo "  已有(裁决-$have 已含 $VERDICT,不重复): $p"; continue; fi
+    hasprod=$(flow_declared_rows "$DECLARED" | P="$p" LC_ALL=C awk -F'\t' '$1 == ENVIRON["P"] && $3 ~ /(^|[ \t])prod([ \t]|$)/ { print "y"; exit }')
+    if [ -n "$have" ] && printf '%s' ",$have," | grep -qF -- ",$VERDICT,"; then
+      if [ -n "$pw" ] && [ -z "$hasprod" ]; then :; else echo "  已有(裁决-$have 已含 $VERDICT,不重复): $p"; continue; fi
+    fi
     { grep '^[[:space:]]*#' "$DECLARED" || true
-      flow_declared_rows "$DECLARED" | P="$p" V="$VERDICT" LC_ALL=C awk -F'\t' '
+      flow_declared_rows "$DECLARED" | P="$p" V="$VERDICT" PW="$pw" LC_ALL=C awk -F'\t' '
         { path = $1; cmt = $3
           if (path == ENVIRON["P"]) {
-            if (match(cmt, /裁决[- ]*[0-9]+(,[0-9]+)*/)) cmt = substr(cmt, 1, RSTART + RLENGTH - 1) "," ENVIRON["V"] substr(cmt, RSTART + RLENGTH)
-            else cmt = (cmt == "" ? "" : cmt " ") "裁决-" ENVIRON["V"] " micro" }
+            if (match(cmt, /裁决[- ]*[0-9]+(,[0-9]+)*/)) { nums = substr(cmt, RSTART, RLENGTH); sub(/^裁决[- ]*/, "", nums)
+              if (index("," nums ",", "," ENVIRON["V"] ",") == 0) cmt = substr(cmt, 1, RSTART + RLENGTH - 1) "," ENVIRON["V"] substr(cmt, RSTART + RLENGTH) }
+            else cmt = (cmt == "" ? "" : cmt " ") "裁决-" ENVIRON["V"] " micro"
+            if (ENVIRON["PW"] != "" && cmt !~ /(^|[ \t])prod([ \t]|$)/) cmt = cmt " prod" }
           print (cmt != "" ? path "  # " cmt : path) }'
-      [ -n "$seen" ] || printf '%s  # 裁决-%s micro\n' "$p" "$VERDICT"
+      [ -n "$seen" ] || printf '%s  # 裁决-%s micro%s\n' "$p" "$VERDICT" "$pw"
     } > "$DECLARED.tmp" && mv "$DECLARED.tmp" "$DECLARED"
-    if [ -n "$have" ]; then echo "  已有(裁决-$have),追加 → 裁决-$have,$VERDICT: $p"
-    elif [ -n "$seen" ]; then echo "  已有(无号),补号 → 裁决-$VERDICT micro: $p"
-    else echo "  + $p  # 裁决-$VERDICT micro"; fi
+    if [ -n "$have" ]; then echo "  已有(裁决-$have),追加 → 裁决-$have,$VERDICT$pw: $p"
+    elif [ -n "$seen" ]; then echo "  已有(无号),补号 → 裁决-$VERDICT micro$pw: $p"
+    else echo "  + $p  # 裁决-$VERDICT micro$pw"; fi
   done
-  hdr "复现命令清单(每份 patch 头部 diff --git 之前以 # 起的行;编排方逐条复跑对期望读数)"
-  for pf in "$@"; do
-    echo "  $pf"
-    hd=$(LC_ALL=C awk '/^diff --git /{exit} /^#/{print}' "$pf")
-    if [ -n "$hd" ]; then printf '%s\n' "$hd" | sed 's/^/      /'; else echo "      (未附复现头 —— 看回件丙栏该条的 ev:<名>,复跑 .evidence/<轮名>-log.tsv 里那一行命令)"; fi
-  done
-  echo "MICRO OK: 已落笔(裁决-$VERDICT)· 新增 非测试 $addsum · 测试 $addtest 行(上限 $FLOW_MICRO_FIX_LINES 只数非测试)· 文件 $nfile(全非生产 · 全面内)· 冻结件已重打(旧件 .pre-$VERDICT)· 申报已追加 —— 现在逐条复跑上面的复现命令对期望读数,读数不对就 git checkout 回去并 mv 回 .pre 件"
+  echo "MICRO OK: 已落笔(裁决-$VERDICT)· 新增 非测试 $addsum · 测试 $addtest$PRODNOTE 行(上限 $FLOW_MICRO_FIX_LINES 只数非测试)· 文件 $nfile($FILENOTE)· oracle 已复跑 · 冻结件已重打(旧件 .pre-$VERDICT)· 申报已追加$PRODTAIL"
   exit 0
 fi
-echo "MICRO OK: 新增 非测试 $addsum · 测试 $addtest 行(上限 $FLOW_MICRO_FIX_LINES 只数非测试)· 文件 $nfile(全非生产 · 全面内)—— 够格走微改通道;--apply --verdict <N> 落笔(须同给 --freeze),kit 会重打冻结件、追加申报、印复现命令"
+echo "MICRO OK: 新增 非测试 $addsum · 测试 $addtest$PRODNOTE 行(上限 $FLOW_MICRO_FIX_LINES 只数非测试)· 文件 $nfile($FILENOTE)—— 够格走微改通道;--apply --verdict <N> 落笔(须同给 --freeze),kit 会复跑 oracle、重打冻结件、追加申报$PRODTAIL"
 exit 0
