@@ -60,8 +60,9 @@ hdr() { step=$((step+1)); echo "== $step. $1 =="; }
 
 # 轮名 → 文件前缀(派单 / 回件按它找;别的轮名按字面找)
 prefix_of() {
+  _po_s=""; case "$1" in *影) _po_s=-shadow ;; esac   # 1.2.0 / C1:影子的件名前缀 <前缀>-shadow(flow-batch --shadow 起的),glob 退路不许猜到原版的件
   case "$1" in
-    ①写*) echo 01 ;; ②A*) echo 02a ;; ②B*) echo 02b ;; ③改*) echo 03 ;; ④A*) echo 04a ;; ④B*) echo 04b ;; ④*) echo 04 ;;
+    ①写*) echo "01$_po_s" ;; ②A*) echo "02a$_po_s" ;; ②B*) echo "02b$_po_s" ;; ③改*) echo "03$_po_s" ;; ④A*) echo "04a$_po_s" ;; ④B*) echo "04b$_po_s" ;; ④*) echo "04$_po_s" ;;
     *) echo "$1" ;;
   esac
 }

@@ -9,7 +9,7 @@
 # 用法:
 #   flow-dispatch <任务号> --tree <快照|活树-独占|禁入> --db <独占|只读|禁用> --seq <N> [--round <①写|②A|②B|③改|④A|④B>] \
 #       [--dir <流程目录绝对路径>] [--core <core写权限面>] [--plan <plan文件绝对路径>] [--cap-ok <理由>] \
-#       [--face-from <.face-<轮名>.txt 绝对路径>] [--excerpt-bytes <N>] <触面路径(仓库相对)...>
+#       [--face-from <.face-<轮名>.txt 绝对路径>] [--excerpt-bytes <N>] [--model <x>] <触面路径(仓库相对)...>
 #   --face-from(1.0.4):触面从上一轮的 .face 件读(一行一路径;# 与空行略过),与命令行触面**取并**;扩面 = 指原件 + 多给几条。
 #   --round ④ + --dir 而不给 --face-from(1.1.0 / B4):面 = ③改 〇表路径 ∪ 申报清单 ` micro prod` 行的路径(∪ 命令行触面);两处都空且命令行空 ⟹ FATAL「④ 零对象」。
 #     派单另印「本轮面」「必查行段(③ 〇表第二列原样)」「④ 必查」三行 —— ④ 退成一轴 diff 审(形制 = 旧 ④B:活树-独占 · 库独占),三态表归 ①写 丁栏。
@@ -31,7 +31,7 @@
 #     实测一节 42 KB 横跨三刀,八个 agent 各读一遍 ≈ 该批携带的 10%。REQ 行只印 open / deferred(0.7.0):[done] 行 p4e 实测占派单 10.3 KB。
 #   收工段的 flow-gates --reset 只印给 --db 独占 的轮(F-22);②④ **不印欠账必读**(1.1.0 / B7;此前 ②③④ 不按申报清单路由,仍印全量 —— 实测账本触面是宽前缀,28 = 28 条,零收益),
 #     必读骨架里改印一行「账本 <路径>(审轮不路由)」;③改 照旧路由(它改树,有还账义务)。
-#   --round 只决定「轮次 / 模型」行:FLOW_ROLE_MODELS 里给了该轮就印 model=<x>(Agent 调用照抄),否则继承编排方。
+#   --round 只决定「轮次 / 模型」行:FLOW_ROLE_MODELS 里给了该轮就印 model=<x>(Agent 调用照抄),否则继承编排方;--model <x>(1.2.0 / C1)单次覆盖,flow-batch --shadow 用它给影子派候选模型。
 #   带 --plan 时另数任务节的 REQ:open > FLOW_REQ_CAP ⟹ RC=3(①写是最长的会话,携带成本随轮数平方长;拆任务,或 --cap-ok 带过,理由进派单)。
 #   flow-dispatch <任务号> --tree … --db … --seq … --lane-merge <路径清单文件(绝对)> [触面路径...]
 #       合并批模式:触面从清单文件读(一行一路径;# 注释与空行略过);命令行再给的触面必须都在清单里,否则 FATAL;拒绝 --plan。
@@ -123,11 +123,12 @@ fi
 TASK="${1:-}"; [ -n "$TASK" ] || flow_die "缺任务号"
 shift
 TREE=""; DB=""; SEQ=""; CORE=""   # 1.1.0 / B5:默认按轮印(③ 只许 shell · ① 以面为准 · 审轮零改动),--core 覆盖
-PLAN=""; CAPOK=""; LANE=""; ROUND=""; DIR=""; FACEFROM=""; AUTO4=0
+PLAN=""; CAPOK=""; LANE=""; ROUND=""; DIR=""; FACEFROM=""; AUTO4=0; MODELARG=""
 while [ $# -gt 0 ]; do
-  case "$1" in --tree|--db|--seq|--core|--plan|--cap-ok|--lane-merge|--round|--dir|--face-from|--excerpt-bytes) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
+  case "$1" in --tree|--db|--seq|--core|--plan|--cap-ok|--lane-merge|--round|--dir|--face-from|--excerpt-bytes|--model) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
   case "$1" in
     --round) ROUND="$2"; shift 2 ;;
+    --model) MODELARG="$2"; shift 2 ;;
     --dir) DIR="$2"; shift 2 ;;
     --face-from) FACEFROM="$2"; shift 2 ;;
     --excerpt-bytes) case "$2" in ''|*[!0-9]*) flow_die "--excerpt-bytes 须为正整数,得到:「$2」" ;; esac; FLOW_DISPATCH_EXCERPT_BYTES="$2"; shift 2 ;;
@@ -271,12 +272,15 @@ if [ -s "$TMP/sec" ]; then
   NDONE=$(LC_ALL=C grep -cE "$REQ_RE.*\[done" "$TMP/sec")
   NDEF=$(LC_ALL=C grep -cE "$REQ_RE.*\[deferred" "$TMP/sec")
 fi
-# 轮次 / 模型行:--round 给了才查 FLOW_ROLE_MODELS(空格分隔的 轮名=模型)
+# 轮次 / 模型行:--round 给了才查 FLOW_ROLE_MODELS(空格分隔的 轮名=模型);--model 单次覆盖(1.2.0 / C1:flow-batch --shadow 给影子派候选模型,不改 config)
 if [ -n "$ROUND" ]; then
   MODEL=""; for kv in $FLOW_ROLE_MODELS; do case "$kv" in "$ROUND="*) MODEL="${kv#*=}" ;; esac; done
-  if [ -n "$MODEL" ]; then ROUNDLINE="- **轮次 / 模型**:$ROUND · model=$MODEL(config FLOW_ROLE_MODELS;Agent 调用带 model=$MODEL)"
+  if [ -n "$MODELARG" ]; then ROUNDLINE="- **轮次 / 模型**:$ROUND · model=$MODELARG(--model 单次给定;Agent 调用带 model=$MODELARG)"
+  elif [ -n "$MODEL" ]; then ROUNDLINE="- **轮次 / 模型**:$ROUND · model=$MODEL(config FLOW_ROLE_MODELS;Agent 调用带 model=$MODEL)"
   else ROUNDLINE="- **轮次 / 模型**:$ROUND · 继承编排方(FLOW_ROLE_MODELS 未给 $ROUND)"; fi
-else ROUNDLINE="- **轮次 / 模型**:(未给 --round;Agent 调用 model 继承编排方)"; fi
+else
+  [ -z "$MODELARG" ] || flow_die "--model 要与 --round 同给(模型挂在轮上)"
+  ROUNDLINE="- **轮次 / 模型**:(未给 --round;Agent 调用 model 继承编排方)"; fi
 
 # 1.1.0 / B5:三处待填默认化(fail-closed)—— 禁写 / 严重级 / 边界曾是每轮三处 Edit × 6 轮;0.9.0 起越面判据已机械判 申报 ⊆ 面,散文禁写只是提示。
 #   默认由 kit 印在生成段;编排方要改档 / 点名陷阱 / 扩类才在待填段追加。③ 的核心库写权限默认「只许 shell」(protocol §1),--core 覆盖。

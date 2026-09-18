@@ -66,9 +66,9 @@ patch **可含生产行**:生产条的 repro / ev 头缺一即 RED;落笔归编�
 MICRO OK ⟹ 编排方 --apply 落笔,kit 复跑你写的 repro(RC / 末行子串任一不符整流回退),不回来找你;**没附 patch 的条目一律不算微改**。
 ④B 在活树上出 patch:`cp` 备份到 scratchpad → 改 → `git diff --no-index <备份> <文件>` → 头两行的备份路径换成 `a/<仓库相对路径>`(一条 sed)→ 从备份还原 + 冻结件 `shasum -c`,读数写进回件;快照轴同一招。别用裸 `git diff`:本批已改过的文件它印的是 HEAD 起的整段,编排方 apply 会撞已落的 hunk。
 
-## 双模型对照(给某轴换模型前必做一批)
-同一份产物再派一个影子 agent(model=候选,回件写 `<轮号>-review-<轴>.<model>.md`,树权限快照、库禁用),与原版零共享;
-收工 `flow-review-diff <原版> <影子>`:原版独有为空才许把该轴写进 FLOW_ROLE_MODELS;对照批的 token 由 flow-usage 记进轮数账。
+## 双模型对照(给某轴换模型前必做一批;1.2.0 起 `flow-batch next --shadow <②A|②B|④>[=<model>]` 一个参数派)
+随原轮多派一份影子 agent(轮名 `<轮>影`,派单 `<前缀>-shadow-dispatch.md`,回件 `<前缀>-shadow-review.md`,树权限快照、库禁用,号段 +50,model=候选经 `flow-dispatch --model`),与原版零共享;
+影子不进决策(丙栏阻塞数 / 微改 patch 流都跳过它),收工红只 WARN;两份都收 OK 时 kit 自动 `flow-review-diff <原版> <影子>`:原版独有为空才许把该轴写进 FLOW_ROLE_MODELS;影子的 token 由 flow-usage 单列一行 `<轮>影`。
 
 ## ①写轮额外交付
 〇表(回件首节):每个实改文件 ≥ 1 行,符号 → 文件:行段 → 新增 / 改 / 删 → 对应 REQ → 例外;后面三轮按它跳读,编排方按它派生申报。

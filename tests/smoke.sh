@@ -430,6 +430,10 @@ with open(os.path.join(tr, 'subagents', 'agent-6.jsonl'), 'w') as f:
     f.write(asst('q2', '2026-09-03T01:30:20.000Z', [dict(type='tool_use', id='q2t', name='Read', input={'file_path': '/Users/x/.claude/plugins/cache/flow-kit/1.0.0/lib/flow-lib.sh'})]) + '\n')
     f.write(asst('q3', '2026-09-03T01:30:30.000Z', [dict(type='tool_use', id='q3t', name='Bash', input={'command': f'flow-freeze {fl}/.after-④A-hashes.txt; flow-manifest verify a b'})]) + '\n')
     f.write(asst('q4', '2026-09-03T01:30:40.000Z', [dict(type='tool_use', id='q4t', name='Bash', input={'command': f'flow-ev {fl} ④A lint -- pnpm lint'})]) + '\n')
+with open(os.path.join(tr, 'subagents', 'agent-7.jsonl'), 'w') as f:
+    # 1.2.0 / C1:影子会话「②A影 agent」单列一行(不并进 ②A)
+    f.write(user('2026-09-03T01:12:00.000Z', f'你是 p1 的 ②A影 agent。派单:{fl}/02a-shadow-dispatch.md') + '\n')
+    f.write(asst('s1', '2026-09-03T01:12:10.000Z', [dict(type='text', text='影')], out=3) + '\n')
 with open(os.path.join(os.path.dirname(tr), 'sid1.jsonl'), 'w') as f:
     # 派单装配在第一个 agent 起来之前 —— 只按 sub-agent 时段切窗会把它整段丢掉
     f.write(user('2026-09-03T00:58:00.000Z', f'起一批,派单落 {fl}/01-dispatch.md') + '\n')
@@ -453,8 +457,9 @@ printf '%s' "$LAST_OUT" | grep -q '^| ①写 | 5m | 携带 2.2k · 输出 30 · 
 # 1.0.0 / D3:开销三列按请求计、一请求一类;合计行带占比;> 15% WARN
 printf '%s' "$LAST_OUT" | grep -q '^| ④A | .* 4 轮 .* 开销 仪式 1 / 读kit 1 / 打回件 1 ' && ok "④A 开销三列各 1(flow-ev 那条是任务不计)" || fail "④A 开销列错: $(printf '%s' "$LAST_OUT" | grep '^| ④A')"
 printf '%s' "$LAST_OUT" | grep -q '^| ②B | .* 开销 仪式 1 / 读kit 0 / 打回件 0 ' && ok "②B 自跑 manifest verify 记仪式" || fail "②B 开销列错: $(printf '%s' "$LAST_OUT" | grep '^| ②B \| 10m \| 携带')"
-printf '%s' "$LAST_OUT" | grep -q '^| sub-agent 合计 | .* 开销 4 请求(50%:仪式 2 / 读kit 1 / 打回件 1)' && ok "合计行:开销 4/8 = 50%" || fail "合计开销错: $(printf '%s' "$LAST_OUT" | grep 'sub-agent 合计')"
-printf '%s' "$LAST_OUT" | grep -q 'WARN sub-agent 开销请求 4/8 = 50% > 15%' && ok "开销 > 15% WARN(是账不是门)" || fail "开销 WARN 缺: $(printf '%s' "$LAST_OUT" | grep 开销请求)"
+printf '%s' "$LAST_OUT" | grep -q '^| sub-agent 合计 | .* 开销 4 请求(44%:仪式 2 / 读kit 1 / 打回件 1)' && ok "合计行:开销 4/9 = 44%" || fail "合计开销错: $(printf '%s' "$LAST_OUT" | grep 'sub-agent 合计')"
+printf '%s' "$LAST_OUT" | grep -q 'WARN sub-agent 开销请求 4/9 = 44% > 15%' && ok "开销 > 15% WARN(是账不是门)" || fail "开销 WARN 缺: $(printf '%s' "$LAST_OUT" | grep 开销请求)"
+printf '%s' "$LAST_OUT" | grep -q '^| ②A影 | .* 1 轮 .* 1 会话' && ! printf '%s' "$LAST_OUT" | grep -q '^| ②A | ' && ok "影子会话记成 ②A影 单列一行,不并进 ②A(C1)" || fail "影子行错: $(printf '%s' "$LAST_OUT" | grep -E '^\| ②A')"
 printf '%s' "$LAST_OUT" | grep -q 'WARN ①写:会话 agent-1 2 请求 > FLOW_TURN_CAP 1' && ok "单会话请求超 FLOW_TURN_CAP 报 WARN(按会话)" || fail "请求上限未 WARN: $(printf '%s' "$LAST_OUT" | grep WARN)"
 printf '%s' "$LAST_OUT" | grep -q '^| 编排方 | .* 4 轮 .* 2 会话' && ok "编排方 = 主会话 1 轮(窗外那轮已剔除)+ 零 sub-agent 的收口会话 3 轮,2 会话;阴性对照未并入" || fail "编排方行错(应 4 轮 · 2 会话): $(printf '%s' "$LAST_OUT" | grep '^| 编排方 | .*携带')"
 printf '%s' "$LAST_OUT" | grep -q '窗 09-0.*父会话提到本流程目录' && ok "编排方行带时间窗" || fail "编排方行缺时间窗"
@@ -463,7 +468,7 @@ printf '%s' "$LAST_OUT" | grep -q '^| ②B | 10m | .* 2 轮' && ok "「的 **②
 printf '%s' "$LAST_OUT" | grep -q '^| ②B | 10m | 0m | 10m | 0m | 1 |' && ok "墙钟归因:②B 工具 10m · 卡顿 1" || fail "墙钟归因行错: $(printf '%s' "$LAST_OUT" | grep -E '^\| ②B \| 10m \| ')"
 printf '%s' "$LAST_OUT" | grep -q 'WARN 卡顿 ②B:.* 工具 605s `flow-manifest verify a b`' && ok "卡顿单列 WARN(605 s ≥ FLOW_STALL_SEC)" || fail "卡顿未 WARN: $(printf '%s' "$LAST_OUT" | grep 卡顿)"
 printf '%s' "$LAST_OUT" | grep -q '编排方输出去向' && ok "编排方输出去向表" || fail "缺输出去向表"
-printf '%s' "$LAST_OUT" | grep -q 'USAGE OK: 5 会话 / 12 轮' && ok "USAGE OK 末行(4 sub-agent + 编排方 2 会话)" || fail "USAGE 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+printf '%s' "$LAST_OUT" | grep -q 'USAGE OK: 6 会话 / 13 轮' && ok "USAGE OK 末行(5 sub-agent 含影子 + 编排方 2 会话)" || fail "USAGE 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
 expect_rc 0 "flow-usage --write" flow-usage "$FL" --write
 [ -f "$FL/.usage.md" ] && ok ".usage.md 已写" || fail ".usage.md 未写"
 expect_rc 0 "flow-doc-budget 不数 .usage.md" flow-doc-budget "$FL"
@@ -1557,8 +1562,13 @@ printf '%s' "$rp_state" | grep -q 'STEPS OK: 已勾 0 / 共 [0-9]* · 下一步 
 grep -q '^- 下一步:`flow-batch next '"$F28"'`' "$F28/00-ORCH-STATE.md" && ok "链2 状态档印下一步 = flow-batch next(B6)" || fail "链2 状态档缺下一步行"
 grep -q '手写区:只放裁决' "$F28/00-ORCH-STATE.md" && ok "链2 状态档手写区标题 = 只放裁决(不再「= 下一份可直接派的派单」)" || fail "链2 手写区标题旧: $(grep '^## 一' "$F28/00-ORCH-STATE.md")"
 n28=$(grep -c '^- \[ \]' "$F28/.steps-①写.md"); i=0; while [ $i -lt "$n28" ]; do i=$((i+1)); flow-step done "$F28" ①写 $i >/dev/null 2>&1; done
-expect_rc 0 "链2 flow-batch next ⟹ close ①写 → 派 ②A ②B → open 两轮" flow-batch next "$F28"
-printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: ②A ②B' && ok "链2 末行 BATCH NEXT: ②A ②B" || fail "链2 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+expect_rc 2 "链2 --shadow 只认 ②A|②B|④" flow-batch next "$F28" --shadow ①写=haiku
+expect_rc 0 "链2 flow-batch next --shadow ②A=haiku ⟹ close ①写 → 派 ②A ②B + 影子 ②A影 → open 三轮" flow-batch next "$F28" --shadow ②A=haiku
+printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: ②A ②B' && ok "链2 末行 BATCH NEXT: ②A ②B(影子不进末行)" || fail "链2 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+# 1.2.0 / C1:影子 = ②A影 · 快照 · 禁用 · 号段 151 · model=haiku(--model 单次,不改 config)· 出件 02a-shadow-*;三份 prompt
+[ -f "$F28/02a-shadow-dispatch.md" ] && [ -f "$F28/.manifest-baseline-②A影.txt" ] && grep -q '^- \*\*轮次 / 模型\*\*:②A影 · model=haiku(--model 单次给定;Agent 调用带 model=haiku)' "$F28/02a-shadow-dispatch.md" && grep -q '^- \*\*树权限\*\*:快照' "$F28/02a-shadow-dispatch.md" && grep -q '^- \*\*库权限\*\*:禁用' "$F28/02a-shadow-dispatch.md" && grep -q '^- \*\*裁决号段\*\*:从 151 起' "$F28/02a-shadow-dispatch.md" && ok "链2 影子 ②A影:快照 · 禁用 · 号段 151 · model=haiku(C1)" || fail "链2 影子派单错: $(grep -E '轮次|树权限|库权限|号段' "$F28/02a-shadow-dispatch.md" 2>/dev/null; ls -a "$F28")"
+[ "$(printf '%s' "$LAST_OUT" | grep -c '^---- Agent prompt')" = 3 ] && printf '%s' "$LAST_OUT" | grep -q '^你是 r28 的 ②A影 agent。派单:'"$F28"'/02a-shadow-dispatch.md' && printf '%s' "$LAST_OUT" | grep -q '^回件:'"$F28"'/02a-shadow-review.md' && ok "链2 三份 prompt,影子回件名 02a-shadow-review.md" || fail "链2 影子 prompt 错: $(printf '%s' "$LAST_OUT" | grep -A1 'prompt · ②A影')"
+[ "$(grep -v '^#' "$F28/.face-②A影.txt" | tr '\n' ' ')" = "src/a.ts src/k.test.ts " ] && ok "链2 影子面 = ①面" || fail "链2 影子面错"
 head -1 "$F28/.declared-①写.txt" | grep -q '^# declared · ①写' && [ -f "$F28/.after-①写-hashes.txt" ] && tail -1 "$F28/.evidence/①写-close.txt" | grep -q '^ROUND-CLOSE OK: ①写' && ok "链2 ①写 收工件:declared · after · close.txt 末行 OK" || fail "链2 收工件缺: $(ls -a "$F28" "$F28/.evidence")"
 [ -f "$F28/.verdicts-①写.md" ] && grep -q '^| #1 | \*\*不动\*\* |' "$F28/.verdicts-①写.md" && head -1 "$F28/.verdicts-①写.md" | grep -q '^# verdicts · ①写' && ok "链2 丁栏抽成 .verdicts-①写.md(kit 头 + 表行;B4)" || fail "链2 .verdicts 缺或错: $(cat "$F28/.verdicts-①写.md" 2>/dev/null)"
 grep -q '表行 1 → .*\.verdicts-①写\.md' "$F28/.evidence/batch-close-①写.txt" && grep -q '不动   #1' "$F28/.evidence/batch-close-①写.txt" && ok "链2 close 里 flow-ledger dry-run 读到三态表" || fail "链2 三态表 dry-run 错: $(grep -A4 丁栏 "$F28/.evidence/batch-close-①写.txt")"
@@ -1574,7 +1584,6 @@ grep -q '### 欠账必读' "$F28/01-dispatch.md" && ! grep -q '### 欠账必读'
 grep -q '账本 .*/specs/debts.md(审轮不路由;要核哪条账按标记 grep 机器头)' "$F28/02a-dispatch.md" && ok "链2 ② 必读骨架印账本路径一行" || fail "链2 ② 账本行缺: $(grep -A4 必读 "$F28/02a-dispatch.md")"
 grep -q 'info ②③④ 不跑(1.1.0 / B7:落位段在 ①写 open 已核' "$F28/.evidence/batch-open-②A.txt" && grep -q 'info ②③④ 不跑(1.1.0 / B7:热路径线由 flow-round close 判' "$F28/.evidence/batch-open-②A.txt" && ok "链2 open ②A 不跑 fact-lint / 预算(B7)" || fail "链2 open ②A 仍跑仪表: $(grep -E 'fact-lint|doc-budget' "$F28/.evidence/batch-open-②A.txt")"
 grep -q '^== [0-9]*\. 路由复跑' "$F28/.evidence/①写-close-between.txt" && ok "链2 ①写 between 跑路由复跑(--writer)" || fail "链2 ①写 between 缺路由复跑"
-[ "$(printf '%s' "$LAST_OUT" | grep -c '^---- Agent prompt')" = 2 ] && ok "链2 印两份 prompt" || fail "链2 prompt 数错"
 # 3. ② agents:②B 两条账 + 测试 patch + 生产 patch(repro → RC= 体例 + ev);②A 一条账;next ⟹ close 两轮(②A 快照不冻)→ MICRO OK 但未落笔 ⟹ 待裁决
 flow-ev "$F28" ②B unit -- 'echo ok' >/dev/null 2>&1; flow-ev "$F28" ②B lint -- 'echo 0' >/dev/null 2>&1
 mkp "$F28/.evidence/②B-micro-201.patch" src/k.test.ts 'it("chain", () => {})' "# repro: grep -c chain src/k.test.ts → RC=0 末行含 1" "# ev:unit"
@@ -1588,8 +1597,12 @@ rp_state=$(LC_ALL=C sed -n 's/^- 接手点 ②B:\(.*\)$/\1/p' "$F28/00-ORCH-STAT
 rp_resume=$(flow-dispatch --resume "$F28/02b-dispatch.md" --dir "$F28" 2>/dev/null | LC_ALL=C sed -n 's/^- \*\*接手点\*\*(从回件已落的节生成;②③④ 不建步骤账):\(.*\)$/\1/p')
 [ -n "$rp_state" ] && [ "$rp_state" = "$rp_resume" ] && printf '%s' "$rp_state" | grep -q '已落: 〇(1 行) 甲栏(2 行) 丙栏(2 行) · flow-ev 账 2 条' && ok "链3 ②B 接手点(已落节 + 账)状态档 = --resume" || fail "链3 ②B 接手点不同源: 状态档「${rp_state}」 resume「${rp_resume}」"
 grep -q '^- 接手点 ①写:' "$F28/00-ORCH-STATE.md" && fail "链3 已收工的 ①写 仍印接手点" || ok "链3 已收工的轮不印接手点"
-expect_rc 0 "链3 flow-batch next(② 收工;MICRO OK 未落笔)⟹ 待裁决" flow-batch next "$F28"
+mkp "$F28/.evidence/②A影-micro-151.patch" src/a.ts 'export const shadowOnly = 1;' "# repro: true → RC=0" "# ev:x"   # 影子的 patch 不许进微改流
+expect_rc 0 "链3 flow-batch next(② 收工;影子回件未落;MICRO OK 未落笔)⟹ 待裁决" flow-batch next "$F28"
 printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: 待裁决 —— MICRO OK 但未落笔;定了就 flow-batch next .* --verdict <裁决号>' && ok "链3 末行 待裁决(编排方三个点之二)" || fail "链3 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+printf '%s' "$LAST_OUT" | grep -q 'WARN 影子 ②A影 收工红(不挡批)' && tail -1 "$F28/.evidence/②A影-close.txt" | grep -q '^ROUND-CLOSE RED' && ok "链3 影子回件未落 ⟹ 影子收工红只 WARN,批照走(C1)" || fail "链3 影子红处置错: $(printf '%s' "$LAST_OUT" | grep -E '影|^BATCH')"
+printf '%s' "$LAST_OUT" | grep -q '微改通道:2 份 patch' && ok "链3 影子的 patch 不进微改流(仍 2 份)" || fail "链3 patch 数错: $(printf '%s' "$LAST_OUT" | grep 微改通道)"
+printf '%s' "$LAST_OUT" | grep -q '②A影 丙栏' && fail "链3 影子进了丙栏阻塞数" || ok "链3 影子不进丙栏阻塞数"
 tail -1 "$F28/.evidence/②A-close.txt" | grep -q '^ROUND-CLOSE OK' && tail -1 "$F28/.evidence/②B-close.txt" | grep -q '^ROUND-CLOSE OK' && [ ! -f "$F28/.after-②A-hashes.txt" ] && [ -f "$F28/.after-②B-hashes.txt" ] && ok "链3 ②A ②B 都收 OK;②A 快照不冻,②B 冻" || fail "链3 ② 收工态错: $(ls -a "$F28" "$F28/.evidence" | grep -E 'close|after')"
 grep -q '路由复跑跳过:审轮不路由' "$F28/.evidence/②B-close-between.txt" && grep -q 'REQ 对账跳过:审轮不对账' "$F28/.evidence/②B-close-between.txt" && ok "链3 ②B between 不路由 / 不对账(B7)" || fail "链3 ②B between 仍重付: $(grep -E '路由|对账' "$F28/.evidence/②B-close-between.txt")"
 grep -q 'MICRO OK: 新增 非测试 0 · 测试 1 · 生产 1 行' "$F28/.evidence/batch-micro.txt" && ok "链3 flow-micro 判据跑过(两桶 + 生产桶)" || fail "链3 micro 读数错: $(tail -1 "$F28/.evidence/batch-micro.txt")"
@@ -1597,8 +1610,14 @@ grep -q 'fix = 1' src/a.ts && fail "链3 未给 --verdict 却落了笔" || ok "�
 printf '%s' "$LAST_OUT" | grep -q '②A 丙栏:阻塞 0 · 条目 1' && printf '%s' "$LAST_OUT" | grep -q '②B 丙栏:阻塞 0 · 条目 2' && ok "链3 两份丙栏阻塞数各判" || fail "链3 阻塞数错: $(printf '%s' "$LAST_OUT" | grep 丙栏)"
 [ ! -f "$F28/03-dispatch.md" ] && [ ! -f "$F28/04-dispatch.md" ] && ok "链3 待裁决时不派 ③④" || fail "链3 待裁决却派了轮"
 # 4. --verdict 9 ⟹ 落笔(oracle 复跑)→ 申报有 prod 行 ⟹ 派 ④(B4 自动取面 = prod 行)→ open ④(核重打后的 .after-②B)
-expect_rc 0 "链4 flow-batch next --verdict 9 ⟹ 落笔 → 派 ④" flow-batch next "$F28" --verdict 9
+flow-ev "$F28" ②A影 shasum -- 'echo 0' >/dev/null 2>&1
+printf '# ②A影 回件 · 链\n\n## 〇 · 正面结论\n可进\n\n## 甲栏 · 实测过的\n- shasum:0\n\n## 丙栏 · 必闭\n- 零 · ev:shasum\n- src/a.ts:1 影子独有 · ev:shasum · 不阻塞 · patch .evidence/②A影-micro-151.patch\n' > "$F28/02a-shadow-review.md"
+expect_rc 0 "链4 flow-batch next --verdict 9 --shadow ④=haiku ⟹ 落笔 → 派 ④ + 影子 ④影;影子 ②A影 收 OK + review-diff" flow-batch next "$F28" --verdict 9 --shadow ④=haiku
 printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: ④$' && ok "链4 末行 BATCH NEXT: ④" || fail "链4 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+tail -1 "$F28/.evidence/②A影-close.txt" | grep -q '^ROUND-CLOSE OK: ②A影' && [ ! -f "$F28/.after-②A影-hashes.txt" ] && ok "链4 影子回件落了 ⟹ 收 OK(快照不冻)" || fail "链4 影子收工态错: $(tail -1 "$F28/.evidence/②A影-close.txt")"
+grep -q '^REVIEW-DIFF: 原版独有 0 条 · 影子独有 1 条 · 共同文件 1$' "$F28/.evidence/batch-review-diff-②A.txt" && printf '%s' "$LAST_OUT" | grep -q '影子没漏原版抓到的文件 ⟹ 可把 ②A=haiku 写进 FLOW_ROLE_MODELS' && ok "链4 原版 ↔ 影子自动 flow-review-diff,原版独有 0 ⟹ 印可换(model 取自影子派单)" || fail "链4 review-diff 错: $(tail -1 "$F28/.evidence/batch-review-diff-②A.txt" 2>/dev/null; printf '%s' "$LAST_OUT" | grep -E 'REVIEW|FLOW_ROLE')"
+[ -f "$F28/04-shadow-dispatch.md" ] && [ -f "$F28/.manifest-baseline-④影.txt" ] && grep -q '^- \*\*树权限\*\*:快照' "$F28/04-shadow-dispatch.md" && grep -q '^- \*\*裁决号段\*\*:从 451 起' "$F28/04-shadow-dispatch.md" && [ "$(grep -v '^#' "$F28/.face-④影.txt" | tr '\n' ' ')" = "src/a.ts " ] && ok "链4 影子 ④影:快照 · 号段 451 · 面同源自动取(prod 行)" || fail "链4 ④影 错: $(ls -a "$F28"; cat "$F28/.face-④影.txt" 2>/dev/null)"
+grep -q 'export const shadowOnly' src/a.ts && fail "链4 影子的 patch 落了树" || ok "链4 影子的 patch 没落树"
 printf '%s' "$LAST_OUT" | grep -q '②A 已收工(.evidence/②A-close.txt 末行 OK),不重收' && ok "链4 已收的轮不重收(幂等)" || fail "链4 重收了 ②A"
 grep -q '^src/a.ts  # 裁决-9 micro prod$' "$F28/.declared-②B.txt" && grep -q '^src/k.test.ts  # 裁决-2,9$' "$F28/.declared-②B.txt" && ok "链4 申报:生产行 # 裁决-9 micro prod;测试行在 ① 的例外号上累加成 裁决-2,9(原行无 micro 词不加,1.0.4 语义)" || fail "链4 申报错: $(cat "$F28/.declared-②B.txt")"
 grep -q 'export const fix = 1;' src/a.ts && grep -q 'it("chain"' src/k.test.ts && [ -f "$F28/.after-②B-hashes.txt.pre-9" ] && ok "链4 两份 patch 真落了 · .pre-9 在" || fail "链4 落笔收尾缺"
@@ -1614,8 +1633,11 @@ expect_rc 1 "链5 flow-batch next(④ 回件未落)⟹ BATCH RED" flow-batch nex
 printf '%s' "$LAST_OUT" | grep -q '^BATCH RED: ④ 收工红' && tail -1 "$F28/.evidence/④-close.txt" | grep -q '^ROUND-CLOSE RED: ④' && ok "链5 ④ 未收工 ⟹ RED 且 close.txt 末态 RED" || fail "链5 红路径错: $(printf '%s' "$LAST_OUT" | tail -1)"
 flow-ev "$F28" ④ gates -- 'echo PASS' >/dev/null 2>&1
 printf '# ④ 回件 · 链\n\n## 〇 · 正面结论\n可合并\n\n## 甲栏 · 实测过的\n- gates:PASS\n\n## 丙栏 · 必闭\n- 零 · ev:gates\n' > "$F28/04-review.md"
-expect_rc 0 "链5 flow-batch next(④ 收工)⟹ 收口命令" flow-batch next "$F28"
+expect_rc 0 "链5 flow-batch next(④ 收工;④影 未落)⟹ 收口命令" flow-batch next "$F28"
 printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: 收口$' && ok "链5 末行 BATCH NEXT: 收口" || fail "链5 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+printf '%s' "$LAST_OUT" | grep -q 'WARN 影子 ④影 收工红(不挡批)' && ok "链5 ④影 未落只 WARN,收口照印" || fail "链5 ④影 处置错: $(printf '%s' "$LAST_OUT" | grep 影)"
+expect_rc 0 "链5 next --shadow ②A(本次没派 ②A)⟹ WARN 影子未派" flow-batch next "$F28" --shadow ②A
+printf '%s' "$LAST_OUT" | grep -q 'WARN --shadow ②A:本次没派 ②A,影子未派' && ok "链5 --shadow 点了本次没派的轮 ⟹ WARN" || fail "链5 WARN 缺: $(printf '%s' "$LAST_OUT" | tail -3)"
 WRAP28=$(printf '%s\n' "$LAST_OUT" | LC_ALL=C grep '^  flow-close --wrap ' | sed 's/^  //')
 [ "$WRAP28" = "flow-close --wrap $F28 $F28/.manifest-baseline-①写.txt $F28/.declared-④.txt $F28/.after-④-hashes.txt --task T1 --plan $WS/specs/plan28.md" ] && ok "链5 收口命令一整行:①基线 · ④申报 · ④after · --task --plan 同源" || fail "链5 收口命令错: $WRAP28"
 [ -f "$F28/.after-④-hashes.txt" ] && tail -1 "$F28/.evidence/④-close.txt" | grep -q '^ROUND-CLOSE OK' && ok "链5 ④ 收 OK · after 在" || fail "链5 ④ 收工件缺"
@@ -1627,7 +1649,7 @@ printf '%s' "$LAST_OUT" | grep -q 'info --verdicts 未给,默认取 ①写 丁�
 expect_rc 0 "链7 flow-batch next 收口后重跑(幂等)" flow-batch next "$F28"
 printf '%s' "$LAST_OUT" | grep -q '④ 已收工.*不重收' && printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: 收口$' && ok "链7 幂等:不重收,仍印收口" || fail "链7 幂等错: $(printf '%s' "$LAST_OUT" | tail -2)"
 grep -q '⚠glob猜' "$F28/00-ORCH-STATE.md" && fail "链7 状态档有 ⚠glob猜: $(grep '⚠glob猜' "$F28/00-ORCH-STATE.md")" || ok "链7 状态档零 ⚠glob猜(四轮派单 / 回件全按内容认领)"
-grep -q '^- 轮次计划(flow-batch 按目录判,零状态):档 B(① ② ④:微改落了生产行,④ 只审 diff) · 已开 ①写 ②A ②B ④' "$F28/00-ORCH-STATE.md" && ok "链7 状态档印轮次计划 档 B(与 flow-batch 同源)" || fail "链7 轮次计划错: $(grep 轮次计划 "$F28/00-ORCH-STATE.md")"
+grep -q '^- 轮次计划(flow-batch 按目录判,零状态):档 B(① ② ④:微改落了生产行,④ 只审 diff) · 已开 ①写 ②A ②B ②A影 ④ ④影' "$F28/00-ORCH-STATE.md" && ok "链7 状态档印轮次计划 档 B(与 flow-batch 同源;影子列在已开里)" || fail "链7 轮次计划错: $(grep 轮次计划 "$F28/00-ORCH-STATE.md")"
 [ -z "$( ( cd "$F28" && for m in ./-*; do [ -e "$m" ] && printf '%s' "$m"; done ) )" ] && ok "链7 目录零个以 - 开头的件" || fail "链7 有残件: $(ls -a "$F28" | grep '^-')"
 git checkout -q -- . 2>/dev/null; sed -i.bak '/FLOW_MICRO_PROD_LINES=16/d' "$WS/.claude/flow.config.sh"; rm -f "$WS/.claude/flow.config.sh.bak"; rm -f "$WS/specs/plan28.md"
 git add -A >/dev/null 2>&1; git commit -qm 'r28 end' >/dev/null 2>&1

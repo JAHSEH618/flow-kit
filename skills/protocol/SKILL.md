@@ -42,7 +42,7 @@ description: 写 + 双轴审 + 机械复验(③ 改 / ④ 复审按需)的多 ag
 - **回件边写边落**,但回件长度就是墙钟:预算判自写字节(`FLOW_DOC_BUDGET_SELF`),真正判红的是热路径节 = 〇 + 丙栏(`FLOW_DOC_BUDGET_HOTPATH`,close 只判本轮那份)。→ why §1h
 - **一次响应只发得出一个工具块**:省往返靠一条 Bash 串多条命令;「调用/轮」记在模型上(< 1.5 换模型或拆任务),「读批量」记在纪律上(< 2 是没合并,`flow-usage` WARN)。→ why §1i
 - **后续轮按〇表跳读**;整读一个文件要在回件里给一行理由。**编排方只读〇节 + 丙栏**(三态表由 kit 抽、`flow-ledger` 吃,不用读)。
-- **换模型先对照,两个方向都要**:`flow-review-diff <原版> <影子>` 比丙栏;原版独有为空才许换便宜的,「原版」可以是存档的 gold,改 review-template 前也对一次;留贵的也要证。→ why §1j
+- **换模型先对照,两个方向都要**:`flow-batch next --shadow <②A|②B|④>[=<model>]` 随那一轮多派一份影子(轮名 `<轮>影`,快照 · 禁用,与原版零共享;影子不进决策,收工红只 WARN),两份都收 OK 时 kit 自动 `flow-review-diff <原版> <影子>` 并印判读:原版独有为空才许把该轴写进 `FLOW_ROLE_MODELS`;「原版」可以是存档的 gold(手跑 `flow-review-diff`),改 review-template 前也对一次;留贵的也要证。→ why §1j
 - **轮间交接口一键**:`flow-batch next` 串 `flow-round close`(派生申报 → between → 裁决随行判据(写 / 改轮)→ 步骤账 / 回件六判 / 丁栏 → 全绿冻结 → 状态档 → 收工末态)与 `flow-round open`(①写 才跑 fact-lint / 预算 → 核上一轮 .after → baseline → 状态档)。判据归批两端:路由复跑 / REQ 对账只在写 / 改轮,审轮的 between 只剩树判据,快照轮零判据。
 - **闭环转达要交代库的归属**:④B 发回③时写明④B 是否已停;复验归提出那条的轴,在干净窗口跑。
 - 「做不到 / 不可达」型断言:复审必须主动找反例并列出找过的路径,并写明射程。
@@ -113,7 +113,7 @@ description: 写 + 双轴审 + 机械复验(③ 改 / ④ 复审按需)的多 ag
 
 | 命令 | 用法 | 何时 |
 |---|---|---|
-| `flow-batch` | `open <流程目录> <任务号> --seq <N> [--plan <plan>] [--db 独占\|只读\|禁用] [--core <面>] [--cap-ok <理由>] <触面…>` · `next <流程目录> [--verdict <N>] [--task] [--plan] [--seq] [--core]` | 开批;每轮回件落了就 next(末行 `BATCH NEXT: <轮…>\|待裁决\|收口`) |
+| `flow-batch` | `open <流程目录> <任务号> --seq <N> [--plan <plan>] [--db 独占\|只读\|禁用] [--core <面>] [--cap-ok <理由>] <触面…>` · `next <流程目录> [--verdict <N>] [--task] [--plan] [--seq] [--core] [--shadow <②A\|②B\|④>[=<model>]]` | 开批;每轮回件落了就 next(末行 `BATCH NEXT: <轮…>\|待裁决\|收口`);换模型前一批带 `--shadow` |
 | `flow-dispatch` | `--resume <原派单> --dir <流程目录>`(单步派单:`<任务号> --tree … --db … --seq <N> --round <轮名> --dir <目录> [--face-from] … <触面…>`) | 续轮;非标批次手派 |
 | `flow-round` | `state <流程目录>`(单步:`open\|close <流程目录> <轮名> [--task] [--plan]`) | 刷状态档;排障时单步开工 / 收工 |
 | `flow-ev` | `flow-ev <流程目录> <轮名> <名> [--show N\|all] -- <命令…>` | agent 跑任何判据命令 |
@@ -125,4 +125,4 @@ description: 写 + 双轴审 + 机械复验(③ 改 / ④ 复审按需)的多 ag
 | `flow-ledger` | `apply <三态表> [--write]` · `close <标记> [--note]` · `append <标记> <行>` · `touches <标记> <a,b>` · `add --owner --due --touches --title [--body-file <正文\|->]` | 收口改账本;三态表的唯一解析器 |
 | `flow-usage` | `flow-usage <流程目录> [--write]` | 收口(`--wrap` 与 `--ship --dir` 自动跑) |
 | `flow-rulebook` | `show [行号]` · `retire <行号>[.<子句号>] --section "<§X · 批次>" --reason "<一句>"` | `--wrap` 报规则书变长时退役(条件触发) |
-| `flow-review-diff` | `flow-review-diff <原版回件> <影子回件>` | 改任一轴的模型前 |
+| `flow-review-diff` | `flow-review-diff <原版回件> <影子回件>` | `flow-batch next --shadow` 自动跑;手跑只在对存档 gold |
