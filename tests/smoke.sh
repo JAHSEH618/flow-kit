@@ -1508,67 +1508,127 @@ grep -qF "**已还 $(date +%F)**:$LONGEV" "$WS/specs/debts.md" && ok "账本里�
 rm -f "$WS/specs/p3.md" "$WS/specs/p4.md"
 git checkout -q -- . 2>/dev/null
 
-# ── 27. 1.0.5 / A4:整条链(dispatch → open → 回件 → close → ② 双轴 → flow-micro → ④ → wrap;命令之间的缝是 1.0.4 三处 bug 的老家)──
-#   顺序固定,每步 expect_rc + 一条文件断言;批 B 每条的回归床。编排方在整链里零次 Edit(派单的待填段留着不填也能 open / close)。
+# ── 27. 1.1.0 / B1:整条链改用 flow-batch(open → next ×N;编排方在整链里零次 Edit、零次手拼 dispatch / open / close)——
+#   档 B 路径:① → ②A ‖ ②B(②B 出一份测试 patch + 一份生产 patch)→ 待裁决 → --verdict 落笔(oracle 复跑)→ 申报有 prod 行 ⟹ ④(自动取面)→ 收口命令 → wrap。
+#   命令之间的缝是 1.0.4 三处 bug 的老家;批 B 每条的回归床。
 cd "$WS"
+git checkout -q -- . 2>/dev/null
+printf 'FLOW_MICRO_PROD_LINES=16\n' >> "$WS/.claude/flow.config.sh"
 git add -A >/dev/null 2>&1; git commit -qm 'r28 起点' >/dev/null 2>&1
 flow-fact-lint baseline >/dev/null 2>&1
-F28="$WS/.flow/r28"; mkdir -p "$F28"
+F28="$WS/.flow/r28"
 printf '## T1 · 链\nREQ-T1-01 [open] 判据甲\n## T2 · 尾\n' > "$WS/specs/plan28.md"
-# 1. ①写 派单
-expect_rc 0 "链1 flow-dispatch ①写 --dir" sh -c "flow-dispatch T1 --tree 活树-独占 --db 禁用 --seq 1 --round ①写 --dir '$F28' --plan '$WS/specs/plan28.md' src/a.ts src/k.test.ts > '$F28/01-dispatch.md'"
-[ -f "$F28/.face-①写.txt" ] && [ -f "$F28/.steps-①写.md" ] && ok "链1 .face-①写 与 .steps-①写 已落" || fail "链1 面 / 步骤账缺: $(ls -a "$F28")"
-# 2. ①写 open → agent 改树 + 写回件 + 勾步骤 → close
-expect_rc 0 "链2 flow-round open ①写" flow-round open "$F28" ①写
-printf 'chain\n' >> src/a.ts
-printf '# ①写 回件 · 链\n\n## 〇 · 改动索引表\n| 符号 | 文件:行段 | 性质 | 对应 | 例外 |\n|---|---|---|---|---|\n| `a` | src/a.ts:1-2 | 改 | REQ-T1-01 | |\n\n## 丙栏 · 自报三处最没把握\n- a.ts 那行\n\n## 丁栏 · 账本三态表\n| 标记 | 判定 | 证据 | 落点 |\n|---|---|---|---|\n| #1 | **不动** | 零 a.ts 之外改动 | — |\n' > "$F28/01-write-handoff.md"
+mkp() {   # mkp <出件> <文件> <追加行> [头行…]:对**当前树**出 patch(不是对 HEAD:① 的改动还没提交,git diff 会把它一起带上);--no-index 法,头三行改成 a/<路径> b/<路径>
+  _o="$1"; _f="$2"; _l="$3"; shift 3
+  cp "$_f" "$T/mkp.bak"; printf '%s\n' "$_l" >> "$_f"
+  { for hl in "$@"; do printf '%s\n' "$hl"; done
+    git -c core.quotepath=false diff --no-index "$T/mkp.bak" "$_f" | awk -v p="$_f" '/^diff --git /{ print "diff --git a/" p " b/" p; next } /^--- /{ print "--- a/" p; next } /^\+\+\+ /{ print "+++ b/" p; next } { print }'; } > "$_o"
+  cp "$T/mkp.bak" "$_f"
+}
+# 1. 开批:lint → receipts(N/A)→ dispatch ①写 → open ①写 → prompt
+expect_rc 0 "链1 flow-batch open" flow-batch open "$F28" T1 --seq 1 --plan "$WS/specs/plan28.md" --db 禁用 src/a.ts src/k.test.ts
+printf '%s' "$LAST_OUT" | grep -q '^BATCH OPEN OK: r28 · ①写 已派已开(号段 1 起)' && ok "链1 末行 BATCH OPEN OK" || fail "链1 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+printf '%s' "$LAST_OUT" | grep -q 'info RECEIPTS N/A' && ok "链1 接收位 N/A 按 info" || fail "链1 接收位处置错"
+printf '%s' "$LAST_OUT" | grep -q '^你是 r28 的 ①写 agent。派单:'"$F28"'/01-dispatch.md —— 先整读它' && printf '%s' "$LAST_OUT" | grep -q '^回件:'"$F28"'/01-write-handoff.md,模板在派单块末尾' && ok "链1 印三行 Agent prompt(批次 + 轮名 + 派单路径,flow-usage 认会话用)" || fail "链1 prompt 错: $(printf '%s' "$LAST_OUT" | grep -A3 'Agent prompt')"
+[ -f "$F28/01-dispatch.md" ] && [ -f "$F28/.face-①写.txt" ] && [ -f "$F28/.steps-①写.md" ] && [ -f "$F28/.manifest-baseline-①写.txt" ] && ok "链1 派单 · 面 · 步骤账 · 基线 全落" || fail "链1 收工件缺: $(ls -a "$F28")"
+grep -q '^- \*\*裁决号段\*\*:从 1 起' "$F28/01-dispatch.md" && ok "链1 ①写 号段 = --seq" || fail "链1 号段错"
+expect_rc 2 "链1 flow-batch open 重开 FATAL(批已开,走 next)" flow-batch open "$F28" T1 --seq 1 src/a.ts
+# 2. ①写 agent:改 a.ts、加 REQ 测试(改已有测试件走例外列)、回件带 丁栏三态表、勾步骤;next ⟹ close ①写 + 派开 ②A ②B
+printf 'chain\n' >> src/a.ts; printf 'it("[REQ-T1-01] a", () => {})\n' >> src/k.test.ts
+printf '# ①写 回件 · 链\n\n## 〇 · 改动索引表\n| 符号 | 文件:行段 | 性质 | 对应 | 例外 |\n|---|---|---|---|---|\n| `a` | src/a.ts:1-2 | 改 | REQ-T1-01 | |\n| `k` | src/k.test.ts:1-2 | 改 | REQ-T1-01 | 裁决-2 |\n\n## 丙栏 · 自报三处最没把握\n- a.ts 那行\n\n## 丁栏 · 账本三态表\n| 标记 | 判定 | 证据 | 落点 |\n|---|---|---|---|\n| #1 | **不动** | 零 a.ts 之外改动 | — |\n' > "$F28/01-write-handoff.md"
+expect_rc 1 "链2 flow-batch next 步骤账未全勾 ⟹ close 红 ⟹ BATCH RED(不往下派)" flow-batch next "$F28"
+printf '%s' "$LAST_OUT" | grep -q '^BATCH RED: ①写 收工红' && [ ! -f "$F28/02a-dispatch.md" ] && ok "链2 ① 红时不派 ②(末行 BATCH RED,整段 close 输出印出)" || fail "链2 红路径错: $(printf '%s' "$LAST_OUT" | tail -2)"
+printf '%s' "$LAST_OUT" | grep -q '│ .*RED:步骤账未全勾' && ok "链2 非绿时整段 flow-round close 输出印出(编排方不必翻件)" || fail "链2 未印整段: $(printf '%s' "$LAST_OUT" | grep -c '│')"
+[ ! -f "$F28/.after-①写-hashes.txt" ] && ok "链2 全部判据绿之前不冻(1.1.0:冻结挪到判据之后)" || fail "链2 半绿就冻了"
 n28=$(grep -c '^- \[ \]' "$F28/.steps-①写.md"); i=0; while [ $i -lt "$n28" ]; do i=$((i+1)); flow-step done "$F28" ①写 $i >/dev/null 2>&1; done
-expect_rc 0 "链2 flow-round close ①写" flow-round close "$F28" ①写 --task T1
-head -1 "$F28/.declared-①写.txt" | grep -q '^# declared · ①写' && [ -f "$F28/.after-①写-hashes.txt" ] && ok "链2 .declared-①写 带 kit 头 · .after-①写 已打" || fail "链2 收工件缺: $(ls -a "$F28")"
-# 1.1.0 / B4:①写 丁栏三态表 → .verdicts-①写.md(flow-ledger apply dry-run 过)
-[ -f "$F28/.verdicts-①写.md" ] && grep -q '^| #1 | \*\*不动\*\* |' "$F28/.verdicts-①写.md" && head -1 "$F28/.verdicts-①写.md" | grep -q '^# verdicts · ①写' && ok "链2 丁栏抽成 .verdicts-①写.md(kit 头 + 表行)" || fail "链2 .verdicts 缺或错: $(cat "$F28/.verdicts-①写.md" 2>/dev/null)"
-printf '%s' "$LAST_OUT" | grep -q '不动   #1' && printf '%s' "$LAST_OUT" | grep -q '表行 1 → .*\.verdicts-①写\.md' && ok "链2 close 里 flow-ledger dry-run 读到三态表" || fail "链2 三态表 dry-run 错: $(printf '%s' "$LAST_OUT" | grep -A4 丁栏)"
-# 3. ②B(活树-独占 · 独占)派单 → open → 审回件(甲栏两判词 + 两条 ev 账 + 丙栏引 ev 与 patch 指针)+ patch 落 .evidence → close
-expect_rc 0 "链3 flow-dispatch ②B --face-from" sh -c "flow-dispatch T1 --tree 活树-独占 --db 独占 --seq 2 --round ②B --dir '$F28' --face-from '$F28/.face-①写.txt' > '$F28/02b-dispatch.md'"
-expect_rc 0 "链3 flow-round open ②B" flow-round open "$F28" ②B
+expect_rc 0 "链2 flow-batch next ⟹ close ①写 → 派 ②A ②B → open 两轮" flow-batch next "$F28"
+printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: ②A ②B' && ok "链2 末行 BATCH NEXT: ②A ②B" || fail "链2 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+head -1 "$F28/.declared-①写.txt" | grep -q '^# declared · ①写' && [ -f "$F28/.after-①写-hashes.txt" ] && tail -1 "$F28/.evidence/①写-close.txt" | grep -q '^ROUND-CLOSE OK: ①写' && ok "链2 ①写 收工件:declared · after · close.txt 末行 OK" || fail "链2 收工件缺: $(ls -a "$F28" "$F28/.evidence")"
+[ -f "$F28/.verdicts-①写.md" ] && grep -q '^| #1 | \*\*不动\*\* |' "$F28/.verdicts-①写.md" && head -1 "$F28/.verdicts-①写.md" | grep -q '^# verdicts · ①写' && ok "链2 丁栏抽成 .verdicts-①写.md(kit 头 + 表行;B4)" || fail "链2 .verdicts 缺或错: $(cat "$F28/.verdicts-①写.md" 2>/dev/null)"
+grep -q '表行 1 → .*\.verdicts-①写\.md' "$F28/.evidence/batch-close-①写.txt" && grep -q '不动   #1' "$F28/.evidence/batch-close-①写.txt" && ok "链2 close 里 flow-ledger dry-run 读到三态表" || fail "链2 三态表 dry-run 错: $(grep -A4 丁栏 "$F28/.evidence/batch-close-①写.txt")"
+[ -f "$F28/02a-dispatch.md" ] && [ -f "$F28/02b-dispatch.md" ] && [ -f "$F28/.manifest-baseline-②A.txt" ] && [ -f "$F28/.manifest-baseline-②B.txt" ] && ok "链2 ②A ②B 派单 + 基线全落" || fail "链2 ② 件缺: $(ls -a "$F28")"
+grep -q '^- \*\*树权限\*\*:快照' "$F28/02a-dispatch.md" && grep -q '^- \*\*树权限\*\*:活树-独占' "$F28/02b-dispatch.md" && grep -q '^- \*\*裁决号段\*\*:从 101 起' "$F28/02a-dispatch.md" && grep -q '^- \*\*裁决号段\*\*:从 201 起' "$F28/02b-dispatch.md" && ok "链2 ②A 快照 / ②B 活树-独占;号段按代 +100 错开(并行不撞号)" || fail "链2 ② 派单权限 / 号段错"
+[ "$(grep -v '^#' "$F28/.face-②A.txt" | tr '\n' ' ')" = "src/a.ts src/k.test.ts " ] && ok "链2 ② 面 = ①面(--face-from)" || fail "链2 ② 面错: $(cat "$F28/.face-②A.txt")"
+[ "$(printf '%s' "$LAST_OUT" | grep -c '^---- Agent prompt')" = 2 ] && ok "链2 印两份 prompt" || fail "链2 prompt 数错"
+# 3. ② agents:②B 两条账 + 测试 patch + 生产 patch(repro → RC= 体例 + ev);②A 一条账;next ⟹ close 两轮(②A 快照不冻)→ MICRO OK 但未落笔 ⟹ 待裁决
 flow-ev "$F28" ②B unit -- 'echo ok' >/dev/null 2>&1; flow-ev "$F28" ②B lint -- 'echo 0' >/dev/null 2>&1
-printf 'it("chain", () => {})\n' >> src/k.test.ts; { printf "# repro: sh -c 'exit 0' → RC=0\n"; git -c core.quotepath=false diff -- src/k.test.ts; } > "$F28/.evidence/②B-micro-9.patch"; git checkout -q -- src/k.test.ts
-{ printf 'it("chain2", () => {})\n'; cat src/k.test.ts; } > "$T/k28.ts" && cat "$T/k28.ts" > src/k.test.ts   # 第二份改文件头(与第一份不同 hunk,同基线各自独立)
-{ printf "# repro: sh -c 'exit 0' → RC=0\n"; git -c core.quotepath=false diff -- src/k.test.ts; } > "$F28/.evidence/②B-micro-10.patch"; git checkout -q -- src/k.test.ts
-printf '# ②B 回件 · 链\n\n## 〇 · 正面结论\n必闭 1 条(不阻塞)\n\n## 甲栏 · 实测过的\n- unit:绿\n- lint:零\n\n## 丙栏 · 必闭\n- 补一条断言 · ev:unit · 期望 RC=0 · 不阻塞 · patch .evidence/②B-micro-9.patch\n' > "$F28/02b-review.md"
-expect_rc 0 "链3 flow-round close ②B" flow-round close "$F28" ②B
-[ -f "$F28/.after-②B-hashes.txt" ] && ok "链3 .after-②B 已打" || fail "链3 .after-②B 缺"
-# 4. ②A(快照 · 禁用)派单 → open → 回件 → close:不冻
-expect_rc 0 "链4 flow-dispatch ②A 快照" sh -c "flow-dispatch T1 --tree 快照 --db 禁用 --seq 3 --round ②A --dir '$F28' --face-from '$F28/.face-①写.txt' > '$F28/02a-dispatch.md'"
-expect_rc 0 "链4 flow-round open ②A" flow-round open "$F28" ②A
+mkp "$F28/.evidence/②B-micro-201.patch" src/k.test.ts 'it("chain", () => {})' "# repro: grep -c chain src/k.test.ts → RC=0 末行含 1" "# ev:unit"
+mkp "$F28/.evidence/②B-micro-202.patch" src/a.ts 'export const fix = 1;' "# repro: grep -c 'fix = 1' src/a.ts → RC=0 末行含 1" "# ev:lint"
+printf '# ②B 回件 · 链\n\n## 〇 · 正面结论\n必闭 2 条(不阻塞)\n\n## 甲栏 · 实测过的\n- unit:绿\n- lint:零\n\n## 丙栏 · 必闭\n- 补一条断言 · ev:unit · 期望 RC=0 · 不阻塞 · patch .evidence/②B-micro-201.patch\n- 补一个导出 · ev:lint · 期望 RC=0 · 不阻塞 · patch .evidence/②B-micro-202.patch\n' > "$F28/02b-review.md"
 flow-ev "$F28" ②A shasum -- 'echo 0' >/dev/null 2>&1
 printf '# ②A 回件 · 链\n\n## 〇 · 正面结论\n可进\n\n## 甲栏 · 实测过的\n- shasum:0\n\n## 丙栏 · 必闭\n- 零 · ev:shasum\n' > "$F28/02a-review.md"
-expect_rc 0 "链4 flow-round close ②A(快照轮)" flow-round close "$F28" ②A
-printf '%s' "$LAST_OUT" | grep -q '⊘快照不冻' && [ ! -f "$F28/.after-②A-hashes.txt" ] && ok "链4 快照轮 close 印 ⊘快照不冻 且无 .after-②A" || fail "链4 快照轮冻结处置错: $(printf '%s' "$LAST_OUT" | grep 冻结)"
-# 5. 微改通道落笔(两份 patch 同一路径:第二份走裁决号累加)
-expect_rc 0 "链5 flow-micro --apply 裁决-9" flow-micro "$F28/.evidence/②B-micro-9.patch" --face "$F28/.face-①写.txt" --freeze "$F28/.after-②B-hashes.txt" --apply --verdict 9
-[ -f "$F28/.after-②B-hashes.txt.pre-9" ] && grep -q '^src/k.test.ts  # 裁决-9 micro$' "$F28/.declared-②B.txt" && ok "链5 .pre-9 在 · .declared-②B 含 # 裁决-9 micro" || fail "链5 落笔收尾错: $(cat "$F28/.declared-②B.txt")"
-expect_rc 0 "链5 flow-micro --apply 裁决-10(同路径累加)" flow-micro "$F28/.evidence/②B-micro-10.patch" --face "$F28/.face-①写.txt" --freeze "$F28/.after-②B-hashes.txt" --apply --verdict 10
-[ -f "$F28/.after-②B-hashes.txt.pre-10" ] && grep -q '^src/k.test.ts  # 裁决-9,10 micro$' "$F28/.declared-②B.txt" && ok "链5 .pre-10 在 · 号累加成 裁决-9,10" || fail "链5 累加错: $(cat "$F28/.declared-②B.txt")"
-# 6. ④B 派单:③改 回件行自动印跳 ③
-expect_rc 0 "链6 flow-dispatch ④B" sh -c "flow-dispatch T1 --tree 活树-独占 --db 独占 --seq 4 --round ④B --dir '$F28' --face-from '$F28/.face-①写.txt' > '$F28/04b-dispatch.md'"
-grep -q '本批跳 ③(微改通道已落笔,裁决-9,10;' "$F28/04b-dispatch.md" && ok "链6 ④B 派单印 本批跳 ③(裁决-9,10)" || fail "链6 跳③行错: $(grep '③改 回件' "$F28/04b-dispatch.md")"
-# 7. ④B open:核的是重打后的 .after-②B(不是 .pre-N),FAILED=0
-expect_rc 0 "链7 flow-round open ④B" flow-round open "$F28" ④B
-printf '%s' "$LAST_OUT" | grep -q '\.after-②B-hashes\.txt:OK=[1-9][0-9]* FAILED=0' && ok "链7 open 核 .after-②B(重打后)FAILED=0" || fail "链7 open 核错件: $(printf '%s' "$LAST_OUT" | grep after)"
-# 8. ④B 回件 → close → wrap
-flow-ev "$F28" ④B gates -- 'echo PASS' >/dev/null 2>&1
-printf '# ④B 回件 · 链\n\n## 〇 · 正面结论\n可合并\n\n## 甲栏 · 实测过的\n- gates:PASS\n\n## 丙栏 · 必闭\n- 零 · ev:gates\n' > "$F28/04b-review.md"
-expect_rc 0 "链8 flow-round close ④B" flow-round close "$F28" ④B
-[ -f "$F28/.after-④B-hashes.txt" ] && ok "链8 .after-④B 已打" || fail "链8 .after-④B 缺"
-expect_rc 0 "链8 flow-close --wrap" flow-close --wrap "$F28" "$F28/.manifest-baseline-①写.txt" "$F28/.declared-④B.txt" "$F28/.after-④B-hashes.txt" --task T1
-printf '%s' "$LAST_OUT" | grep -q '^WRAP OK' && ok "链8 WRAP OK(测试锁认 ②B 微改行的裁决号)" || fail "链8 WRAP: $(printf '%s' "$LAST_OUT" | grep -E '^RED|FATAL|WRAP' | head -5)"
-printf '%s' "$LAST_OUT" | grep -q 'info --verdicts 未给,默认取 ①写 丁栏抽的 .verdicts-①写.md' && printf '%s' "$LAST_OUT" | grep -q '^== [0-9]*\. flow-ledger apply .verdicts-①写.md' && ok "链8 wrap --verdicts 默认取 .verdicts-①写.md(B4)" || fail "链8 wrap 三态表默认错: $(printf '%s' "$LAST_OUT" | grep -E 'verdicts|三态表')"
-printf '%s' "$LAST_OUT" | grep -q 'flow-ledger apply .*\.verdicts-①写\.md --write' && ok "链8 WRAP OK 后手工步 1 印的是那份三态表" || fail "链8 手工步 1 未印三态表路径: $(printf '%s' "$LAST_OUT" | grep '1\. 账本')"
-# 9. 状态档零 ⚠glob猜;目录零残件
-grep -q '⚠glob猜' "$F28/00-ORCH-STATE.md" && fail "链9 状态档有 ⚠glob猜: $(grep '⚠glob猜' "$F28/00-ORCH-STATE.md")" || ok "链9 状态档零 ⚠glob猜(四轮派单 / 回件全按内容认领)"
-[ -z "$( ( cd "$F28" && for m in ./-*; do [ -e "$m" ] && printf '%s' "$m"; done ) )" ] && ok "链9 目录零个以 - 开头的件" || fail "链9 有残件: $(ls -a "$F28" | grep '^-')"
-rm -f "$WS/specs/plan28.md"; git checkout -q -- . 2>/dev/null
+expect_rc 0 "链3 flow-batch next(② 收工;MICRO OK 未落笔)⟹ 待裁决" flow-batch next "$F28"
+printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: 待裁决 —— MICRO OK 但未落笔;定了就 flow-batch next .* --verdict <裁决号>' && ok "链3 末行 待裁决(编排方三个点之二)" || fail "链3 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+tail -1 "$F28/.evidence/②A-close.txt" | grep -q '^ROUND-CLOSE OK' && tail -1 "$F28/.evidence/②B-close.txt" | grep -q '^ROUND-CLOSE OK' && [ ! -f "$F28/.after-②A-hashes.txt" ] && [ -f "$F28/.after-②B-hashes.txt" ] && ok "链3 ②A ②B 都收 OK;②A 快照不冻,②B 冻" || fail "链3 ② 收工态错: $(ls -a "$F28" "$F28/.evidence" | grep -E 'close|after')"
+grep -q 'MICRO OK: 新增 非测试 0 · 测试 1 · 生产 1 行' "$F28/.evidence/batch-micro.txt" && ok "链3 flow-micro 判据跑过(两桶 + 生产桶)" || fail "链3 micro 读数错: $(tail -1 "$F28/.evidence/batch-micro.txt")"
+grep -q 'fix = 1' src/a.ts && fail "链3 未给 --verdict 却落了笔" || ok "链3 未给 --verdict 零落笔"
+printf '%s' "$LAST_OUT" | grep -q '②A 丙栏:阻塞 0 · 条目 1' && printf '%s' "$LAST_OUT" | grep -q '②B 丙栏:阻塞 0 · 条目 2' && ok "链3 两份丙栏阻塞数各判" || fail "链3 阻塞数错: $(printf '%s' "$LAST_OUT" | grep 丙栏)"
+[ ! -f "$F28/03-dispatch.md" ] && [ ! -f "$F28/04-dispatch.md" ] && ok "链3 待裁决时不派 ③④" || fail "链3 待裁决却派了轮"
+# 4. --verdict 9 ⟹ 落笔(oracle 复跑)→ 申报有 prod 行 ⟹ 派 ④(B4 自动取面 = prod 行)→ open ④(核重打后的 .after-②B)
+expect_rc 0 "链4 flow-batch next --verdict 9 ⟹ 落笔 → 派 ④" flow-batch next "$F28" --verdict 9
+printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: ④$' && ok "链4 末行 BATCH NEXT: ④" || fail "链4 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+printf '%s' "$LAST_OUT" | grep -q '②A 已收工(.evidence/②A-close.txt 末行 OK),不重收' && ok "链4 已收的轮不重收(幂等)" || fail "链4 重收了 ②A"
+grep -q '^src/a.ts  # 裁决-9 micro prod$' "$F28/.declared-②B.txt" && grep -q '^src/k.test.ts  # 裁决-2,9$' "$F28/.declared-②B.txt" && ok "链4 申报:生产行 # 裁决-9 micro prod;测试行在 ① 的例外号上累加成 裁决-2,9(原行无 micro 词不加,1.0.4 语义)" || fail "链4 申报错: $(cat "$F28/.declared-②B.txt")"
+grep -q 'export const fix = 1;' src/a.ts && grep -q 'it("chain"' src/k.test.ts && [ -f "$F28/.after-②B-hashes.txt.pre-9" ] && ok "链4 两份 patch 真落了 · .pre-9 在" || fail "链4 落笔收尾缺"
+grep -q 'ok   ev:micro-9-1 RC=0 = 期望 · 末行含「1」' "$F28/.evidence/batch-micro.txt" && grep -q 'ok   ev:micro-9-2 RC=0 = 期望 · 末行含「1」' "$F28/.evidence/batch-micro.txt" && [ -f "$F28/.evidence/微改-log.tsv" ] && ok "链4 两条 oracle 都由 kit 复跑(B3),账在 微改-log.tsv" || fail "链4 oracle 错: $(grep 'ev:' "$F28/.evidence/batch-micro.txt")"
+printf '%s' "$LAST_OUT" | grep -q '申报有 prod 行(微改落了生产行)⟹ 派 ④ 审 diff' && ok "链4 按 prod 行判派 ④(档 B)" || fail "链4 档位判错: $(printf '%s' "$LAST_OUT" | grep -E 'prod|收口|③')"
+[ -f "$F28/04-dispatch.md" ] && [ "$(grep -v '^#' "$F28/.face-④.txt" | tr '\n' ' ')" = "src/a.ts " ] && ok "链4 ④ 面 = prod 行路径(B4 自动取面)" || fail "链4 ④ 面错: $(cat "$F28/.face-④.txt" 2>/dev/null)"
+grep -q '本批跳 ③(微改通道已落笔,裁决-9;' "$F28/04-dispatch.md" && ok "链4 ④ 派单印 本批跳 ③(只数 micro 行的号:9;① 的例外号 2 不算)" || fail "链4 跳③行错: $(grep '③改 回件' "$F28/04-dispatch.md")"
+grep -q '^- \*\*裁决号段\*\*:从 401 起' "$F28/04-dispatch.md" && grep -q '^- \*\*树权限\*\*:活树-独占' "$F28/04-dispatch.md" && grep -q '^- \*\*库权限\*\*:独占' "$F28/04-dispatch.md" && ok "链4 ④ 形制 = 旧 ④B(活树-独占 · 独占),号段 401" || fail "链4 ④ 形制错"
+grep -q '\.after-②B-hashes\.txt:OK=[1-9][0-9]* FAILED=0' "$F28/.evidence/batch-open-④.txt" && ok "链4 open ④ 核的是重打后的 .after-②B,FAILED=0(不取 .pre-9)" || fail "链4 open ④ 核错件: $(grep after "$F28/.evidence/batch-open-④.txt")"
+[ ! -f "$F28/03-dispatch.md" ] && ok "链4 零阻塞 ⟹ 跳 ③" || fail "链4 派了 ③"
+# 5. ④ agent 未收工就 next ⟹ close ④ 红 ⟹ BATCH RED;写回件后 next ⟹ close ④ → 印收口命令
+expect_rc 1 "链5 flow-batch next(④ 回件未落)⟹ BATCH RED" flow-batch next "$F28"
+printf '%s' "$LAST_OUT" | grep -q '^BATCH RED: ④ 收工红' && tail -1 "$F28/.evidence/④-close.txt" | grep -q '^ROUND-CLOSE RED: ④' && ok "链5 ④ 未收工 ⟹ RED 且 close.txt 末态 RED" || fail "链5 红路径错: $(printf '%s' "$LAST_OUT" | tail -1)"
+flow-ev "$F28" ④ gates -- 'echo PASS' >/dev/null 2>&1
+printf '# ④ 回件 · 链\n\n## 〇 · 正面结论\n可合并\n\n## 甲栏 · 实测过的\n- gates:PASS\n\n## 丙栏 · 必闭\n- 零 · ev:gates\n' > "$F28/04-review.md"
+expect_rc 0 "链5 flow-batch next(④ 收工)⟹ 收口命令" flow-batch next "$F28"
+printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: 收口$' && ok "链5 末行 BATCH NEXT: 收口" || fail "链5 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+WRAP28=$(printf '%s\n' "$LAST_OUT" | LC_ALL=C grep '^  flow-close --wrap ' | sed 's/^  //')
+[ "$WRAP28" = "flow-close --wrap $F28 $F28/.manifest-baseline-①写.txt $F28/.declared-④.txt $F28/.after-④-hashes.txt --task T1 --plan $WS/specs/plan28.md" ] && ok "链5 收口命令一整行:①基线 · ④申报 · ④after · --task --plan 同源" || fail "链5 收口命令错: $WRAP28"
+[ -f "$F28/.after-④-hashes.txt" ] && tail -1 "$F28/.evidence/④-close.txt" | grep -q '^ROUND-CLOSE OK' && ok "链5 ④ 收 OK · after 在" || fail "链5 ④ 收工件缺"
+# 6. 照抄收口命令 ⟹ WRAP OK;三态表默认取 .verdicts-①写.md
+expect_rc 0 "链6 照抄收口命令 flow-close --wrap" sh -c "$WRAP28"
+printf '%s' "$LAST_OUT" | grep -q '^WRAP OK' && ok "链6 WRAP OK(测试锁认 ②B 微改行的裁决号)" || fail "链6 WRAP: $(printf '%s' "$LAST_OUT" | grep -E '^RED|FATAL|WRAP' | head -5)"
+printf '%s' "$LAST_OUT" | grep -q 'info --verdicts 未给,默认取 ①写 丁栏抽的 .verdicts-①写.md' && printf '%s' "$LAST_OUT" | grep -q 'flow-ledger apply .*\.verdicts-①写\.md --write' && ok "链6 wrap --verdicts 默认取 .verdicts-①写.md,手工步 1 印它的路径(B4)" || fail "链6 三态表默认错: $(printf '%s' "$LAST_OUT" | grep -E 'verdicts|三态表')"
+# 7. 幂等:收口后再 next ⟹ ④ 不重收,仍印收口;状态档零 ⚠glob猜 · 轮次计划 档 B;目录零残件
+expect_rc 0 "链7 flow-batch next 收口后重跑(幂等)" flow-batch next "$F28"
+printf '%s' "$LAST_OUT" | grep -q '④ 已收工.*不重收' && printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: 收口$' && ok "链7 幂等:不重收,仍印收口" || fail "链7 幂等错: $(printf '%s' "$LAST_OUT" | tail -2)"
+grep -q '⚠glob猜' "$F28/00-ORCH-STATE.md" && fail "链7 状态档有 ⚠glob猜: $(grep '⚠glob猜' "$F28/00-ORCH-STATE.md")" || ok "链7 状态档零 ⚠glob猜(四轮派单 / 回件全按内容认领)"
+grep -q '^- 轮次计划(flow-batch 按目录判,零状态):档 B(① ② ④:微改落了生产行,④ 只审 diff) · 已开 ①写 ②A ②B ④' "$F28/00-ORCH-STATE.md" && ok "链7 状态档印轮次计划 档 B(与 flow-batch 同源)" || fail "链7 轮次计划错: $(grep 轮次计划 "$F28/00-ORCH-STATE.md")"
+[ -z "$( ( cd "$F28" && for m in ./-*; do [ -e "$m" ] && printf '%s' "$m"; done ) )" ] && ok "链7 目录零个以 - 开头的件" || fail "链7 有残件: $(ls -a "$F28" | grep '^-')"
+git checkout -q -- . 2>/dev/null; sed -i.bak '/FLOW_MICRO_PROD_LINES=16/d' "$WS/.claude/flow.config.sh"; rm -f "$WS/.claude/flow.config.sh.bak"; rm -f "$WS/specs/plan28.md"
+git add -A >/dev/null 2>&1; git commit -qm 'r28 end' >/dev/null 2>&1
+
+# ── 27b. 1.1.0 / B1:档 C 路径 —— ② 有阻塞 ⟹ ③改;③ 〇表只有测试路径 ⟹ 收口不派 ④;有生产路径 ⟹ 派 ④(面 = ③ 〇表)──
+F31="$WS/.flow/r31"
+flow-fact-lint baseline >/dev/null 2>&1
+expect_rc 0 "链C1 flow-batch open(无 --plan)" flow-batch open "$F31" T1 --seq 2000 --db 禁用 src/a.ts src/k.test.ts
+printf '%s' "$LAST_OUT" | grep -q '接收位跳过:未给 --plan' && ok "链C1 无 plan 时接收位显式跳过" || fail "链C1 接收位处置错"
+printf 'c-chain\n' >> src/a.ts
+printf '# ①写 回件 · C\n\n## 〇 · 改动索引表\n| 符号 | 文件:行段 | 性质 | 对应 | 例外 |\n|---|---|---|---|---|\n| `a` | src/a.ts:1-3 | 改 | R1 | |\n\n## 丙栏 · 自报三处最没把握\n- 一\n' > "$F31/01-write-handoff.md"
+n31=$(grep -c '^- \[ \]' "$F31/.steps-①写.md"); i=0; while [ $i -lt "$n31" ]; do i=$((i+1)); flow-step done "$F31" ①写 $i >/dev/null 2>&1; done
+expect_rc 0 "链C2 next ⟹ ②A ②B" flow-batch next "$F31"
+flow-ev "$F31" ②B unit -- 'echo ok' >/dev/null 2>&1; flow-ev "$F31" ②A shasum -- 'echo 0' >/dev/null 2>&1
+printf '# ②B 回件 · C\n\n## 〇 · 正面结论\n必闭 1 条(阻塞)\n\n## 甲栏 · 实测过的\n- unit:绿\n\n## 丙栏 · 必闭\n- 生产行为错 · ev:unit · 期望 RC=1 · 阻塞 · 无 patch\n' > "$F31/02b-review.md"
+printf '# ②A 回件 · C\n\n## 〇 · 正面结论\n可进\n\n## 甲栏 · 实测过的\n- shasum:0\n\n## 丙栏 · 必闭\n- 零 · ev:shasum\n' > "$F31/02a-review.md"
+expect_rc 0 "链C3 next(②B 丙栏有阻塞 · 零 patch)⟹ 派 ③改" flow-batch next "$F31"
+printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: ③改$' && printf '%s' "$LAST_OUT" | grep -q '②B 丙栏:阻塞 1 · 条目 1' && ok "链C3 阻塞 1 ⟹ ③改" || fail "链C3 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
+printf '%s' "$LAST_OUT" | grep -q '微改通道:零 patch,跳过' && ok "链C3 零 patch 时通道显式跳过" || fail "链C3 通道处置错"
+grep -q '^- \*\*核心库写权限面\*\*:只许改 shell,核心库一个字节不许动(默认' "$F31/03-dispatch.md" && grep -q '^- \*\*裁决号段\*\*:从 2300 起' "$F31/03-dispatch.md" && [ "$(grep -v '^#' "$F31/.face-③改.txt" | tr '\n' ' ')" = "src/a.ts src/k.test.ts " ] && ok "链C3 ③ 派单:核心库默认只许 shell · 号段 2300 · 面 = ①面" || fail "链C3 ③ 派单错"
+printf 'it("[REQ] c", () => {})\n' >> src/k.test.ts
+printf '# ③改 回件 · C\n\n## 〇 · 改动索引表\n| 符号 | 文件:行段 | 性质 | 对应 | 例外 |\n|---|---|---|---|---|\n| `k` | src/k.test.ts:1-2 | 改 | B-1 | 裁决-2301 |\n\n## 丙栏 · 自报三处最没把握\n- 一\n' > "$F31/03-fix-handoff.md"
+expect_rc 0 "链C4 next(③ 〇表只有测试路径)⟹ 收口不派 ④" flow-batch next "$F31"
+printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: 收口$' && printf '%s' "$LAST_OUT" | grep -q '③ 〇表只有测试 / md 路径,申报也无 prod 行 ⟹ 不起 ④' && [ ! -f "$F31/04-dispatch.md" ] && ok "链C4 ③ 只改测试 ⟹ 不起 ④,印收口" || fail "链C4 判错: $(printf '%s' "$LAST_OUT" | tail -2)"
+printf '%s' "$LAST_OUT" | grep -q "flow-close --wrap $F31 $F31/.manifest-baseline-①写.txt $F31/.declared-③改.txt $F31/.after-③改-hashes.txt --task T1\$" && ok "链C4 收口命令取 ③ 的申报与 after,无 --plan" || fail "链C4 收口命令错: $(printf '%s' "$LAST_OUT" | grep wrap)"
+# ③ 〇表含生产路径 ⟹ 派 ④,面 = ③ 〇表路径,必查行段 = 第二列原样
+rm -f "$F31/.evidence/③改-close.txt"   # 让 next 重收 ③(回件改了)
+printf 'export const c2 = 2;\n' >> src/a.ts
+printf '# ③改 回件 · C\n\n## 〇 · 改动索引表\n| 符号 | 文件:行段 | 性质 | 对应 | 例外 |\n|---|---|---|---|---|\n| `k` | src/k.test.ts:1-2 | 改 | B-1 | 裁决-2301 |\n| `a` | src/a.ts:3–4 | 改 | B-1 | |\n\n## 丙栏 · 自报三处最没把握\n- 一\n' > "$F31/03-fix-handoff.md"
+expect_rc 0 "链C5 next(③ 〇表含生产路径)⟹ 派 ④" flow-batch next "$F31"
+printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: ④$' && printf '%s' "$LAST_OUT" | grep -q '③ 〇表生产路径 1 条' && ok "链C5 ③ 改了生产码 ⟹ 派 ④" || fail "链C5 判错: $(printf '%s' "$LAST_OUT" | tail -2)"
+[ "$(grep -v '^#' "$F31/.face-④.txt" | tr '\n' ' ')" = "src/k.test.ts src/a.ts " ] && grep -q '^- \*\*必查行段\*\*(③ 〇表第二列原样.*): src/k.test.ts:1-2  src/a.ts:3–4' "$F31/04-dispatch.md" && grep -A4 '^- \*\*必读\*\*' "$F31/04-dispatch.md" | grep -q '③改 回件 .*03-fix-handoff.md' && ok "链C5 ④ 面 = ③ 〇表路径 · 必查行段原样 · 必读认领 ③ 回件" || fail "链C5 ④ 派单错: $(cat "$F31/.face-④.txt"; grep -E '必查行段|③改 回件' "$F31/04-dispatch.md")"
+git checkout -q -- . 2>/dev/null; git add -A >/dev/null 2>&1; git commit -qm 'r31 end' >/dev/null 2>&1
 
 # ── 28. 1.1.0 / B2 + B3:微改通道收生产行(FLOW_MICRO_PROD_LINES)· 落笔后 kit 复跑 oracle(repro 头 → RC=<n> [末行含 <子串>])──
 cd "$WS"

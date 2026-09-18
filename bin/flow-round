@@ -5,7 +5,8 @@
 # 1.0.0(A1 收工零命令):agent 收工只写回件,收工件(申报清单 / 交付态哈希)由本命令派生与冻结 ——
 #   · close 先从回件〇节索引表**派生申报清单**(〇表路径 ∪ 目录里所有先前轮的派生清单;例外列 `裁决-N` ⟹ 行尾 `# 裁决-N`)
 #     落 .declared-<轮名>.txt;目录里若有 agent 手写的同名件(无 kit 头)⟹ diff、不一致 WARN、以派生为准。
-#   · between 全绿后才冻结:flow_freeze_to 写 .after-<轮名>-hashes.txt;红了不冻,修完重跑。
+#   · 全部判据绿后才冻结(1.1.0 起含回件六判 / 步骤账 / 丁栏;1.0.0 是 BETWEEN OK 后):flow_freeze_to 写 .after-<轮名>-hashes.txt;红了不冻,修完重跑。
+#   · 收工末态落 .evidence/<轮名>-close.txt(1.1.0 / B1;`ROUND-CLOSE OK|RED: <轮名>(<时间>)`),flow-batch 按它判哪轮已收。
 #   · 「交付态哈希」从 close 挪到 open:open 对目录里**最新**的 .after-*-hashes.txt 跑 shasum -c,非 OK 行 > 0 即 RED(抓的是轮间有人动树);
 #     一批的第一轮没有上一轮 ⟹ info 不判红。
 # 1.0.0(A2 甲栏机器生成):close 另判三条 —— 审轮(②/④)的 .evidence/<轮名>-log.tsv 存在且非空;丙栏每个 `ev:<名>` 在 log 里有行;
@@ -73,13 +74,7 @@ newest() {   # newest <glob 模式(相对 DIR)>:按 mtime 最新的一个文件�
 #   编排方只能在手写区加一句「别照那一列抄」。件名靠不住,件里的轮名靠得住 —— 两侧同源(契约 3)。
 # 认不出才退回 glob,并把格子标成 ⚠glob猜:猜错要看得见,不许静默错。
 find_handoff() { flow_find_handoff "$DIR" "$1"; }   # 1.0.0 入库(flow-dispatch 的必读骨架也用它)
-find_dispatch() {  # 派单生成段里的 `- **轮次 / 模型**:<轮名> ·` —— flow-dispatch 自己印的,天然同源
-  ( cd "$DIR" 2>/dev/null || exit 0
-    for m in *.md; do
-      [ -f "$m" ] || continue
-      if LC_ALL=C grep -qF -- "**轮次 / 模型**:$1 ·" "$m"; then printf '%s\n' "$m"; break; fi
-    done )
-}
+find_dispatch() { flow_find_dispatch "$DIR" "$1"; }   # 1.1.0 入库(flow-batch 也按它认「哪轮开过 / 树权限」)
 find_resume() {    # 续轮派单头 `## 派单必带块 —— <轮名>-续(`(flow-dispatch --resume 印的)
   ( cd "$DIR" 2>/dev/null || exit 0
     for m in *.md; do
@@ -88,10 +83,7 @@ find_resume() {    # 续轮派单头 `## 派单必带块 —— <轮名>-续(`(f
     done )
 }
 
-tree_of() {        # 本轮派单「- **树权限**:<值>」行(flow-dispatch 印的;与 --resume 的 RTREE 同一条 sed);派单认不出 ⟹ 空
-  d_=$(find_dispatch "$1"); [ -n "$d_" ] || return 0
-  LC_ALL=C sed -n 's/^- \*\*树权限\*\*:\([^(]*\).*/\1/p' "$DIR/$d_" | head -1
-}
+tree_of() { flow_round_tree "$DIR" "$1"; }   # 本轮派单「- **树权限**:<值>」行;派单认不出 ⟹ 空(1.1.0 入库)
 
 # 上一轮交付态 = 目录里 mtime 最新的 .after-*-hashes.txt(排除本轮自己那份)。取最新而不取「按轮名推」:②A ‖ ②B 谁后收工不定,
 #   flow-micro --apply 重打的那份 mtime 也最新 —— 最新的就是树现在该在的态。flow-micro 备份件是 `<名>.pre-<N>`,不在这个 glob 里。
@@ -139,6 +131,7 @@ gen_state() {
     done
     echo ""
     echo "- 最近落盘(.evidence,mtime 降序 3 条):$( ( cd "$EV" && ls -t 2>/dev/null | head -3 | tr '\n' ' ' ) )"
+    echo "- 轮次计划(flow-batch 按目录判,零状态):$(flow_batch_plan "$DIR")"
     echo "<!-- flow:gen-end -->"
   } > "$T"
   if [ -f "$S" ]; then
@@ -198,6 +191,7 @@ open)
   if [ -f "$(flow_round_file "$DIR" "$ROUND" steps)" ]; then flow-step show "$DIR" "$ROUND" | tail -1
   else case "$ROUND" in ①写*) echo "  WARN:无步骤账 —— flow-dispatch --dir 会建;没有它 ①写 就没有按 REQ 的断点" ;; *) echo "  info ②③④ 不建步骤账(--resume 从回件节头与 log.tsv 生成接手点)" ;; esac; fi
   hdr "状态档事实段"; gen_state
+  [ "$red" = 0 ] && rm -f "$(flow_round_file "$DIR" "$ROUND" closed)"   # 1.1.0 / B1:真开了新一轮 ⟹ 旧收工标记作废(基线已存在那种 RED 不动它)
   if [ "$red" = 0 ]; then echo "ROUND-OPEN OK: $ROUND(基线 $(basename "$BASE") 打在 $(git -C "$FLOW_REPO_DIR" rev-parse --show-toplevel);此后编排方对仓内文件零编辑;verify 只许在这棵树跑)"; exit 0; else echo "ROUND-OPEN RED: $ROUND"; exit 1; fi ;;
 close)
   case "$ROUND" in
@@ -241,18 +235,8 @@ close)
   FACE_=$(flow_round_file "$DIR" "$ROUND" face); [ -f "$FACE_" ] && set -- "$@" --face "$FACE_"   # 0.9.0 越面:面由 flow-dispatch --dir 落,按约定名传
   [ "$SNAP" = 1 ] && set -- "$@" --snapshot
   flow-close --between "$@" > "$EV/$ROUND-close-between.txt" 2>&1; rc=$?
-  LC_ALL=C grep -E '^== |^RED|^FATAL|^BETWEEN|^OK=|^info |RC=' "$EV/$ROUND-close-between.txt" | sed 's/^/  /'
+  LC_ALL=C grep -E '^== |^RED|^FATAL|^BETWEEN|^OK=|^info |RC=|^TRACE|^LINT|^WARN' "$EV/$ROUND-close-between.txt" | sed 's/^/  /'   # 1.1.0:子命令末行(TRACE / LINT)也过筛,RC=1 才有出处
   echo "RC=$rc(全量 $EV/$ROUND-close-between.txt)"; [ "$rc" = 0 ] || red=1
-  if [ "$SNAP" = 1 ]; then
-    hdr "冻结(快照轮不冻:树没经本轮改,交付态仍是目录里最新的 .after;状态档冻结件格印 ⊘快照不冻)"
-    echo "  info 树权限 $TREEP —— 不打 $(basename "$AFTER")"
-  else
-    hdr "冻结 → $(basename "$AFTER")(1.0.0:BETWEEN OK 之后才打;红了不冻)"
-    if [ "$rc" = 0 ]; then
-      flow_freeze_to "$AFTER" > "$EV/$ROUND-freeze.txt" 2>&1; frc=$?; sed 's/^/  /' "$EV/$ROUND-freeze.txt"; echo "RC=$frc"
-      [ "$frc" = 0 ] || { echo "  RED:冻结失败 —— 交付态没有哈希,下一轮 open 无可核"; red=1; }
-    else echo "  跳过:between 红了,树不是交付态,不冻(修完重跑 close)"; fi
-  fi
   hdr "步骤账(只 ①写;②③④ 为 info)"
   if [ -f "$(flow_round_file "$DIR" "$ROUND" steps)" ]; then
     last=$(flow-step show "$DIR" "$ROUND" | tail -1); echo "  $last"
@@ -336,8 +320,22 @@ close)
       fi ;;
     esac
   fi
+  # 1.1.0 / B1:冻结挪到**全部判据之后**(1.0.0 是 BETWEEN OK 之后就打):回件六判 / 步骤账 / 丁栏红了也不冻 ——
+  #   .after 存在 ⟺ 这轮绿收工,flow-batch 与下一轮 open 都按它认交付态;半绿就冻会让「有 .after」与「收工 OK」不同型
+  if [ "$SNAP" = 1 ]; then
+    hdr "冻结(快照轮不冻:树没经本轮改,交付态仍是目录里最新的 .after;状态档冻结件格印 ⊘快照不冻)"
+    echo "  info 树权限 $TREEP —— 不打 $(basename "$AFTER")"
+  else
+    hdr "冻结 → $(basename "$AFTER")(全部判据绿之后才打;红了不冻)"
+    if [ "$red" = 0 ]; then
+      flow_freeze_to "$AFTER" > "$EV/$ROUND-freeze.txt" 2>&1; frc=$?; sed 's/^/  /' "$EV/$ROUND-freeze.txt"; echo "RC=$frc"
+      [ "$frc" = 0 ] || { echo "  RED:冻结失败 —— 交付态没有哈希,下一轮 open 无可核"; red=1; }
+    else echo "  跳过:前面有红,树不是交付态,不冻(修完重跑 close)"; fi
+  fi
   hdr "状态档事实段"; gen_state
-  if [ "$red" = 0 ]; then echo "ROUND-CLOSE OK: $ROUND"; exit 0; else echo "ROUND-CLOSE RED: $ROUND"; exit 1; fi ;;
+  # 1.1.0 / B1:收工末态落 .evidence/<轮名>-close.txt(flow-batch 按它判「已 close」;RED 也落,末态为准,重跑覆盖)
+  if [ "$red" = 0 ]; then echo "ROUND-CLOSE OK: $ROUND($(date +%FT%H:%M:%S))" > "$(flow_round_file "$DIR" "$ROUND" closed)"; echo "ROUND-CLOSE OK: $ROUND"; exit 0
+  else echo "ROUND-CLOSE RED: $ROUND($(date +%FT%H:%M:%S))" > "$(flow_round_file "$DIR" "$ROUND" closed)"; echo "ROUND-CLOSE RED: $ROUND"; exit 1; fi ;;
 state)
   gen_state; echo "ROUND-STATE OK"; exit 0 ;;
 *) usage ;;

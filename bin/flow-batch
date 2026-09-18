@@ -1,0 +1,219 @@
+#!/bin/sh
+# flow-batch —— 编排方退到三个点(1.1.0 / B1):开批 · 有 finding 要裁决时 · 收口。其余过渡全由本命令按目录结构判并串起来。
+# 病根:编排方每轮 6–8 个请求全是过渡(dispatch → Edit 待填 → open → prompt → 读回件 → close),p4t–p4z 实测 ≈42 min / ≈50 请求;目标 ≤12 请求。
+# **零状态文件**:档位每次从目录结构判(与 1.0.4 快照轮同一哲学)——
+#   已开的轮 = 有 .manifest-baseline-<轮名>.txt;已收的轮 = .evidence/<轮名>-close.txt 末行 ROUND-CLOSE OK(flow-round close 落的);
+#   当前代 = 已开轮里最大的代(①→1 ②→2 ③→3 ④→4);树权限从派单认;micro patch 是否已落笔看 `git apply --check -R` 通不通。
+# 用法:
+#   flow-batch open <流程目录(绝对)> <任务号> --seq <N> [--plan <plan绝对>] [--db <独占|只读|禁用>] [--core <面>] [--cap-ok <理由>] <触面(仓库相对)…>
+#     flow-route-debts --lint → flow-receipts(N/A 印 info)→ flow-dispatch --round ①写 --dir > 01-dispatch.md → flow-round open ①写 → 印三行 Agent prompt。
+#     --seq 是本批裁决号段起点(跨批累加,protocol §3);各轮号段按代错开:①写 N · ②A N+100 · ②B N+200 · ③改 N+300 · ④ N+400(并行的 ②A ‖ ②B 不撞号)。
+#     --db 默认 独占(①写 要测绿)。目录里已有基线 ⟹ FATAL(批已开,走 next)。
+#   flow-batch next <流程目录(绝对)> [--verdict <N>] [--task <号>] [--plan <plan绝对>] [--seq <N>] [--core <面>]
+#     决策表(按当前代):
+#       1 ①写 未 close ⟹ close ①写 → dispatch ②A(快照 · 禁用)+ ②B(活树-独占 · 独占),--face-from .face-①写.txt;open 两轮;印两份 prompt      末行 BATCH NEXT: ②A ②B
+#       2 ②A ②B 未 close ⟹ close 两轮(②A 自动 --snapshot,flow-round 按派单认)→ 收集 .evidence/②*-micro-*.patch →
+#           flow-micro … --face .face-①写.txt --freeze <最新 .after>;给了 --verdict 才 --apply(不给 ⟹ 末行 BATCH NEXT: 待裁决,这是编排方三个点里的第二个)
+#           丙栏零「阻塞」(`(^|[^不])阻塞`,两份都判;丙栏缺按有阻塞,fail-closed)且 patch 全落(或零 patch)⟹ 申报有 prod 行 → 派 ④(B4 自动取面);无 → 印收口命令
+#           否则(有阻塞 / MICRO 非 OK)⟹ dispatch ③改(面 = ①面,活树-独占 · 独占),open,印 prompt                                     末行 BATCH NEXT: ③改|④|收口
+#       3 ③改 未 close ⟹ close ③改 → ③ 〇表有非测试非 md 路径 ⟹ 派 ④;否则印收口命令                                                末行 BATCH NEXT: ④|收口
+#       4 ④ 未 close ⟹ close ④ → 印 flow-close --wrap <目录> <①基线> <申报> <after> --task --plan 一整行                              末行 BATCH NEXT: 收口
+#     --task / --plan / --seq 不给就从 01 派单同源取(派单头 `派单必带块 —— <任务号>(` · 「任务书节选(同源摘取:<plan> L」· 「裁决号段:从 N 起」)。
+#     已 close 的轮不重收(幂等);任一子命令红 ⟹ 末行 BATCH RED RC=1,修完重跑 next 从同一处接着走。
+# 末行固定:`BATCH OPEN OK: …` / `BATCH NEXT: <轮名…|待裁决|收口>` / `BATCH RED: …`;参数错 FATAL RC=2。全量输出落 .evidence/batch-*.txt。
+# 读的配置:FLOW_REPO_DIR FLOW_WS FLOW_TEST_GLOBS;子命令 flow-route-debts / flow-receipts / flow-dispatch / flow-round / flow-micro 按名调用(PATH)。
+set -u
+. "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
+flow_load_config
+
+usage() { echo "用法: flow-batch open <流程目录> <任务号> --seq <N> [--plan <plan>] [--db <独占|只读|禁用>] [--core <面>] [--cap-ok <理由>] <触面…> | flow-batch next <流程目录> [--verdict <N>] [--task <号>] [--plan <plan>] [--seq <N>] [--core <面>]" >&2; exit 2; }
+CMD="${1:-}"; DIR="${2:-}"
+[ -n "$CMD" ] && [ -n "$DIR" ] || usage
+case "$DIR" in /*) ;; *) flow_die "流程目录须绝对路径: $DIR" ;; esac
+shift 2
+TASK=""; PLAN=""; SEQ=""; DB=独占; CORE=""; CAPOK=""; VERDICT=""
+case "$CMD" in
+  open) TASK="${1:-}"; [ -n "$TASK" ] || usage; shift ;;
+  next) ;;
+  *) usage ;;
+esac
+while [ $# -gt 0 ]; do
+  case "$1" in --plan|--seq|--db|--core|--cap-ok|--verdict|--task) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
+  case "$1" in
+    --plan) PLAN="$2"; shift 2 ;; --seq) SEQ="$2"; shift 2 ;; --db) DB="$2"; shift 2 ;; --core) CORE="$2"; shift 2 ;;
+    --cap-ok) CAPOK="$2"; shift 2 ;; --verdict) VERDICT="$2"; shift 2 ;; --task) TASK="$2"; shift 2 ;;
+    --*) flow_die "未知参数 $1" ;;
+    *) [ "$CMD" = open ] || flow_die "next 不收触面(面从目录取): $1"; break ;;
+  esac
+done
+[ -z "$PLAN" ] || case "$PLAN" in /*) ;; *) flow_die "--plan 须绝对路径: $PLAN" ;; esac
+[ -z "$SEQ" ] || case "$SEQ" in *[!0-9]*) flow_die "--seq 须为数字: $SEQ" ;; esac
+[ -z "$VERDICT" ] || case "$VERDICT" in *[!0-9]*) flow_die "--verdict 须为数字: $VERDICT" ;; esac
+BATCH=$(basename "$DIR")
+red=0; step=0
+hdr() { step=$((step+1)); echo "== $step. $1 =="; }
+EV=$(flow_round_file "$DIR" _ evdir)
+
+# —— 子命令包装:全量落 .evidence/batch-<名>.txt,屏上印 RED / FATAL / WARN 与末行,RC 同层 ——
+run() {   # run <名> <命令…>;stdout+stderr 全量落件;绿只印末行,非绿整段印(那是编排方要动手的点,别让它再去翻件);返回命令 RC
+  _r_n="$1"; shift
+  "$@" > "$EV/batch-$_r_n.txt" 2>&1; _r_rc=$?
+  if [ "$_r_rc" = 0 ] || [ "$_r_rc" = 3 ]; then LC_ALL=C grep -E '^WARN' "$EV/batch-$_r_n.txt" | head -6 | sed 's/^/  /'
+  else sed 's/^/  │ /' "$EV/batch-$_r_n.txt"; fi
+  echo "  $(tail -1 "$EV/batch-$_r_n.txt")  (RC=$_r_rc;全量 $EV/batch-$_r_n.txt)"
+  return $_r_rc
+}
+prompt() {   # prompt <轮名> <派单件> <回件名>:dispatch-block.md 末段三行,照抄成 Agent 的 prompt
+  _p_m=$(LC_ALL=C sed -n 's/^- \*\*轮次 \/ 模型\*\*:.* model=\([^( ]*\).*/\1/p' "$2" | head -1)
+  echo "---- Agent prompt · $1${_p_m:+(model=$_p_m)} ----"
+  echo "你是 $BATCH 的 $1 agent。派单:$2 —— 先整读它,再读工作区 $FLOW_LOCAL_DOC_PATH,然后开工。"
+  echo "(Agent 调用的 model 参数照派单块「轮次 / 模型」行;第一行的批次 + 轮名 + 派单路径是 flow-usage 认会话的依据,别改写)"
+  echo "回件:$DIR/$3,模板在派单块末尾的 flow:tpl 段,边写边落;收工只写回件,不跑收工命令,不必回信。"
+}
+dispatch() {   # dispatch <轮名> <出件名> <tree> <db> <seq> <extra…>:flow-dispatch --dir 落件;RC≠0 删残件
+  _d_r="$1"; _d_o="$DIR/$2"; _d_t="$3"; _d_db="$4"; _d_s="$5"; shift 5
+  hdr "flow-dispatch $_d_r(--tree $_d_t --db $_d_db --seq $_d_s)→ $(basename "$_d_o")"
+  # 选项全在触面之前(flow-dispatch 见到第一个非选项就停止解析);"$@" 在 set 执行前展开,仍是外层的 extra
+  set -- "$TASK" --tree "$_d_t" --db "$_d_db" --seq "$_d_s" --round "$_d_r" --dir "$DIR" ${PLAN:+--plan "$PLAN"} ${CORE:+--core "$CORE"} ${CAPOK:+--cap-ok "$CAPOK"} "$@"
+  flow-dispatch "$@" > "$_d_o" 2> "$EV/batch-dispatch-$_d_r.err"; _d_rc=$?
+  [ -s "$EV/batch-dispatch-$_d_r.err" ] && sed 's/^/  /' "$EV/batch-dispatch-$_d_r.err"
+  if [ "$_d_rc" != 0 ]; then rm -f "$_d_o"; echo "  RED:flow-dispatch RC=$_d_rc,派单未落(RC=3 是上限:拆任务或 --cap-ok <理由>)"; red=1; return 1; fi
+  echo "  $(wc -c < "$_d_o" | tr -d ' ') 字节 → $_d_o"
+}
+open_round() { hdr "flow-round open $1"; run "open-$1" flow-round open "$DIR" "$1" || { red=1; return 1; }; }
+close_round() {   # 已收的不重收(幂等);红了停
+  if flow_round_closed "$DIR" "$1"; then echo "== $1 已收工(.evidence/$1-close.txt 末行 OK),不重收 =="; return 0; fi
+  hdr "flow-round close $1"
+  set -- "$DIR" "$1"; [ -n "$TASK" ] && set -- "$@" --task "$TASK"; [ -n "$PLAN" ] && set -- "$@" --plan "$PLAN"
+  run "close-$2" flow-round close "$@" || { red=1; return 1; }
+}
+newest_after() { ls -t "$DIR"/.after-*-hashes.txt 2>/dev/null | head -1; }
+wrap_line() {   # 收口命令一整行:①基线 · 最新 .after 配对的申报 · 最新 .after
+  _w_a=$(newest_after); _w_r=""; [ -n "$_w_a" ] && _w_r=$(flow_round_of "$_w_a")
+  _w_d=""; [ -n "$_w_r" ] && _w_d=$(flow_round_file "$DIR" "$_w_r" declared)
+  printf 'flow-close --wrap %s %s %s %s --task %s%s\n' "$DIR" "$(flow_round_file "$DIR" ①写 baseline)" "${_w_d:-<申报清单>}" "${_w_a:-<after>}" "${TASK:-<任务号>}" "${PLAN:+ --plan $PLAN}"
+}
+
+# ═══ open ═══
+if [ "$CMD" = open ]; then
+  [ -n "$SEQ" ] || flow_die "open 必须给 --seq <本批裁决号段起点>(跨批累加,protocol §3;各轮按代 +100 错开)"
+  case "$DB" in 独占|只读|禁用) ;; *) flow_die "--db 须为 独占|只读|禁用: $DB" ;; esac
+  [ $# -ge 1 ] || flow_die "open 缺触面路径(仓库相对)"
+  mkdir -p "$DIR" || flow_die "建不了流程目录: $DIR"
+  flow_check_flow_dir "$DIR"
+  mkdir -p "$EV"
+  [ -z "$(flow_rounds_opened "$DIR")" ] || flow_die "目录里已有轮($(flow_rounds_opened "$DIR" | tr '\n' ' '))—— 批已开,走 flow-batch next $DIR"
+  hdr "flow-route-debts --lint"
+  run lint flow-route-debts --lint || red=1
+  if [ -n "$PLAN" ]; then
+    hdr "flow-receipts $PLAN $TASK(N/A 是本任务零标记,不是错)"
+    run receipts flow-receipts "$PLAN" "$TASK"; rrc=$?
+    case "$rrc" in 0) ;; 3) echo "  info RECEIPTS N/A" ;; *) red=1 ;; esac
+  else echo "== (接收位跳过:未给 --plan)=="; fi
+  [ "$red" = 0 ] || { echo "BATCH RED: 开批前置红(账本 lint / 接收位),未派单"; exit 1; }
+  dispatch ①写 01-dispatch.md 活树-独占 "$DB" "$SEQ" "$@" || { echo "BATCH RED: ①写 派单未落"; exit 1; }
+  open_round ①写 || { echo "BATCH RED: flow-round open ①写 红(基线没打;派单已落,修完重跑 flow-round open $DIR ①写)"; exit 1; }
+  prompt ①写 "$DIR/01-dispatch.md" 01-write-handoff.md
+  echo "BATCH OPEN OK: $BATCH · ①写 已派已开(号段 $SEQ 起)· 收工后 flow-batch next $DIR"
+  exit 0
+fi
+
+# ═══ next ═══
+[ -d "$DIR" ] || flow_die "流程目录不存在: $DIR"
+flow_check_flow_dir "$DIR"; mkdir -p "$EV"
+D01=$(flow_find_dispatch "$DIR" ①写); [ -n "$D01" ] || flow_die "目录里没有 ①写 派单(生成段带「轮次 / 模型:①写」)—— 先 flow-batch open"
+[ -n "$TASK" ] || TASK=$(LC_ALL=C sed -n 's/^## 派单必带块 —— \([^(]*\)(.*/\1/p' "$DIR/$D01" | head -1 | sed 's/ *$//')
+[ -n "$PLAN" ] || PLAN=$(LC_ALL=C sed -n 's/^### 任务书节选(同源摘取:\([^ ]*\) L.*/\1/p' "$DIR/$D01" | head -1)
+[ -n "$SEQ" ] || SEQ=$(LC_ALL=C sed -n 's/^- \*\*裁决号段\*\*:从 \([0-9]*\) 起.*/\1/p' "$DIR/$D01" | head -1)
+[ -n "$TASK" ] || flow_die "取不到任务号(01 派单头无「派单必带块 —— <任务号>(」)—— 显式给 --task"
+case "$SEQ" in ''|*[!0-9]*) flow_die "取不到号段起点(01 派单无「裁决号段:从 N 起」)—— 显式给 --seq" ;; esac
+FACE1=$(flow_round_file "$DIR" ①写 face); [ -f "$FACE1" ] || flow_die "缺 ①写 的写权限面 $FACE1(flow-dispatch --dir 落的)"
+CUR=0; for r in $(flow_rounds_opened "$DIR"); do g=$(flow_round_gen "$r"); [ "$g" -gt "$CUR" ] && CUR=$g; done
+echo "批 $BATCH · 任务 $TASK · 号段 $SEQ 起 · 当前代 $CUR · $(flow_batch_plan "$DIR")"
+
+# ③ 〇表里有没有生产路径(非测试非 md);flow_handoff_paths 已剥行段
+is_test() { for g in $FLOW_TEST_GLOBS; do case "$1" in $g) return 0 ;; esac; done; return 1; }
+prod_in_handoff() {   # prod_in_handoff <回件绝对>;stdout 生产路径
+  flow_handoff_paths "$1" | sed -e 's/[[:space:]][[:space:]]*#.*$//' | while IFS= read -r p; do
+    [ -n "$p" ] || continue; case "$p" in *.md) continue ;; esac; is_test "$p" || printf '%s\n' "$p"
+  done
+}
+go4() {   # 派 ④(B4:面由 flow-dispatch 从 ③ 〇表 ∪ prod 行取)
+  dispatch ④ 04-dispatch.md 活树-独占 独占 $((SEQ + 400)) || return 1
+  open_round ④ || return 1
+  prompt ④ "$DIR/04-dispatch.md" 04-review.md
+  echo "BATCH NEXT: ④"
+}
+go_wrap() { hdr "收口(编排方三个点里的第三个;先 flow-round state 刷完事实段)"; echo "  $(wrap_line)"; echo "BATCH NEXT: 收口"; }
+
+case "$CUR" in
+0) flow_die "目录里零个已开的轮(有 01 派单却没基线)—— flow-round open $DIR ①写" ;;
+1)
+  close_round ①写 || { echo "BATCH RED: ①写 收工红 —— 按上面的 RED 修(回件〇表 / 步骤账 / 越面),重跑 flow-batch next $DIR"; exit 1; }
+  dispatch ②A 02a-dispatch.md 快照 禁用 $((SEQ + 100)) --face-from "$FACE1" || { echo "BATCH RED: ②A 派单未落"; exit 1; }
+  dispatch ②B 02b-dispatch.md 活树-独占 独占 $((SEQ + 200)) --face-from "$FACE1" || { echo "BATCH RED: ②B 派单未落"; exit 1; }
+  open_round ②A || { echo "BATCH RED: open ②A 红"; exit 1; }
+  open_round ②B || { echo "BATCH RED: open ②B 红"; exit 1; }
+  prompt ②A "$DIR/02a-dispatch.md" 02a-review.md
+  prompt ②B "$DIR/02b-dispatch.md" 02b-review.md
+  echo "BATCH NEXT: ②A ②B(并行;两轮回件都落了再 flow-batch next $DIR)" ;;
+2)
+  for r in $(flow_rounds_opened "$DIR"); do
+    case "$r" in ②*) close_round "$r" || { echo "BATCH RED: $r 收工红 —— 修完重跑 flow-batch next $DIR"; exit 1; } ;; esac
+  done
+  # 丙栏阻塞数(两份都判;丙栏缺 = 判不出 = 按有阻塞)
+  nblock=0; nitem=0
+  for r in $(flow_rounds_opened "$DIR"); do
+    case "$r" in ②*) ;; *) continue ;; esac
+    h=$(flow_find_handoff "$DIR" "$r"); [ -n "$h" ] || { echo "  WARN $r 回件认领不到,按有阻塞"; nblock=$((nblock + 1)); continue; }
+    sec=$(flow_handoff_section "$DIR/$h" 丙栏)
+    if [ -z "$(printf '%s' "$sec" | grep .)" ]; then echo "  WARN $r 回件无丙栏,判不出 ⟹ 按有阻塞(fail-closed)"; nblock=$((nblock + 1)); continue; fi
+    nb=$(printf '%s\n' "$sec" | LC_ALL=C grep -cE '(^|[^不])阻塞' || true); nblock=$((nblock + nb))
+    ni=$(printf '%s\n' "$sec" | LC_ALL=C grep -c '^- ' || true); nitem=$((nitem + ni))
+    echo "  $r 丙栏:阻塞 $nb · 条目 $ni($h)"
+  done
+  # 微改通道:两轴 patch 作一个流
+  set --; for pf in "$DIR"/.evidence/②*-micro-*.patch; do [ -f "$pf" ] && set -- "$@" "$pf"; done
+  MICRO=none
+  if [ $# -gt 0 ]; then
+    AFT=$(newest_after); [ -n "$AFT" ] || { echo "BATCH RED: 目录里没有 .after-*-hashes.txt,微改通道没有可核的树"; exit 1; }
+    hdr "微改通道:$# 份 patch → flow-micro --face $(basename "$FACE1") --freeze $(basename "$AFT")${VERDICT:+ --apply --verdict $VERDICT}"
+    cat -- "$@" > "$EV/batch-micro-all.patch"
+    if ( cd "$FLOW_REPO_DIR" && git -c core.quotepath=false apply --check -R -- "$EV/batch-micro-all.patch" ) >/dev/null 2>&1; then
+      echo "  info 反向 apply --check 通过 ⟹ 这批 patch 已落笔,跳过(幂等)"; MICRO=applied
+    else
+      if [ -n "$VERDICT" ]; then run micro flow-micro "$@" --face "$FACE1" --freeze "$AFT" --apply --verdict "$VERDICT"; mrc=$?
+      else run micro flow-micro "$@" --face "$FACE1" --freeze "$AFT"; mrc=$?; fi
+      case "$mrc" in
+        0) if [ -n "$VERDICT" ]; then MICRO=applied; else MICRO=ok; fi ;;
+        *) MICRO=red; echo "  MICRO 非 OK(RC=$mrc)⟹ 整批走 ③" ;;
+      esac
+    fi
+    [ "$nitem" -gt $# ] && echo "  WARN 丙栏条目 $nitem > patch $# 份:没附 patch 的条目不算微改,收口前须清完(protocol §2)"
+  else echo "== (微改通道:零 patch,跳过)=="; fi
+  if [ "$MICRO" = ok ]; then
+    echo "BATCH NEXT: 待裁决 —— MICRO OK 但未落笔;定了就 flow-batch next $DIR --verdict <裁决号>(kit 落笔 + 复跑 oracle,再定 ④ / 收口)"; exit 0
+  fi
+  if [ "$nblock" = 0 ] && [ "$MICRO" != red ]; then
+    if [ -n "$(flow_prod_paths "$DIR")" ]; then echo "  申报有 prod 行(微改落了生产行)⟹ 派 ④ 审 diff"; go4 || { echo "BATCH RED: ④ 未派成"; exit 1; }
+    else echo "  零阻塞 · 零生产改动 ⟹ 不起 ③④"; go_wrap; fi
+  else
+    echo "  阻塞 $nblock · MICRO $MICRO ⟹ 派 ③改(面 = ①面;③ 从重打后的交付态起)"
+    dispatch ③改 03-dispatch.md 活树-独占 独占 $((SEQ + 300)) --face-from "$FACE1" || { echo "BATCH RED: ③改 派单未落"; exit 1; }
+    open_round ③改 || { echo "BATCH RED: open ③改 红"; exit 1; }
+    prompt ③改 "$DIR/03-dispatch.md" 03-fix-handoff.md
+    echo "BATCH NEXT: ③改"
+  fi ;;
+3)
+  close_round ③改 || { echo "BATCH RED: ③改 收工红 —— 修完重跑 flow-batch next $DIR"; exit 1; }
+  h3=$(flow_find_handoff "$DIR" ③改)
+  np=$(prod_in_handoff "$DIR/$h3" | grep -c . || true)
+  if [ "$np" -gt 0 ] || [ -n "$(flow_prod_paths "$DIR")" ]; then echo "  ③ 〇表生产路径 $np 条(∪ 申报 prod 行)⟹ 派 ④ 审 diff"; go4 || { echo "BATCH RED: ④ 未派成"; exit 1; }
+  else echo "  ③ 〇表只有测试 / md 路径,申报也无 prod 行 ⟹ 不起 ④"; go_wrap; fi ;;
+4)
+  for r in $(flow_rounds_opened "$DIR"); do
+    case "$r" in ④*) close_round "$r" || { echo "BATCH RED: $r 收工红 —— 修完重跑 flow-batch next $DIR"; exit 1; } ;; esac
+  done
+  go_wrap ;;
+esac
+exit 0

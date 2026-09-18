@@ -260,12 +260,15 @@ flow_prod_paths() {   # 用法: flow_prod_paths <流程目录(绝对)>
 
 # —— 轮级约定文件名(1.0.5 / A6):只在这一处拼;flow-dispatch 印进派单的名字、flow-round / flow-ev / flow-micro / flow-close / flow-step 派生的名字全经它 ——
 #   病根:契约 3 的「四处派生,改一边就要改另一边」是 1.0.4 三处 bug 的同一根;字面 `.after-$R-hashes.txt` 之类散在五个脚本里。
-#   种类:baseline · declared · after · face · steps · log · gates · evdir · verdicts(1.1.0 / B4:①写 丁栏三态表抽成 .verdicts-<轮名>.md);别的 FATAL。stdout 印绝对路径(evdir 不带尾斜杠)。
+#   种类:baseline · declared · after · face · steps · log · gates · evdir · verdicts(1.1.0 / B4:①写 丁栏三态表抽成 .verdicts-<轮名>.md)
+#   · closed(1.1.0 / B1:flow-round close 末行落 .evidence/<轮名>-close.txt,`ROUND-CLOSE OK|RED: <轮名> …`;flow-batch 按它判「已 close」,
+#     快照轮没有 .after,活树轮 .after 只在全绿后打 —— 一个统一的收工标记比按 .after / .declared 猜可靠);别的 FATAL。stdout 印绝对路径(evdir 不带尾斜杠)。
 #   smoke 有棘轮:bin/lib 里 `"$VAR/.(after|declared|manifest-baseline|face|steps)-` 的代码形命中数只许为 0(枚举用的 glob 不算)。
-flow_round_file() {   # 用法: flow_round_file <流程目录(绝对)> <轮名> <baseline|declared|after|face|steps|log|gates|evdir|verdicts>
+flow_round_file() {   # 用法: flow_round_file <流程目录(绝对)> <轮名> <baseline|declared|after|face|steps|log|gates|evdir|verdicts|closed>
   case "$3" in
     baseline) printf '%s/.manifest-baseline-%s.txt\n' "$1" "$2" ;;
     verdicts) printf '%s/.verdicts-%s.md\n' "$1" "$2" ;;
+    closed)   printf '%s/.evidence/%s-close.txt\n' "$1" "$2" ;;
     declared) printf '%s/.declared-%s.txt\n' "$1" "$2" ;;
     after)    printf '%s/.after-%s-hashes.txt\n' "$1" "$2" ;;
     face)     printf '%s/.face-%s.txt\n' "$1" "$2" ;;
@@ -273,7 +276,7 @@ flow_round_file() {   # 用法: flow_round_file <流程目录(绝对)> <轮名> 
     log)      printf '%s/.evidence/%s-log.tsv\n' "$1" "$2" ;;
     gates)    printf '%s/.evidence/%s-gates.txt\n' "$1" "$2" ;;
     evdir)    printf '%s/.evidence\n' "$1" ;;
-    *) flow_die "flow_round_file:不认的种类「$3」(只认 baseline|declared|after|face|steps|log|gates|evdir|verdicts)" ;;
+    *) flow_die "flow_round_file:不认的种类「$3」(只认 baseline|declared|after|face|steps|log|gates|evdir|verdicts|closed)" ;;
   esac
 }
 # 反向:从约定名取轮名(只认 after / declared / baseline / face / steps / verdicts 六种;认不出印空,RC 1)。flow-micro 拿 .after-X ↔ .declared-X 配对用它
@@ -290,6 +293,46 @@ flow_round_of() {   # 用法: flow_round_of <文件路径>
   esac
   [ -n "$_ro_r" ] || return 1
   printf '%s\n' "$_ro_r"
+}
+
+# —— 派单认领(1.1.0 入库,flow-round / flow-batch 共用):按派单生成段的 `- **轮次 / 模型**:<轮名> ·` 行认(flow-dispatch 自己印的,天然同源);印文件名(相对目录),没有就空 ——
+flow_find_dispatch() {   # 用法: flow_find_dispatch <流程目录(绝对)> <轮名>
+  ( cd "$1" 2>/dev/null || exit 0
+    for m in *.md; do
+      [ -f "$m" ] || continue
+      if LC_ALL=C grep -qF -- "**轮次 / 模型**:$2 ·" "$m"; then printf '%s\n' "$m"; break; fi
+    done )
+}
+# 本轮派单的「- **树权限**:<值>」(与 flow-dispatch --resume 的 RTREE 同一条 sed);派单认不出 ⟹ 空
+flow_round_tree() {   # 用法: flow_round_tree <流程目录(绝对)> <轮名>
+  _rt_d=$(flow_find_dispatch "$1" "$2"); [ -n "$_rt_d" ] || return 0
+  LC_ALL=C sed -n 's/^- \*\*树权限\*\*:\([^(]*\).*/\1/p' "$1/$_rt_d" | head -1
+}
+# 已 close 且绿:.evidence/<轮名>-close.txt 末行 `ROUND-CLOSE OK`(flow-round close 落的;RED 也落,末态为准)
+flow_round_closed() {   # 用法: flow_round_closed <流程目录(绝对)> <轮名>;RC 0 = 绿收工
+  _rc_f=$(flow_round_file "$1" "$2" closed)
+  [ -f "$_rc_f" ] || return 1
+  case "$(tail -1 "$_rc_f")" in "ROUND-CLOSE OK"*) return 0 ;; *) return 1 ;; esac
+}
+# 已开工的轮(有基线),按开工先后;轮名一行一个
+flow_rounds_opened() {   # 用法: flow_rounds_opened <流程目录(绝对)>
+  ( cd "$1" 2>/dev/null && ls -tr .manifest-baseline-*.txt 2>/dev/null ) | while IFS= read -r _ro_f; do [ -n "$_ro_f" ] && flow_round_of "$_ro_f"; done
+}
+# 轮名 → 代(①→1 ②→2 ③→3 ④→4;别的 0)
+flow_round_gen() { case "$1" in ①*) echo 1 ;; ②*) echo 2 ;; ③*) echo 3 ;; ④*) echo 4 ;; *) echo 0 ;; esac; }
+# 本批轮次计划(1.1.0 / B1:flow-batch 与 flow-round state 同源,零状态文件,全从目录结构判):
+#   档 A = ① ②(② 后零阻塞、零生产改动 ⟹ 收口)· 档 B = ① ② ④(微改落了生产行 ⟹ ④ 审 diff)· 档 C = ① ② ③ (④)(有阻塞 / 通道不收 ⟹ ③)
+flow_batch_plan() {   # 用法: flow_batch_plan <流程目录(绝对)>;stdout 一行
+  _bp_r=$(flow_rounds_opened "$1" | tr '\n' ' '); _bp_g=""
+  for _bp_x in $_bp_r; do _bp_g="$_bp_g$(flow_round_gen "$_bp_x")"; done
+  case "$_bp_g" in
+    *3*) _bp_t="档 C(① ② ③ ④:有阻塞或通道不收,起了 ③)" ;;
+    *4*) _bp_t="档 B(① ② ④:微改落了生产行,④ 只审 diff)" ;;
+    *2*) if [ -n "$(flow_prod_paths "$1")" ]; then _bp_t="档 B 候选(② 后申报有 prod 行 ⟹ 下一步派 ④)"; else _bp_t="档 A 候选(① ②;② 全绿零生产改动 ⟹ 收口)"; fi ;;
+    *1*) _bp_t="进行中(只开了 ①)" ;;
+    *)   _bp_t="未开工" ;;
+  esac
+  printf '%s · 已开 %s\n' "$_bp_t" "${_bp_r:-无}"
 }
 
 # —— 申报清单解析(1.0.5 / A2):四处消费者(flow-close 越面与交付态 / flow-manifest 测试锁 / 派生并集 / flow-micro 追号)只走这一条 ——
