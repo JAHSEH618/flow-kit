@@ -234,13 +234,38 @@ flow_handoff_skipped() {   # 用法: flow_handoff_skipped <回件(绝对)>
       printf "%d\t%s\t%s\n", NR, k, f }' "$1"
 }
 
+# 〇表第二列**原样**(`路径[:行段]`,反引号剥掉;只取 新增 / 改 / 删 行;1.1.0 / B4)—— ④ 派单印「必查行段」用它:④ 只审这些行段
+flow_handoff_ranges() {   # 用法: flow_handoff_ranges <回件(绝对)>
+  LC_ALL=C awk -F'|' '
+    /^## /{ on = ($0 ~ /^## 〇/); next }
+    !on || $0 !~ /^\|/ || NF < 5 { next }
+    { for (i = 1; i <= NF; i++) { gsub(/^[ \t]+|[ \t]+$/, "", $i) }
+      f = $3; k = $4
+      if (k !~ /^(新增|改|删)/) next
+      gsub(/`/, "", f)
+      if (f == "" || f ~ /[ \t]/ || f ~ /^[0-9][0-9,–-]*$/) next
+      print f }' "$1"
+}
+# 回件某一节的正文(节头 `## <名>…` 起到下一个 `## ` 前,不含节头;1.1.0 / B4:flow-round close 抽 ①写 丁栏三态表用)
+flow_handoff_section() {   # 用法: flow_handoff_section <回件(绝对)> <节名前缀,如 丁栏>
+  LC_ALL=C awk -v S="## $2" 'index($0, S) == 1 { on = 1; next } /^## /{ on = 0 } on { print }' "$1"
+}
+# 目录里所有申报清单中带 `prod` 词的路径(flow-micro 落笔生产行时打的;1.1.0 / B2 / B4)—— 「树上落了生产改动」的机器判据,④ 的面由它 ∪ ③ 〇表路径构成
+flow_prod_paths() {   # 用法: flow_prod_paths <流程目录(绝对)>
+  for _pp_f in "$1"/.declared-*.txt; do
+    [ -f "$_pp_f" ] || continue
+    flow_declared_rows "$_pp_f" | LC_ALL=C awk -F'\t' '$3 ~ /(^|[ \t])prod([ \t]|$)/ { print $1 }'
+  done | sort -u
+}
+
 # —— 轮级约定文件名(1.0.5 / A6):只在这一处拼;flow-dispatch 印进派单的名字、flow-round / flow-ev / flow-micro / flow-close / flow-step 派生的名字全经它 ——
 #   病根:契约 3 的「四处派生,改一边就要改另一边」是 1.0.4 三处 bug 的同一根;字面 `.after-$R-hashes.txt` 之类散在五个脚本里。
-#   种类:baseline · declared · after · face · steps · log · gates · evdir;别的 FATAL。stdout 印绝对路径(evdir 不带尾斜杠)。
+#   种类:baseline · declared · after · face · steps · log · gates · evdir · verdicts(1.1.0 / B4:①写 丁栏三态表抽成 .verdicts-<轮名>.md);别的 FATAL。stdout 印绝对路径(evdir 不带尾斜杠)。
 #   smoke 有棘轮:bin/lib 里 `"$VAR/.(after|declared|manifest-baseline|face|steps)-` 的代码形命中数只许为 0(枚举用的 glob 不算)。
-flow_round_file() {   # 用法: flow_round_file <流程目录(绝对)> <轮名> <baseline|declared|after|face|steps|log|gates|evdir>
+flow_round_file() {   # 用法: flow_round_file <流程目录(绝对)> <轮名> <baseline|declared|after|face|steps|log|gates|evdir|verdicts>
   case "$3" in
     baseline) printf '%s/.manifest-baseline-%s.txt\n' "$1" "$2" ;;
+    verdicts) printf '%s/.verdicts-%s.md\n' "$1" "$2" ;;
     declared) printf '%s/.declared-%s.txt\n' "$1" "$2" ;;
     after)    printf '%s/.after-%s-hashes.txt\n' "$1" "$2" ;;
     face)     printf '%s/.face-%s.txt\n' "$1" "$2" ;;
@@ -248,10 +273,10 @@ flow_round_file() {   # 用法: flow_round_file <流程目录(绝对)> <轮名> 
     log)      printf '%s/.evidence/%s-log.tsv\n' "$1" "$2" ;;
     gates)    printf '%s/.evidence/%s-gates.txt\n' "$1" "$2" ;;
     evdir)    printf '%s/.evidence\n' "$1" ;;
-    *) flow_die "flow_round_file:不认的种类「$3」(只认 baseline|declared|after|face|steps|log|gates|evdir)" ;;
+    *) flow_die "flow_round_file:不认的种类「$3」(只认 baseline|declared|after|face|steps|log|gates|evdir|verdicts)" ;;
   esac
 }
-# 反向:从约定名取轮名(只认 after / declared / baseline / face / steps 五种;认不出印空,RC 1)。flow-micro 拿 .after-X ↔ .declared-X 配对用它
+# 反向:从约定名取轮名(只认 after / declared / baseline / face / steps / verdicts 六种;认不出印空,RC 1)。flow-micro 拿 .after-X ↔ .declared-X 配对用它
 flow_round_of() {   # 用法: flow_round_of <文件路径>
   _ro_b=$(basename "$1")
   case "$_ro_b" in
@@ -260,6 +285,7 @@ flow_round_of() {   # 用法: flow_round_of <文件路径>
     .manifest-baseline-*.txt) _ro_r=${_ro_b#.manifest-baseline-}; _ro_r=${_ro_r%.txt} ;;
     .face-*.txt)             _ro_r=${_ro_b#.face-}; _ro_r=${_ro_r%.txt} ;;
     .steps-*.md)             _ro_r=${_ro_b#.steps-}; _ro_r=${_ro_r%.md} ;;
+    .verdicts-*.md)          _ro_r=${_ro_b#.verdicts-}; _ro_r=${_ro_r%.md} ;;
     *) return 1 ;;
   esac
   [ -n "$_ro_r" ] || return 1

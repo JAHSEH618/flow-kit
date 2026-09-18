@@ -26,6 +26,7 @@
 #   认不出才退回 glob 并标 ⚠glob猜。实测 P3-1 状态档 14 行行行取错(③改二 两行都印 03c-fix-handoff.md,实件 05b/05c)。
 # 约定文件名(flow-dispatch --dir 印进派单的就是这些;agent 与编排方两侧同源):
 #   .manifest-baseline-<轮名>.txt · .declared-<轮名>.txt(kit 派生)· .after-<轮名>-hashes.txt(kit 冻结)· .face-<轮名>.txt · .steps-<轮名>.md(只 ①写)· .evidence/<轮名>-*.txt · .evidence/<轮名>-log.tsv
+#   · .verdicts-<轮名>.md(1.1.0 / B4:close 从 ①写 / ③改 回件丁栏抽的三态表,flow-ledger apply dry-run 过才留;--wrap --verdicts 默认取 ①写 那份)
 # F-13:开工序里从没有 `flow-fact-lint verify` 这一步 —— 落位段写进 specs/ 后直接 baseline 冻结,自带的 RED 潜到①写收工才炸,
 #   而那时 specs/ 已在所有 agent 的禁写面。open 先 verify,新增 RED > 0 即红(门定义刚改过就先 `flow-fact-lint baseline` 重打)。
 # 末行固定:`ROUND-OPEN OK|RED` / `ROUND-CLOSE OK|RED` / `ROUND-STATE OK`;参数错 FATAL RC=2。
@@ -57,7 +58,7 @@ hdr() { step=$((step+1)); echo "== $step. $1 =="; }
 # 轮名 → 文件前缀(派单 / 回件按它找;别的轮名按字面找)
 prefix_of() {
   case "$1" in
-    ①写*) echo 01 ;; ②A*) echo 02a ;; ②B*) echo 02b ;; ③改*) echo 03 ;; ④A*) echo 04a ;; ④B*) echo 04b ;;
+    ①写*) echo 01 ;; ②A*) echo 02a ;; ②B*) echo 02b ;; ③改*) echo 03 ;; ④A*) echo 04a ;; ④B*) echo 04b ;; ④*) echo 04 ;;
     *) echo "$1" ;;
   esac
 }
@@ -319,6 +320,21 @@ close)
       else echo "  甲栏判词 $nj 行 = log $nlog 行(名集相等)"; fi
       rm -f "$EV/.jn.$$" "$EV/.ln.$$" "$EV/.ju.$$"
     fi
+    # 1.1.0 / B4:①写 丁栏 = 逐欠账三态表(| 标记 | 判定 | 证据 | 落点 |),抽成 .verdicts-①写.md,flow-ledger apply dry-run 一遍(喂不进去就是体例错);
+    #   flow-close --wrap 不给 --verdicts 时默认取它。④A 的三态表职责从此归 ①写(它触到哪条账它最清楚);③改 丁栏留空,零表行就不出件
+    case "$ROUND" in ①写*|③改*)
+      VERD=$(flow_round_file "$DIR" "$ROUND" verdicts)
+      nvr=$(flow_handoff_section "$DIR/$h" 丁栏 | LC_ALL=C grep -cE '^\|[^|]*\|[^|]*\|' || true)
+      hdr "丁栏三态表 → $(basename "$VERD")(flow-ledger apply dry-run;--wrap --verdicts 默认取它)"
+      if [ "$nvr" -le 2 ]; then echo "  info 丁栏零表行(表头 + 分隔线不算)—— 不出件;本批没触到开放欠账就该是这样"; rm -f "$VERD"
+      else
+        { echo "# verdicts · $ROUND(flow-round close 抽自回件丁栏 $(date +%F\ %H:%M);flow-ledger apply 直接吃,勿手改)"; flow_handoff_section "$DIR/$h" 丁栏; } > "$VERD"
+        flow-ledger apply "$VERD" > "$EV/$ROUND-verdicts-dry.txt" 2>&1; vrc=$?
+        LC_ALL=C grep -E 'dry-run|LEDGER|VERDICTS|RED|FATAL|WARN|留给人|不动' "$EV/$ROUND-verdicts-dry.txt" | head -20 | sed 's/^/  /'; echo "  RC=$vrc"
+        if [ "$vrc" = 0 ]; then echo "  表行 $((nvr - 2)) → $VERD"
+        else echo "  RED:丁栏三态表喂不进 flow-ledger(RC=$vrc)—— 体例:| 标记 | 判定(还 / 追写 / 不动)| 证据 | 落点 |,标记须在账本里"; red=1; fi
+      fi ;;
+    esac
   fi
   hdr "状态档事实段"; gen_state
   if [ "$red" = 0 ]; then echo "ROUND-CLOSE OK: $ROUND"; exit 0; else echo "ROUND-CLOSE RED: $ROUND"; exit 1; fi ;;

@@ -11,6 +11,8 @@
 #       [--dir <流程目录绝对路径>] [--core <core写权限面>] [--plan <plan文件绝对路径>] [--cap-ok <理由>] \
 #       [--face-from <.face-<轮名>.txt 绝对路径>] [--excerpt-bytes <N>] <触面路径(仓库相对)...>
 #   --face-from(1.0.4):触面从上一轮的 .face 件读(一行一路径;# 与空行略过),与命令行触面**取并**;扩面 = 指原件 + 多给几条。
+#   --round ④ + --dir 而不给 --face-from(1.1.0 / B4):面 = ③改 〇表路径 ∪ 申报清单 ` micro prod` 行的路径(∪ 命令行触面);两处都空且命令行空 ⟹ FATAL「④ 零对象」。
+#     派单另印「本轮面」「必查行段(③ 〇表第二列原样)」「④ 必查」三行 —— ④ 退成一轴 diff 审(形制 = 旧 ④B:活树-独占 · 库独占),三态表归 ①写 丁栏。
 #     病根:触面每轮重打一遍(15–18 条路径手敲四次),zsh 不分词又塌出 `-dispatch.md` 0 字节残件。与 --lane-merge 互斥。
 #   --excerpt-bytes(1.0.4):单次覆盖 FLOW_DISPATCH_EXCERPT_BYTES(环境变量盖不过 config:lib 先赋默认值再 source config,那个次序是有意的)。
 #   flow-dispatch --resume <原派单件绝对路径> --dir <流程目录> [--round <原轮名>]  # 续轮派单:①写 从步骤账、②③④ 从回件已落的节 + log.tsv 生成接手点(1.0.0)
@@ -131,7 +133,7 @@ fi
 TASK="${1:-}"; [ -n "$TASK" ] || flow_die "缺任务号"
 shift
 TREE=""; DB=""; SEQ=""; CORE=""   # 1.1.0 / B5:默认按轮印(③ 只许 shell · ① 以面为准 · 审轮零改动),--core 覆盖
-PLAN=""; CAPOK=""; LANE=""; ROUND=""; DIR=""; FACEFROM=""
+PLAN=""; CAPOK=""; LANE=""; ROUND=""; DIR=""; FACEFROM=""; AUTO4=0
 while [ $# -gt 0 ]; do
   case "$1" in --tree|--db|--seq|--core|--plan|--cap-ok|--lane-merge|--round|--dir|--face-from|--excerpt-bytes) [ $# -ge 2 ] || flow_die "$1 缺值" ;; esac
   case "$1" in
@@ -160,7 +162,8 @@ if [ -n "$LANE" ]; then
   case "$LANE" in /*) ;; *) flow_die "--lane-merge 须绝对路径(文件参数一律绝对路径): $LANE" ;; esac
   [ -f "$LANE" ] || flow_die "--lane-merge 清单不存在: $LANE"
 else
-  [ $# -ge 1 ] || [ -n "$FACEFROM" ] || flow_die "缺触面路径(仓库相对;或 --face-from <上一轮 .face 件>)"
+  case "$ROUND" in ④*) [ -n "$DIR" ] && AUTO4=1 ;; esac   # 1.1.0 / B4:④ 的面由 kit 从 ③ 〇表 ∪ 申报 prod 行取(见下),触面可不给
+  [ $# -ge 1 ] || [ -n "$FACEFROM" ] || [ "${AUTO4:-0}" = 1 ] || flow_die "缺触面路径(仓库相对;或 --face-from <上一轮 .face 件>)"
 fi
 case "$TREE" in 快照*|活树-独占|禁入) ;; *) flow_die "--tree 须为 快照|活树-独占|禁入(protocol §3),得到:「${TREE}」" ;; esac
 case "$DB" in 独占|只读|禁用) ;; *) flow_die "--db 须为 独占|只读|禁用(protocol §3),得到:「${DB}」" ;; esac
@@ -184,6 +187,27 @@ if [ -n "$FACEFROM" ]; then
   for p in "$@"; do grep -qxF -- "$p" "$TMP/facefrom" || printf '%s\n' "$p" >> "$TMP/facefrom"; done
   set --
   while IFS= read -r l; do set -- "$@" "$l"; done < "$TMP/facefrom"
+fi
+
+# 1.1.0 / B4:④ 退成 diff 审 —— 不给 --face-from 时,面 = ③改 〇表路径 ∪ 申报清单里 ` micro prod` 行的路径(∪ 命令行触面)。
+#   ④ 只在树上落了生产改动时起,面就是那份改动;两处都空且命令行也空 ⟹ FATAL(④ 零对象,本批不起 ④)。
+#   必查行段 = ③ 〇表第二列原样(带行段),印进派单;prod 行的行段看申报清单配对的 patch。
+FACE4=""; RANGES4=""
+if [ "$AUTO4" = 1 ] && [ -z "$FACEFROM" ]; then
+  h3=$(flow_find_handoff "$DIR" ③改)
+  : > "$TMP/face4"
+  if [ -n "$h3" ]; then
+    flow_handoff_paths "$DIR/$h3" | sed -e 's/[[:space:]][[:space:]]*#.*$//' >> "$TMP/face4"
+    RANGES4=$(flow_handoff_ranges "$DIR/$h3")
+  fi
+  flow_prod_paths "$DIR" >> "$TMP/face4"
+  n3=$(grep -c . "$TMP/face4" || true)
+  for p in "$@"; do grep -qxF -- "$p" "$TMP/face4" || printf '%s\n' "$p" >> "$TMP/face4"; done
+  [ -s "$TMP/face4" ] || flow_die "④ 零对象:目录里没有首行为「# ③改 回件」的件,申报清单里也没有 micro prod 行,命令行也没给触面 —— 本批树上没落生产改动,不起 ④(要硬起就给触面或 --face-from)"
+  set --
+  while IFS= read -r l; do [ -n "$l" ] && set -- "$@" "$l"; done < "$TMP/face4"
+  if [ "$n3" -gt 0 ]; then FACE4="③ 改动面 ${h3:+($h3 〇表)}+ 微改生产行(申报 prod 行)= $n3 条,kit 从目录取;命令行另给 $(( $# - n3 )) 条"
+  else FACE4="目录里零条 ③ 改动 / prod 行,面 = 命令行触面 $# 条"; fi
 fi
 
 # 合并批:触面 = 清单文件;命令行触面只许是清单的子集(合并批不带功能触面)
@@ -273,6 +297,16 @@ for p in "$@"; do LSF="$LSF $p"; done
 DEFAULTS="- **禁写**:许写之外全部(close 越面判据保底);要点名的陷阱(gitignore / DB / 生成物)见待填段
 - **严重级**:阻塞 = 生产行为错 / 门假绿 / 违反裁决;不阻塞 = 注释 · 措辞 · 补测试(微改);记账 = 触面外
 - **边界**:类的枚举命令 = \`$LSF\`(扩类见待填段)"
+case "$ROUND" in
+  ④*)
+    # 1.1.0 / B4:④ 一轴,只审 diff —— 面从 ③ 〇表 ∪ prod 行取(上面算好);必查行段原样印;④A 的两件事分流:三态表归 ①写 丁栏,反例 / 三层只对 diff
+    [ -n "$FACE4" ] && DEFAULTS="$DEFAULTS
+- **本轮面**:$FACE4(④ 只审这份改动,不复审全批)"
+    [ -n "$RANGES4" ] && DEFAULTS="$DEFAULTS
+- **必查行段**(③ 〇表第二列原样;prod 行的行段看 .evidence/*-micro-*.patch):$(printf '%s\n' "$RANGES4" | sed 's/^/ /' | tr '\n' ' ')"
+    DEFAULTS="$DEFAULTS
+- **④ 必查**:面内行段自设变异(变异纪律见 tpl 段)· 门整跑 · 复跑 ② 丙栏 oracle(.evidence/微改-log.tsv 里 kit 已跑的 micro-* 不重跑)· 「做不到」型断言找反例 · 事实句三层 —— 都只对 diff;三态表不归你(①写 丁栏出)" ;;
+esac
 
 # 回件模板(1.0.0 / A5):--round 给了就**整块印进生成段**,由 <!-- flow:tpl-begin/end --> 括起 —— agent 少一个读模板的请求,
 #   「不许手打插件缓存路径」那条禁令随之作废;smoke 的 GEN_CAP 量法排除 tpl 段。没给 --round 只印两份的路径(kit 自算,带版本号的缓存路径升级即断)。
