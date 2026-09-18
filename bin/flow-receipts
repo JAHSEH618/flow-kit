@@ -30,7 +30,7 @@ f="$1"; t="$2"
 cd "$FLOW_REPO_DIR"
 [ -f "$f" ] || flow_die "文件不存在 $f"
 MODE="${FLOW_RECEIPT_MODE:-section}"
-case "$MODE" in section|table) ;; *) flow_die "FLOW_RECEIPT_MODE 须为 section|table,得到:「$MODE」" ;; esac
+case "$MODE" in section|table) ;; *) flow_die "FLOW_RECEIPT_MODE 须为 section|table,得到:「${MODE}」" ;; esac
 # 字边界截断(awk 函数,前置进每个 awk 程序;整个脚本的 awk 一律 LC_ALL=C,length/substr 按字节)
 UT=$(flow_awk_utrunc)
 MARK="$FLOW_RECEIPT_MARK_RE"
@@ -55,7 +55,7 @@ else
   sec_end=$(awk -v s="$sec_start" 'NR>s && /^## /{print NR-1; exit}' "$f")
   [ -n "$sec_end" ] || sec_end=$(wc -l < "$f" | tr -d ' ')
 
-  echo "## 轴1 · $t 节内标记行(L$sec_start–$sec_end;标记词 $MARK)"
+  echo "## 轴1 · $t 节内标记行(L${sec_start}–$sec_end;标记词 $MARK)"
   # ⚠ "$UT" 与程序体之间不许有反斜杠换行:续行后中间的缩进空格把两段拆成两个词,程序体就成了「文件名」,两轴静默零命中
   a1=$(LC_ALL=C awk -v s="$sec_start" -v e="$sec_end" -v F="$f" -v M="$MARK" "$UT"'NR>=s && NR<=e && $0 ~ M {printf "%s:%d: %s\n", F, NR, utrunc($0,160)}' "$f")
   [ -n "$a1" ] && printf '%s\n' "$a1"
@@ -81,7 +81,7 @@ n3=$(printf '%s' "$a3" | grep -c . || true)
 echo ""
 if [ "$n1" -eq 0 ] && [ "$n2" -eq 0 ] && [ "$n3" -eq 0 ]; then
   if [ "$MODE" = section ]; then
-    echo "RECEIPTS N/A: 节 ## $t 在(L$sec_start–$sec_end,$((sec_end - sec_start + 1)) 行)零条标记($MARK)· 节外零点名 · 跨件零点名 —— 本任务没有接收位标记,不是错;标记词写法不同就覆盖 FLOW_RECEIPT_MARK_RE"
+    echo "RECEIPTS N/A: 节 ## $t 在(L${sec_start}–$sec_end,$((sec_end - sec_start + 1)) 行)零条标记($MARK)· 节外零点名 · 跨件零点名 —— 本任务没有接收位标记,不是错;标记词写法不同就覆盖 FLOW_RECEIPT_MARK_RE"
     exit 3
   fi
   echo "FATAL: 三轴都零命中(体例 $MODE)—— 表里没有这个任务号;核对任务号写法或 FLOW_RECEIPT_MODE" >&2

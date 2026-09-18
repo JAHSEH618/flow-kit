@@ -38,7 +38,7 @@ case "${3:-}" in "") ;; --mark-done) MARKDONE=1 ;; *) echo "用法: flow-trace <
 cd "$FLOW_REPO_DIR"
 [ -f "$f" ] || flow_die "文件不存在 $f"
 MODE="${FLOW_RECEIPT_MODE:-section}"
-case "$MODE" in section|table) ;; *) flow_die "FLOW_RECEIPT_MODE 须为 section|table,得到:「$MODE」" ;; esac
+case "$MODE" in section|table) ;; *) flow_die "FLOW_RECEIPT_MODE 须为 section|table,得到:「${MODE}」" ;; esac
 
 tmp="$(flow_tmpdir)/.flow-trace-$$"; mkdir -p "$tmp"
 trap 'rm -rf "$tmp"' EXIT

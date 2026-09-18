@@ -307,7 +307,7 @@ step_rulebook() {
     rl="$FLOW_FLOW_DIR_PATH/.rulebook-lines"
     if [ ! -f "$rb" ] && [ -f "$rl" ]; then
       stored=$(tr -d ' \n' < "$rl")
-      case "$stored" in ''|*[!0-9]*) flow_die "棘轮记录不是数字,拒绝比对: $rl 内容「$stored」" ;; esac
+      case "$stored" in ''|*[!0-9]*) flow_die "棘轮记录不是数字,拒绝比对: $rl 内容「${stored}」" ;; esac
       if [ "$curl" -gt "$stored" ]; then
         echo "RED 规则书变长(旧单位 行): $stored → $curl —— 换单位不洗欠账,先退役再换"; red=1
       else
@@ -316,7 +316,7 @@ step_rulebook() {
       fi
     elif [ -f "$rb" ]; then
       stored=$(tr -d ' \n' < "$rb")
-      case "$stored" in ''|*[!0-9]*) flow_die "棘轮记录不是数字,拒绝比对: $rb 内容「$stored」" ;; esac
+      case "$stored" in ''|*[!0-9]*) flow_die "棘轮记录不是数字,拒绝比对: $rb 内容「${stored}」" ;; esac
       if [ "$cur" -gt "$stored" ]; then
         echo "RED 规则书变长: $stored → $cur 字节(棘轮只许降;退役子句 flow-rulebook retire N.k 后重跑)"; red=1
       else

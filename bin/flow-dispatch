@@ -65,10 +65,10 @@ if [ "${1:-}" = "--resume" ]; then
   fi
   ORIGROUND=$(LC_ALL=C sed -n 's/^- \*\*轮次 \/ 模型\*\*:\([^ ]*\).*/\1/p' "$ORIG" | head -1)
   case "$RROUND" in
-    *-续) flow_die "--round 不许带 -续(得到「$RROUND」)—— 续轮不是新轮,给**原轮名**即可,`-续` 由本命令拼。轮名翻倍会让 flow-round 认不出回件与门读数" ;;
+    *-续) flow_die "--round 不许带 -续(得到「${RROUND}」)—— 续轮不是新轮,给**原轮名**即可,`-续` 由本命令拼。轮名翻倍会让 flow-round 认不出回件与门读数" ;;
   esac
   if [ -n "$RROUND" ] && [ -n "$ORIGROUND" ] && [ "$RROUND" != "$ORIGROUND" ]; then
-    flow_die "--round「$RROUND」与原派单的「轮次 / 模型」行「$ORIGROUND」对不上($ORIG)—— 两侧同源:要么改 --round,要么换原派单件"
+    flow_die "--round「${RROUND}」与原派单的「轮次 / 模型」行「${ORIGROUND}」对不上($ORIG)—— 两侧同源:要么改 --round,要么换原派单件"
   fi
   [ -n "$RROUND" ] || RROUND="$ORIGROUND"
   [ -n "$RROUND" ] || flow_die "原派单里没有「轮次 / 模型」行,取不到轮名($ORIG)—— 显式给 --round <原轮名>(不带 -续)"
@@ -161,8 +161,8 @@ if [ -n "$LANE" ]; then
 else
   [ $# -ge 1 ] || [ -n "$FACEFROM" ] || flow_die "缺触面路径(仓库相对;或 --face-from <上一轮 .face 件>)"
 fi
-case "$TREE" in 快照*|活树-独占|禁入) ;; *) flow_die "--tree 须为 快照|活树-独占|禁入(protocol §3),得到:「$TREE」" ;; esac
-case "$DB" in 独占|只读|禁用) ;; *) flow_die "--db 须为 独占|只读|禁用(protocol §3),得到:「$DB」" ;; esac
+case "$TREE" in 快照*|活树-独占|禁入) ;; *) flow_die "--tree 须为 快照|活树-独占|禁入(protocol §3),得到:「${TREE}」" ;; esac
+case "$DB" in 独占|只读|禁用) ;; *) flow_die "--db 须为 独占|只读|禁用(protocol §3),得到:「${DB}」" ;; esac
 [ -n "$SEQ" ] || flow_die "缺 --seq 裁决起号(protocol §3)"
 if [ -n "$PLAN" ]; then case "$PLAN" in /*) ;; *) flow_die "--plan 须绝对路径(文件参数一律绝对路径)" ;; esac; fi
 if [ -n "$DIR" ]; then
@@ -344,7 +344,7 @@ if [ -n "$DIR" ]; then
     ls_=$(LC_ALL=C grep -n "^<!-- debt:[0-9]* mark:$m " "$FLOW_LEDGER_PATH" | head -1 | cut -d: -f1)
     [ -n "$ls_" ] || continue
     le_=$(awk -v s="$ls_" 'NR>s && /^<!-- debt:/{print NR-1; exit}' "$FLOW_LEDGER_PATH"); [ -n "$le_" ] || le_=$(wc -l < "$FLOW_LEDGER_PATH" | tr -d ' ')
-    MUSTREAD="$MUSTREAD · $FLOW_LEDGER L$ls_–$le_($m)"
+    MUSTREAD="$MUSTREAD · $FLOW_LEDGER L${ls_}–$le_($m)"
   done
   MUSTREAD="- **必读**(kit 印;手写段只加裁决与必查,不复述):$MUSTREAD"
 fi
@@ -424,7 +424,7 @@ print_excerpt() {
   echo ""; echo "#### outline(行号是 $PLAN 的)"
   awk -v s="$SECS" '/^###/{printf "L%d: %s\n", s+NR-1, $0}' "$TMP/sec"
   # [done] 的 REQ 行不印(0.7.0):p4e 实测一节 21 条 REQ 里 14 条 done 占派单 10.3 KB,八个 agent 各读一遍;要看按行号 sed -n
-  echo ""; echo "#### REQ 行(open / deferred,带行号;[done] $NDONE 条不印,整节 L$SECS–L$SECE 按需 sed -n 读)"
+  echo ""; echo "#### REQ 行(open / deferred,带行号;[done] $NDONE 条不印,整节 L${SECS}–L$SECE 按需 sed -n 读)"
   LC_ALL=C awk -v s="$SECS" -v re="$REQ_RE" '$0 ~ re && $0 !~ /\[done/ {printf "L%d: %s\n", s+NR-1, $0}' "$TMP/sec"
   if [ "$AXIS" = 0 ]; then
     # 节尾:本刀的落位段按惯例住在节尾;给剩余预算(封顶减去已印的节头 1.5 KB + outline + REQ 行),整行对齐
@@ -444,14 +444,14 @@ print_excerpt() {
     note=""
     if [ "$moved" = -1 ]; then note=";切在段中(往前 $rem 字节内无空行)"
     elif [ "$moved" -gt 0 ]; then note=";切点已前移 $moved 行到段落边界"; fi
-    echo ""; echo "#### 节尾(L$((SECS + tl - 1))–L$SECE;L$SECS–L$((SECS + tl - 2)) 未印,按需 sed -n 读$note)"
+    echo ""; echo "#### 节尾(L$((SECS + tl - 1))–L$SECE;L${SECS}–L$((SECS + tl - 2)) 未印,按需 sed -n 读$note)"
     sed -n "${tl},\$p" "$TMP/sec"
   fi
 }
 if [ -n "$PLAN" ]; then
   if [ -n "$SECS" ]; then
     echo ""
-    echo "### 任务书节选(同源摘取:$PLAN L$SECS–$SECE;REQ open $NOPEN · done $NDONE · deferred $NDEF,open 上限 $FLOW_REQ_CAP;plan 其余不读,引上游用「文件 + 节号」指针)"
+    echo "### 任务书节选(同源摘取:$PLAN L${SECS}–$SECE;REQ open $NOPEN · done $NDONE · deferred $NDEF,open 上限 $FLOW_REQ_CAP;plan 其余不读,引上游用「文件 + 节号」指针)"
     print_excerpt
     if [ "$NOPEN" -gt "$FLOW_REQ_CAP" ]; then
       if [ -n "$CAPOK" ]; then

@@ -50,7 +50,7 @@ RERUN=""
 for r in $REBUILD; do
   case " $NAMES " in
     *" $r "*) RERUN="$RERUN $r" ;;
-    *) flow_die "FLOW_GATE_REBUILD 里的门「$r」不在 flow_gates —— 改成真实门名,或显式设为空(空 = 缓存命中时全取缓存,护产物的责任自己担)" ;;
+    *) flow_die "FLOW_GATE_REBUILD 里的门「${r}」不在 flow_gates —— 改成真实门名,或显式设为空(空 = 缓存命中时全取缓存,护产物的责任自己担)" ;;
   esac
 done
 gate_cmd() { printf '%s\n' "$GATES" | awk -F'\t' -v n="$1" '$1==n {print substr($0, length($1)+2); exit}'; }

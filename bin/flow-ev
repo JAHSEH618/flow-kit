@@ -65,7 +65,7 @@ OUT="$EV/$ROUND-$NAME.txt"; LOG="$EV/$ROUND-log.tsv"
 SYN="$(flow_tmpdir)/flow-ev-syn.$$"
 if ! bash -n -c "$CMD" 2> "$SYN"; then
   m=$(sed 's/^bash: -c: //' "$SYN" | tr '\n' ' '); rm -f "$SYN"
-  flow_die "命令语法错(名 $NAME 未消耗,修好照名重跑):$m—— 多引号命令先落 scratchpad 脚本再 -- \"sh <脚本>\""
+  flow_die "命令语法错(名 $NAME 未消耗,修好照名重跑):${m}—— 多引号命令先落 scratchpad 脚本再 -- \"sh <脚本>\""
 fi
 rm -f "$SYN"
 

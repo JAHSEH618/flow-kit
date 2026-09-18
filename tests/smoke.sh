@@ -2,6 +2,9 @@
 # smoke.sh —— 在临时工作区上把每条 flow-* 命令的廉价路径跑一遍;任一红即 RC=1。移植验收与改脚本后的回归都跑它。
 # 用法: tests/smoke.sh   (不碰任何真实项目;临时目录在 $TMPDIR 下,结束即删)
 set -u
+# 1.0.5 / A1:默认按 UTF-8 跑(真实会话是 UTF-8);显式给的 LC_ALL 或 SMOKE_LOCALE 照用(CI 两 locale 各跑一遍)。
+#   病根:bash 3.2(macOS /bin/sh)在 UTF-8 locale 下把 `$VAR` 后紧跟的多字节字符吃进变量名(`」』》】、。「·—` 全炸),C locale 看不见。
+LC_ALL=${SMOKE_LOCALE:-${LC_ALL:-en_US.UTF-8}}; export LC_ALL
 KIT="$(cd "$(dirname "$0")/.." && pwd)"
 PATH="$KIT/bin:$PATH"; export PATH
 T=$(mktemp -d "${TMPDIR:-/tmp}/flow-smoke.XXXXXX") || exit 2
@@ -16,6 +19,11 @@ expect_rc() { # $1 期望 RC  $2 描述  $3.. 命令
   if [ "$rc" = "$want" ]; then ok "$desc (RC=$rc)"; else fail "$desc: 期望 RC=$want 得到 $rc"; printf '%s\n' "$out" | sed 's/^/     /' | head -20; fi
   LAST_OUT="$out"
 }
+
+# ── 0. kit 自检(棘轮)──
+# A1:`$VAR` 后紧跟非 ASCII 字符 ⟹ 必须写 `${VAR}`;命中数只许为 0(perl 按字节扫,与 locale 无关)
+n_=$(perl -ne 'print "$ARGV:$.\n" while /\$[A-Za-z_][A-Za-z0-9_]*(?=[\x80-\xff])/g' "$KIT"/bin/* "$KIT"/lib/*.sh | wc -l | tr -d ' ')
+[ "$n_" = 0 ] && ok "bin/lib 里 \$VAR 后紧跟非 ASCII 的写法 0 处(棘轮:写 \${VAR})" || { fail "bin/lib 里 $n_ 处 \$VAR 后紧跟非 ASCII 字符(bash 3.2 UTF-8 下吃进变量名),改成 \${VAR}:"; perl -ne 'print "     $ARGV:$.\n" while /\$[A-Za-z_][A-Za-z0-9_]*(?=[\x80-\xff])/g' "$KIT"/bin/* "$KIT"/lib/*.sh; }
 
 # ── 1. 建仓 + init ──
 WS="$T/ws"; mkdir -p "$WS/src" "$WS/specs"

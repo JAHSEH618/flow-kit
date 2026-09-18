@@ -91,7 +91,7 @@ case "$CMD" in
     # 0.9.0:title 里反引号外的裸文件名当场 FATAL。title 原样进机器头,flow-render-index 再印进根文档,仓侧「纯文本指针」棘轮
     #   要到 wrap 门整跑才红(P3-4 为此跑了两遍门);与 0.8.1 rulebook 归档模板同病 —— 入口一秒能挡的,不留给分钟级的门
     if printf '%s\n' "$TITLE" | sed 's/`[^`]*`//g' | LC_ALL=C grep -qE "$FLOW_BARE_PATH_RE"; then
-      flow_die "--title 里有反引号外的裸文件名:「$TITLE」—— 文件名进反引号再来(它会被 flow-render-index 印进 $FLOW_INDEX_DOC,撞仓侧纯文本指针棘轮);模式 FLOW_BARE_PATH_RE 可在 config 覆盖"
+      flow_die "--title 里有反引号外的裸文件名:「${TITLE}」—— 文件名进反引号再来(它会被 flow-render-index 印进 $FLOW_INDEX_DOC,撞仓侧纯文本指针棘轮);模式 FLOW_BARE_PATH_RE 可在 config 覆盖"
     fi
     ;;
 esac
