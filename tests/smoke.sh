@@ -1670,6 +1670,35 @@ printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: ④$' && printf '%s' "$LAST_OUT"
 [ "$(grep -v '^#' "$F31/.face-④.txt" | tr '\n' ' ')" = "src/k.test.ts src/a.ts " ] && grep -q '^- \*\*必查行段\*\*(③ 〇表第二列原样.*): src/k.test.ts:1-2  src/a.ts:3–4' "$F31/04-dispatch.md" && grep -A4 '^- \*\*必读\*\*' "$F31/04-dispatch.md" | grep -q '③改 回件 .*03-fix-handoff.md' && ok "链C5 ④ 面 = ③ 〇表路径 · 必查行段原样 · 必读认领 ③ 回件" || fail "链C5 ④ 派单错: $(cat "$F31/.face-④.txt"; grep -E '必查行段|③改 回件' "$F31/04-dispatch.md")"
 git checkout -q -- . 2>/dev/null; git add -A >/dev/null 2>&1; git commit -qm 'r31 end' >/dev/null 2>&1
 
+# ── 27c. 1.2.0 / C2b:轴随对象(FLOW_AXIS_BY_OBJECT=1)—— ① 〇表有 md ⟹ 仍两轴;纯代码 + 裁决全带判据 ⟹ 只派 ②B,②B 收工零阻塞 ⟹ 收口;默认关(§27 / §27b 恒两轴)──
+printf 'FLOW_AXIS_BY_OBJECT=1\n' >> "$WS/.claude/flow.config.sh"
+git add -A >/dev/null 2>&1; git commit -qm 'r33 起点' >/dev/null 2>&1
+F33="$WS/.flow/r33"
+flow-fact-lint baseline >/dev/null 2>&1
+expect_rc 0 "链X1 flow-batch open" flow-batch open "$F33" T1 --seq 3000 --db 禁用 src/a.ts docs.md
+printf '【裁决 3001】a.ts 必须含 x-chain → 判据 grep -c x-chain src/a.ts → RC=0\n' >> "$F33/01-dispatch.md"
+printf 'x-chain\n' >> src/a.ts; printf '# d\n' > docs.md
+printf '# ①写 回件 · X\n\n## 〇 · 改动索引表\n| 符号 | 文件:行段 | 性质 | 对应 | 例外 |\n|---|---|---|---|---|\n| `a` | src/a.ts:1-3 | 改 | R1 | |\n| `d` | docs.md:1 | 新增 | R1 | |\n\n## 丙栏 · 自报三处最没把握\n- 一\n' > "$F33/01-write-handoff.md"
+n33=$(grep -c '^- \[ \]' "$F33/.steps-①写.md"); i=0; while [ $i -lt "$n33" ]; do i=$((i+1)); flow-step done "$F33" ①写 $i >/dev/null 2>&1; done
+expect_rc 0 "链X2 next(① 〇表有 md)⟹ 仍两轴" flow-batch next "$F33"
+printf '%s' "$LAST_OUT" | grep -q '轴随对象(FLOW_AXIS_BY_OBJECT=1):① 〇表 md 1 条 · 无判据裁决 0 条 ⟹ ②A 仍有对象,两轴照派' && printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: ②A ②B' && [ -f "$F33/02a-dispatch.md" ] && ok "链X2 有 md ⟹ ②A ②B 照派(点名哪条不满足)" || fail "链X2 判错: $(printf '%s' "$LAST_OUT" | grep -E '轴随对象|^BATCH')"
+git checkout -q -- . 2>/dev/null; rm -f docs.md; git add -A >/dev/null 2>&1; git commit -qm 'r33 end' >/dev/null 2>&1
+F34="$WS/.flow/r34"
+expect_rc 0 "链X3 flow-batch open(纯代码)" flow-batch open "$F34" T1 --seq 3100 --db 禁用 src/a.ts
+printf '【裁决 3101】a.ts 必须含 y-chain → 判据 grep -c y-chain src/a.ts → RC=0\n' >> "$F34/01-dispatch.md"
+printf 'y-chain\n' >> src/a.ts
+printf '# ①写 回件 · Y\n\n## 〇 · 改动索引表\n| 符号 | 文件:行段 | 性质 | 对应 | 例外 |\n|---|---|---|---|---|\n| `a` | src/a.ts:1-3 | 改 | R1 | |\n\n## 丙栏 · 自报三处最没把握\n- 一\n' > "$F34/01-write-handoff.md"
+n34=$(grep -c '^- \[ \]' "$F34/.steps-①写.md"); i=0; while [ $i -lt "$n34" ]; do i=$((i+1)); flow-step done "$F34" ①写 $i >/dev/null 2>&1; done
+expect_rc 0 "链X4 next(纯代码 · 裁决全带判据)⟹ 只派 ②B" flow-batch next "$F34"
+printf '%s' "$LAST_OUT" | grep -q '轴随对象(FLOW_AXIS_BY_OBJECT=1):① 〇表零 md · 无判据裁决 0 条 ⟹ ②A 的对象已机械化(close 跑过随行判据),只派 ②B' && printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: ②B(轴随对象,本批不派 ②A' && [ ! -f "$F34/02a-dispatch.md" ] && [ -f "$F34/02b-dispatch.md" ] && [ -f "$F34/.manifest-baseline-②B.txt" ] && [ ! -f "$F34/.manifest-baseline-②A.txt" ] && [ "$(printf '%s' "$LAST_OUT" | grep -c '^---- Agent prompt')" = 1 ] && ok "链X4 只派 ②B:零 ②A 派单 / 基线,一份 prompt" || fail "链X4 判错: $(printf '%s' "$LAST_OUT" | grep -E '轴随对象|^BATCH|prompt'; ls -a "$F34")"
+grep -q '^  ok   ev:verdict-3101-g1 RC=0 = 期望$' "$F34/.evidence/batch-close-①写.txt" && ok "链X4 裁决判据在 ①写 close 跑过(机械化的依据)" || fail "链X4 裁决判据缺: $(grep verdict "$F34/.evidence/batch-close-①写.txt")"
+flow-ev "$F34" ②B unit -- 'echo ok' >/dev/null 2>&1
+printf '# ②B 回件 · Y\n\n## 〇 · 正面结论\n可进\n\n## 甲栏 · 实测过的\n- unit:绿\n\n## 丙栏 · 必闭\n- 零 · ev:unit\n' > "$F34/02b-review.md"
+expect_rc 0 "链X5 next(②B 收工零阻塞 · 零 patch)⟹ 收口" flow-batch next "$F34"
+printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: 收口$' && printf '%s' "$LAST_OUT" | grep -q '②B 丙栏:阻塞 0 · 条目 1' && ! printf '%s' "$LAST_OUT" | grep -q '②A' && ok "链X5 只收 ②B,零阻塞 ⟹ 收口(档 A)" || fail "链X5 判错: $(printf '%s' "$LAST_OUT" | grep -E '丙栏|^BATCH|②A')"
+git checkout -q -- . 2>/dev/null; sed -i.bak '/FLOW_AXIS_BY_OBJECT=1/d' "$WS/.claude/flow.config.sh"; rm -f "$WS/.claude/flow.config.sh.bak"
+git add -A >/dev/null 2>&1; git commit -qm 'r34 end' >/dev/null 2>&1
+
 # ── 28. 1.1.0 / B2 + B3:微改通道收生产行(FLOW_MICRO_PROD_LINES)· 落笔后 kit 复跑 oracle(repro 头 → RC=<n> [末行含 <子串>])──
 cd "$WS"
 git checkout -q -- . 2>/dev/null; git add -A >/dev/null 2>&1; git commit -qm 'r110 起点' >/dev/null 2>&1

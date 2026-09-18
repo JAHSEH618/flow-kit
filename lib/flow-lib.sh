@@ -99,6 +99,8 @@ flow_load_config() {
   FLOW_TEST_GLOBS='*.test.ts *.test.tsx *.spec.ts *.spec.tsx'   # 测试文件模式(空格分隔的 glob)。两处共用:flow-trace 拿它当 git ls-files 的 pathspec、
                                         # flow-micro 拿它判「性质 = 测试」。别的栈(*_test.go / test_*.py / *Test.java)在 config 里覆盖
   FLOW_ROLE_MODELS=""
+  FLOW_AXIS_BY_OBJECT=0                 # 轴随对象(1.2.0 / C2b;0 = 关,② 恒两轴):1 时 ① 〇表纯代码(零 *.md)且 ①写 派单待填段的裁决全带随行判据(零裁决也算)
+                                        # ⟹ flow-batch 只派 ②B —— ②A 的对象(裁决 / 事实句 / 引证)已由 close 机械跑或本批没有。数据:StockSteer p4j–p4z 17 批 ②A 零阻塞
   FLOW_BARE_PATH_RE='(^|[^A-Za-z0-9_./`-])[A-Za-z0-9_.-]+\.(md|html|toml|tsx|ts|js|jsx|mjs|cjs|sh|sql|prisma|yml|yaml|json)([^A-Za-z0-9_`]|$)'
                                         # 裸文件名(反引号外):flow-ledger add --title 命中即 FATAL(0.9.0)。title 原样进机器头,再由 flow-render-index 印进根文档,
                                         # 仓侧「纯文本指针」棘轮在 wrap 门整跑才红(P3-4 跑了两遍);入口挡下是秒级,门整跑是分钟级。项目按自己的棘轮式覆盖(ERE)
@@ -130,7 +132,7 @@ flow_load_config() {
          FLOW_MAP_DEBT FLOW_MAP_DEBT_PATH FLOW_LOCAL_DOC FLOW_LOCAL_DOC_PATH \
          FLOW_FACT_LINT_BASELINE FLOW_FACT_LINT_BASELINE_PATH FLOW_FACT_LINT_ROOTS FLOW_FACT_LINT_EXCLUDE \
          FLOW_GATE_SUMMARY_RE FLOW_INFRA_FAIL_RE FLOW_INFRA_FAIL_GATES FLOW_DOC_BUDGET_FILE FLOW_DOC_BUDGET_BYTES FLOW_DOC_BUDGET_SELF FLOW_DOC_BUDGET_DIR FLOW_DOC_BUDGET_HOTPATH FLOW_DOC_BUDGET_RULEBOOK \
-         FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_FIX_BY_WRITER FLOW_FOLD_MAX FLOW_MERGE_STRATEGY FLOW_REQ_CAP FLOW_TURN_CAP FLOW_DISPATCH_EXCERPT_BYTES FLOW_MICRO_FIX_LINES FLOW_MICRO_PROD_LINES FLOW_TEST_GLOBS FLOW_TEST_SKIP_RE FLOW_TEST_TITLE_RE FLOW_BARE_PATH_RE FLOW_STALL_SEC FLOW_ROLE_MODELS FLOW_TRANSCRIPTS_DIR \
+         FLOW_DEBT_CAP FLOW_DEBT_WARN FLOW_FIX_BY_WRITER FLOW_FOLD_MAX FLOW_MERGE_STRATEGY FLOW_REQ_CAP FLOW_TURN_CAP FLOW_DISPATCH_EXCERPT_BYTES FLOW_MICRO_FIX_LINES FLOW_MICRO_PROD_LINES FLOW_TEST_GLOBS FLOW_TEST_SKIP_RE FLOW_TEST_TITLE_RE FLOW_BARE_PATH_RE FLOW_STALL_SEC FLOW_ROLE_MODELS FLOW_AXIS_BY_OBJECT FLOW_TRANSCRIPTS_DIR \
          FLOW_RECEIPT_MARK_RE FLOW_KEEP_PLUGINS FLOW_KEEP_MCP
 }
 

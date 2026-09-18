@@ -12,6 +12,7 @@
 #   flow-batch next <流程目录(绝对)> [--verdict <N>] [--task <号>] [--plan <plan绝对>] [--seq <N>] [--core <面>]
 #     决策表(按当前代):
 #       1 ①写 未 close ⟹ close ①写 → dispatch ②A(快照 · 禁用)+ ②B(活树-独占 · 独占),--face-from .face-①写.txt;open 两轮;印两份 prompt      末行 BATCH NEXT: ②A ②B
+#           轴随对象(1.2.0 / C2b,config FLOW_AXIS_BY_OBJECT=1 才开):① 〇表零 *.md 且 ①写 派单待填段裁决全带随行判据 ⟹ 只派 ②B          末行 BATCH NEXT: ②B
 #       2 ②A ②B 未 close ⟹ close 两轮(②A 自动 --snapshot,flow-round 按派单认)→ 收集 .evidence/②*-micro-*.patch →
 #           flow-micro … --face .face-①写.txt --freeze <最新 .after>;给了 --verdict 才 --apply(不给 ⟹ 末行 BATCH NEXT: 待裁决,这是编排方三个点里的第二个)
 #           丙栏零「阻塞」(`(^|[^不])阻塞`,两份都判;丙栏缺按有阻塞,fail-closed)且 patch 全落(或零 patch)⟹ 申报有 prod 行 → 派 ④(B4 自动取面);无 → 印收口命令
@@ -21,7 +22,7 @@
 #     --task / --plan / --seq 不给就从 01 派单同源取(派单头 `派单必带块 —— <任务号>(` · 「任务书节选(同源摘取:<plan> L」· 「裁决号段:从 N 起」)。
 #     已 close 的轮不重收(幂等);任一子命令红 ⟹ 末行 BATCH RED RC=1,修完重跑 next 从同一处接着走。
 # 末行固定:`BATCH OPEN OK: …` / `BATCH NEXT: <轮名…|待裁决|收口>` / `BATCH RED: …`;参数错 FATAL RC=2。全量输出落 .evidence/batch-*.txt。
-# 读的配置:FLOW_REPO_DIR FLOW_WS FLOW_TEST_GLOBS;子命令 flow-route-debts / flow-receipts / flow-dispatch / flow-round / flow-micro 按名调用(PATH)。
+# 读的配置:FLOW_REPO_DIR FLOW_WS FLOW_TEST_GLOBS FLOW_AXIS_BY_OBJECT;子命令 flow-route-debts / flow-receipts / flow-dispatch / flow-round / flow-micro 按名调用(PATH)。
 set -u
 . "$(cd "$(dirname "$0")/.." && pwd)/lib/flow-lib.sh"
 flow_load_config
@@ -150,13 +151,24 @@ case "$CUR" in
 0) flow_die "目录里零个已开的轮(有 01 派单却没基线)—— flow-round open $DIR ①写" ;;
 1)
   close_round ①写 || { echo "BATCH RED: ①写 收工红 —— 按上面的 RED 修(回件〇表 / 步骤账 / 越面),重跑 flow-batch next $DIR"; exit 1; }
-  dispatch ②A 02a-dispatch.md 快照 禁用 $((SEQ + 100)) --face-from "$FACE1" || { echo "BATCH RED: ②A 派单未落"; exit 1; }
+  # 1.2.0 / C2b:轴随对象(config FLOW_AXIS_BY_OBJECT=1 才开)—— ① 〇表纯代码(零 *.md)且 ①写 派单待填段的裁决全带随行判据(零裁决也算)
+  #   ⟹ ②A 的对象(裁决 / 事实句 / 引证)已由 close 机械跑或本批没有,只派 ②B;任一不满足照旧两轴。默认关:硬不变量 §0.1 的两轴不动
+  AX2="②A ②B"
+  if [ "$FLOW_AXIS_BY_OBJECT" = 1 ]; then
+    h1=$(flow_find_handoff "$DIR" ①写)
+    nmd=$(flow_handoff_paths "$DIR/$h1" | sed -e 's/[[:space:]][[:space:]]*#.*$//' | grep -c '\.md$' || true)
+    nnov=$(flow_dispatch_verdicts "$DIR/$D01" | LC_ALL=C awk -F'\t' '$3 == "" { c++ } END { print c + 0 }')
+    if [ "$nmd" = 0 ] && [ "$nnov" = 0 ]; then AX2="②B"; echo "  轴随对象(FLOW_AXIS_BY_OBJECT=1):① 〇表零 md · 无判据裁决 0 条 ⟹ ②A 的对象已机械化(close 跑过随行判据),只派 ②B"
+    else echo "  轴随对象(FLOW_AXIS_BY_OBJECT=1):① 〇表 md $nmd 条 · 无判据裁决 $nnov 条 ⟹ ②A 仍有对象,两轴照派"; fi
+  fi
+  case "$AX2" in *②A*) dispatch ②A 02a-dispatch.md 快照 禁用 $((SEQ + 100)) --face-from "$FACE1" || { echo "BATCH RED: ②A 派单未落"; exit 1; } ;; esac
   dispatch ②B 02b-dispatch.md 活树-独占 独占 $((SEQ + 200)) --face-from "$FACE1" || { echo "BATCH RED: ②B 派单未落"; exit 1; }
-  open_round ②A || { echo "BATCH RED: open ②A 红"; exit 1; }
+  case "$AX2" in *②A*) open_round ②A || { echo "BATCH RED: open ②A 红"; exit 1; } ;; esac
   open_round ②B || { echo "BATCH RED: open ②B 红"; exit 1; }
-  prompt ②A "$DIR/02a-dispatch.md" 02a-review.md
+  case "$AX2" in *②A*) prompt ②A "$DIR/02a-dispatch.md" 02a-review.md ;; esac
   prompt ②B "$DIR/02b-dispatch.md" 02b-review.md
-  echo "BATCH NEXT: ②A ②B(并行;两轮回件都落了再 flow-batch next $DIR)" ;;
+  if [ "$AX2" = "②B" ]; then echo "BATCH NEXT: ②B(轴随对象,本批不派 ②A;回件落了再 flow-batch next $DIR)"
+  else echo "BATCH NEXT: ②A ②B(并行;两轮回件都落了再 flow-batch next $DIR)"; fi ;;
 2)
   for r in $(flow_rounds_opened "$DIR"); do
     case "$r" in ②*) close_round "$r" || { echo "BATCH RED: $r 收工红 —— 修完重跑 flow-batch next $DIR"; exit 1; } ;; esac

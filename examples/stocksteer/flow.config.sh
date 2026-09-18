@@ -113,4 +113,6 @@ FLOW_STALL_SEC=300                     # flow-usage 卡顿判据:一次工具调
 FLOW_RECEIPT_MODE="section"            # plan 体例:section = 任务是 `## <任务号>` 小节;table = 任务是表行
 #                                        体例不对时 flow-receipts 恒 FATAL,接收位就退回人眼核 —— 这是装第二个项目才暴露的
 FLOW_ROLE_MODELS=""                    # 分角色模型,如 "②A=sonnet";空 = 继承编排方。换前同一产物两模型各审一次,flow-review-diff 原版独有为空才换
+FLOW_AXIS_BY_OBJECT=0                  # 轴随对象(1.2.0 / C2b;0 = 关,② 恒两轴):1 时 ① 〇表零 *.md 且裁决全带随行判据 ⟹ flow-batch 只派 ②B(②A 的对象已机械化);
+#                                        任一不满足仍两轴。先跑一批 C2a(裁决判据)看 ②A 还抓不抓得到东西再开
 FLOW_TRANSCRIPTS_DIR="$HOME/.claude/projects"   # flow-usage 读 transcripts 的根(收口时 flow-usage <流程目录> --write 自动填轮数账)

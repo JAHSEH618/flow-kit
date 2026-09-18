@@ -3,6 +3,7 @@
 版本记事(从 CLAUDE.md 搬来;CLAUDE.md 只留地图与契约)。新版本写在最上面。
 
 1.2.0(降价批,TODO §C 的 kit 侧;工作区 config(`FLOW_ROLE_MODELS` / `FLOW_REQ_CAP`)与影子批本身要用本版跑过一批再定;每条一个提交,两 locale × 两 OS 全绿才下一条;agent 面向接口不动):
+**C2b 轴随对象**(config `FLOW_AXIS_BY_OBJECT`,默认 0 = 关,② 恒两轴):1 时 `flow-batch next` 在 ①写 close 后判 ① 〇表零 `*.md` 且 ①写 派单待填段的裁决全带随行判据(零裁决也算)⟹ 只派 ②B(②A 的对象 —— 裁决 / 事实句 / 引证 —— 已由 close 机械跑或本批没有),末行 `BATCH NEXT: ②B(轴随对象…)`;任一不满足照旧两轴并点名哪条。后面的 close 循环 / 丙栏阻塞数 / 微改 patch 流都按目录里实际开过的 ② 轮走,零特判。不是砍轴(§0.1 不动):先跑几批 C2a 看 ②A 在裁决机械化之后还抓不抓得到东西,再开。smoke §27c:有 md ⟹ 两轴;纯代码 + 裁决全带判据 ⟹ 只 ②B ⟹ ②B 零阻塞 ⟹ 收口。
 **C2a 裁决带随行命令**:派单待填段的裁决一条一行 `【裁决 N】<文> → 判据 <命令> → RC=<n> [末行含 <子串>]`(`【裁决-N】` 也认);写 / 改轮 `flow-round close` 在 between 之后对本轮派单待填段每条经 `flow-ev <目录> 裁决 verdict-<N>-g<代> -- <命令>` 跑(同名加 -rN,账 `.evidence/裁决-log.tsv`),RC / 末行子串不符 ⟹ RED 不冻;无随行判据的裁决只 WARN(仍归审方核 —— ② 的「违反裁决」判断不动)。①写 之后的派单 `--dir` 时由 flow-dispatch 把 ①写 派单待填段的裁决行**同源抄进本轮待填段**(lib `flow_dispatch_verdict_lines`;1.1.0 起 ② 派单不再 Edit,裁决其实断在 ①写),③改 close 复跑的就是同一组(名 g3)。解析与复跑入库 lib `flow_run_oracle`(flow-micro 的 repro 头改调它,输出一字不变)与 `flow_dispatch_verdicts`(只扫 `<!-- flow:gen-end -->` 之后:生成段的任务书节选会把 plan 自己写的「【裁决 558】…」原样带进来)。病根:StockSteer p4j–p4z 每批 1–10 条裁决,②A 对象每批都在、17 批零阻塞 —— 先机械化它的对象,再谈轴随对象(C2b)。GEN_CAP 2450 不动(裁决体例行在待填段,不计生成段)。
 
 1.1.0(换形状批,TODO §B 九条;编排方退到三个点,③④ 按需;每条一个提交(B2+B3 同一条 flow-micro 路径合一提交),两 locale × 两 OS 全绿才下一条。agent 面向接口不动;编排方面向接口定型为 `flow-batch open` / `next`):
