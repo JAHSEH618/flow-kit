@@ -21,9 +21,9 @@ expect_rc() { # $1 期望 RC  $2 描述  $3.. 命令
 }
 
 # ── 0. kit 自检(棘轮)──
-# A1:`$VAR` 后紧跟非 ASCII 字符 ⟹ 必须写 `${VAR}`;命中数只许为 0(perl 按字节扫,与 locale 无关)
-n_=$(perl -ne 'print "$ARGV:$.\n" while /\$[A-Za-z_][A-Za-z0-9_]*(?=[\x80-\xff])/g' "$KIT"/bin/* "$KIT"/lib/*.sh | wc -l | tr -d ' ')
-[ "$n_" = 0 ] && ok "bin/lib 里 \$VAR 后紧跟非 ASCII 的写法 0 处(棘轮:写 \${VAR})" || { fail "bin/lib 里 $n_ 处 \$VAR 后紧跟非 ASCII 字符(bash 3.2 UTF-8 下吃进变量名),改成 \${VAR}:"; perl -ne 'print "     $ARGV:$.\n" while /\$[A-Za-z_][A-Za-z0-9_]*(?=[\x80-\xff])/g' "$KIT"/bin/* "$KIT"/lib/*.sh; }
+# A1:`$VAR` 后紧跟非 ASCII 字符 ⟹ 必须写 `${VAR}`;命中数只许为 0(perl 按字节扫,与 locale 无关;本文件也扫 —— set -u 下它会让 smoke 半途 abort)
+n_=$(perl -ne 'print "$ARGV:$.\n" while /\$[A-Za-z_][A-Za-z0-9_]*(?=[\x80-\xff])/g' "$KIT"/bin/* "$KIT"/lib/*.sh "$KIT"/tests/*.sh | wc -l | tr -d ' ')
+[ "$n_" = 0 ] && ok "bin/lib/tests 里 \$VAR 后紧跟非 ASCII 的写法 0 处(棘轮:写 \${VAR})" || { fail "bin/lib/tests 里 $n_ 处 \$VAR 后紧跟非 ASCII 字符(bash 3.2 UTF-8 下吃进变量名),改成 \${VAR}:"; perl -ne 'print "     $ARGV:$.\n" while /\$[A-Za-z_][A-Za-z0-9_]*(?=[\x80-\xff])/g' "$KIT"/bin/* "$KIT"/lib/*.sh "$KIT"/tests/*.sh; }
 
 # ── 1. 建仓 + init ──
 WS="$T/ws"; mkdir -p "$WS/src" "$WS/specs"
@@ -1433,7 +1433,7 @@ printf '# 面\nsrc/note.md\n' > "$F104/.face-a2.txt"
 expect_rc 0 "flow-close --between 累加号清单(越面例外经 lib 解析)" flow-close --between "$F104" "$F104/.manifest-baseline-a2.txt" "$F104/.declared-m.txt" --face "$F104/.face-a2.txt"
 printf '%s' "$LAST_OUT" | grep -q 'ok   面外但申报行带裁决号: src/q.test.ts' && ok "越面例外认累加号行" || fail "越面例外未认: $(printf '%s' "$LAST_OUT" | grep -E '越面|src/q')"
 v1=$(sh -c ". '$KIT/lib/flow-lib.sh'; flow_declared_verdicts '$F104/.declared-m.txt'"); v2=$(sh -c ". '$KIT/lib/flow-lib.sh'; flow_declared_verdicts '$F104/.declared-④A.txt'")
-[ "$v1" = "$(printf 'src/q.test.ts\t4703,4800,4890')" ] && [ "$v1" = "$v2" ] && ok "原件与派生件经同一条解析读到同一串号(4703,4800,4890)" || fail "号不一致: 原「$v1」派生「$v2」"
+[ "$v1" = "$(printf 'src/q.test.ts\t4703,4800,4890')" ] && [ "$v1" = "$v2" ] && ok "原件与派生件经同一条解析读到同一串号(4703,4800,4890)" || fail "号不一致: 原「${v1}」派生「${v2}」"
 # lib 单测:三种行形(sha 前缀 / git 状态位 / rename 箭头)都剥对,行尾注释与号串原样带出,注释行 / 空行不出
 printf '# 头\n%s  src/h.ts\ngit M  src/m.ts  # 裁决-4703,4800 micro\ngit R  src/old.ts -> src/new.ts\n  src/bare.ts   # 说明 无号\n\nsrc/x.ts\n' "$(printf 'x' | shasum -a 256 | cut -c1-64)" > "$F104/.declared-forms.txt"
 rows=$(sh -c ". '$KIT/lib/flow-lib.sh'; flow_declared_rows '$F104/.declared-forms.txt'" | tr '\t' '|')
@@ -1485,5 +1485,62 @@ expect_rc 0 "flow-ledger apply --write 证据全文" flow-ledger apply "$FL/verd
 grep -qF "**已还 $(date +%F)**:$LONGEV" "$WS/specs/debts.md" && ok "账本里证据全文(不截 100;ev 名与 file:line 指针完整)" || fail "账本证据被截: $(grep '已还' "$WS/specs/debts.md" | tail -1)"
 rm -f "$WS/specs/p3.md" "$WS/specs/p4.md"
 git checkout -q -- . 2>/dev/null
+
+# ── 27. 1.0.5 / A4:整条链(dispatch → open → 回件 → close → ② 双轴 → flow-micro → ④ → wrap;命令之间的缝是 1.0.4 三处 bug 的老家)──
+#   顺序固定,每步 expect_rc + 一条文件断言;批 B 每条的回归床。编排方在整链里零次 Edit(派单的待填段留着不填也能 open / close)。
+cd "$WS"
+git add -A >/dev/null 2>&1; git commit -qm 'r28 起点' >/dev/null 2>&1
+flow-fact-lint baseline >/dev/null 2>&1
+F28="$WS/.flow/r28"; mkdir -p "$F28"
+printf '## T1 · 链\nREQ-T1-01 [open] 判据甲\n## T2 · 尾\n' > "$WS/specs/plan28.md"
+# 1. ①写 派单
+expect_rc 0 "链1 flow-dispatch ①写 --dir" sh -c "flow-dispatch T1 --tree 活树-独占 --db 禁用 --seq 1 --round ①写 --dir '$F28' --plan '$WS/specs/plan28.md' src/a.ts src/k.test.ts > '$F28/01-dispatch.md'"
+[ -f "$F28/.face-①写.txt" ] && [ -f "$F28/.steps-①写.md" ] && ok "链1 .face-①写 与 .steps-①写 已落" || fail "链1 面 / 步骤账缺: $(ls -a "$F28")"
+# 2. ①写 open → agent 改树 + 写回件 + 勾步骤 → close
+expect_rc 0 "链2 flow-round open ①写" flow-round open "$F28" ①写
+printf 'chain\n' >> src/a.ts
+printf '# ①写 回件 · 链\n\n## 〇 · 改动索引表\n| 符号 | 文件:行段 | 性质 | 对应 | 例外 |\n|---|---|---|---|---|\n| `a` | src/a.ts:1-2 | 改 | REQ-T1-01 | |\n\n## 丙栏 · 自报三处最没把握\n- a.ts 那行\n' > "$F28/01-write-handoff.md"
+n28=$(grep -c '^- \[ \]' "$F28/.steps-①写.md"); i=0; while [ $i -lt "$n28" ]; do i=$((i+1)); flow-step done "$F28" ①写 $i >/dev/null 2>&1; done
+expect_rc 0 "链2 flow-round close ①写" flow-round close "$F28" ①写 --task T1
+head -1 "$F28/.declared-①写.txt" | grep -q '^# declared · ①写' && [ -f "$F28/.after-①写-hashes.txt" ] && ok "链2 .declared-①写 带 kit 头 · .after-①写 已打" || fail "链2 收工件缺: $(ls -a "$F28")"
+# 3. ②B(活树-独占 · 独占)派单 → open → 审回件(甲栏两判词 + 两条 ev 账 + 丙栏引 ev 与 patch 指针)+ patch 落 .evidence → close
+expect_rc 0 "链3 flow-dispatch ②B --face-from" sh -c "flow-dispatch T1 --tree 活树-独占 --db 独占 --seq 2 --round ②B --dir '$F28' --face-from '$F28/.face-①写.txt' > '$F28/02b-dispatch.md'"
+expect_rc 0 "链3 flow-round open ②B" flow-round open "$F28" ②B
+flow-ev "$F28" ②B unit -- 'echo ok' >/dev/null 2>&1; flow-ev "$F28" ②B lint -- 'echo 0' >/dev/null 2>&1
+printf 'it("chain", () => {})\n' >> src/k.test.ts; { printf "# repro: sh -c 'exit 0' → RC=0\n"; git -c core.quotepath=false diff -- src/k.test.ts; } > "$F28/.evidence/②B-micro-9.patch"; git checkout -q -- src/k.test.ts
+{ printf 'it("chain2", () => {})\n'; cat src/k.test.ts; } > "$T/k28.ts" && cat "$T/k28.ts" > src/k.test.ts   # 第二份改文件头(与第一份不同 hunk,同基线各自独立)
+{ printf "# repro: sh -c 'exit 0' → RC=0\n"; git -c core.quotepath=false diff -- src/k.test.ts; } > "$F28/.evidence/②B-micro-10.patch"; git checkout -q -- src/k.test.ts
+printf '# ②B 回件 · 链\n\n## 〇 · 正面结论\n必闭 1 条(不阻塞)\n\n## 甲栏 · 实测过的\n- unit:绿\n- lint:零\n\n## 丙栏 · 必闭\n- 补一条断言 · ev:unit · 期望 RC=0 · 不阻塞 · patch .evidence/②B-micro-9.patch\n' > "$F28/02b-review.md"
+expect_rc 0 "链3 flow-round close ②B" flow-round close "$F28" ②B
+[ -f "$F28/.after-②B-hashes.txt" ] && ok "链3 .after-②B 已打" || fail "链3 .after-②B 缺"
+# 4. ②A(快照 · 禁用)派单 → open → 回件 → close:不冻
+expect_rc 0 "链4 flow-dispatch ②A 快照" sh -c "flow-dispatch T1 --tree 快照 --db 禁用 --seq 3 --round ②A --dir '$F28' --face-from '$F28/.face-①写.txt' > '$F28/02a-dispatch.md'"
+expect_rc 0 "链4 flow-round open ②A" flow-round open "$F28" ②A
+flow-ev "$F28" ②A shasum -- 'echo 0' >/dev/null 2>&1
+printf '# ②A 回件 · 链\n\n## 〇 · 正面结论\n可进\n\n## 甲栏 · 实测过的\n- shasum:0\n\n## 丙栏 · 必闭\n- 零 · ev:shasum\n' > "$F28/02a-review.md"
+expect_rc 0 "链4 flow-round close ②A(快照轮)" flow-round close "$F28" ②A
+printf '%s' "$LAST_OUT" | grep -q '⊘快照不冻' && [ ! -f "$F28/.after-②A-hashes.txt" ] && ok "链4 快照轮 close 印 ⊘快照不冻 且无 .after-②A" || fail "链4 快照轮冻结处置错: $(printf '%s' "$LAST_OUT" | grep 冻结)"
+# 5. 微改通道落笔(两份 patch 同一路径:第二份走裁决号累加)
+expect_rc 0 "链5 flow-micro --apply 裁决-9" flow-micro "$F28/.evidence/②B-micro-9.patch" --face "$F28/.face-①写.txt" --freeze "$F28/.after-②B-hashes.txt" --apply --verdict 9
+[ -f "$F28/.after-②B-hashes.txt.pre-9" ] && grep -q '^src/k.test.ts  # 裁决-9 micro$' "$F28/.declared-②B.txt" && ok "链5 .pre-9 在 · .declared-②B 含 # 裁决-9 micro" || fail "链5 落笔收尾错: $(cat "$F28/.declared-②B.txt")"
+expect_rc 0 "链5 flow-micro --apply 裁决-10(同路径累加)" flow-micro "$F28/.evidence/②B-micro-10.patch" --face "$F28/.face-①写.txt" --freeze "$F28/.after-②B-hashes.txt" --apply --verdict 10
+[ -f "$F28/.after-②B-hashes.txt.pre-10" ] && grep -q '^src/k.test.ts  # 裁决-9,10 micro$' "$F28/.declared-②B.txt" && ok "链5 .pre-10 在 · 号累加成 裁决-9,10" || fail "链5 累加错: $(cat "$F28/.declared-②B.txt")"
+# 6. ④B 派单:③改 回件行自动印跳 ③
+expect_rc 0 "链6 flow-dispatch ④B" sh -c "flow-dispatch T1 --tree 活树-独占 --db 独占 --seq 4 --round ④B --dir '$F28' --face-from '$F28/.face-①写.txt' > '$F28/04b-dispatch.md'"
+grep -q '本批跳 ③(微改通道已落笔,裁决-9,10;' "$F28/04b-dispatch.md" && ok "链6 ④B 派单印 本批跳 ③(裁决-9,10)" || fail "链6 跳③行错: $(grep '③改 回件' "$F28/04b-dispatch.md")"
+# 7. ④B open:核的是重打后的 .after-②B(不是 .pre-N),FAILED=0
+expect_rc 0 "链7 flow-round open ④B" flow-round open "$F28" ④B
+printf '%s' "$LAST_OUT" | grep -q '\.after-②B-hashes\.txt:OK=[1-9][0-9]* FAILED=0' && ok "链7 open 核 .after-②B(重打后)FAILED=0" || fail "链7 open 核错件: $(printf '%s' "$LAST_OUT" | grep after)"
+# 8. ④B 回件 → close → wrap
+flow-ev "$F28" ④B gates -- 'echo PASS' >/dev/null 2>&1
+printf '# ④B 回件 · 链\n\n## 〇 · 正面结论\n可合并\n\n## 甲栏 · 实测过的\n- gates:PASS\n\n## 丙栏 · 必闭\n- 零 · ev:gates\n' > "$F28/04b-review.md"
+expect_rc 0 "链8 flow-round close ④B" flow-round close "$F28" ④B
+[ -f "$F28/.after-④B-hashes.txt" ] && ok "链8 .after-④B 已打" || fail "链8 .after-④B 缺"
+expect_rc 0 "链8 flow-close --wrap" flow-close --wrap "$F28" "$F28/.manifest-baseline-①写.txt" "$F28/.declared-④B.txt" "$F28/.after-④B-hashes.txt" --task T1
+printf '%s' "$LAST_OUT" | grep -q '^WRAP OK' && ok "链8 WRAP OK(测试锁认 ②B 微改行的裁决号)" || fail "链8 WRAP: $(printf '%s' "$LAST_OUT" | grep -E '^RED|FATAL|WRAP' | head -5)"
+# 9. 状态档零 ⚠glob猜;目录零残件
+grep -q '⚠glob猜' "$F28/00-ORCH-STATE.md" && fail "链9 状态档有 ⚠glob猜: $(grep '⚠glob猜' "$F28/00-ORCH-STATE.md")" || ok "链9 状态档零 ⚠glob猜(四轮派单 / 回件全按内容认领)"
+[ -z "$( ( cd "$F28" && for m in ./-*; do [ -e "$m" ] && printf '%s' "$m"; done ) )" ] && ok "链9 目录零个以 - 开头的件" || fail "链9 有残件: $(ls -a "$F28" | grep '^-')"
+rm -f "$WS/specs/plan28.md"; git checkout -q -- . 2>/dev/null
 
 [ "$red" = 0 ] && { echo "SMOKE OK"; exit 0; } || { echo "SMOKE RED"; exit 1; }
