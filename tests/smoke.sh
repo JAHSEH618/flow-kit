@@ -1540,6 +1540,14 @@ expect_rc 1 "链2 flow-batch next 步骤账未全勾 ⟹ close 红 ⟹ BATCH RED
 printf '%s' "$LAST_OUT" | grep -q '^BATCH RED: ①写 收工红' && [ ! -f "$F28/02a-dispatch.md" ] && ok "链2 ① 红时不派 ②(末行 BATCH RED,整段 close 输出印出)" || fail "链2 红路径错: $(printf '%s' "$LAST_OUT" | tail -2)"
 printf '%s' "$LAST_OUT" | grep -q '│ .*RED:步骤账未全勾' && ok "链2 非绿时整段 flow-round close 输出印出(编排方不必翻件)" || fail "链2 未印整段: $(printf '%s' "$LAST_OUT" | grep -c '│')"
 [ ! -f "$F28/.after-①写-hashes.txt" ] && ok "链2 全部判据绿之前不冻(1.1.0:冻结挪到判据之后)" || fail "链2 半绿就冻了"
+# 1.1.0 / B6:中断点 —— 状态档事实段印的接手点与 flow-dispatch --resume 生成的一致(同源 lib flow_resume_point);手写区不再抄派单
+expect_rc 0 "链2 flow-round state(中断点)" flow-round state "$F28"
+rp_state=$(LC_ALL=C sed -n 's/^- 接手点 ①写:\(.*\)$/\1/p' "$F28/00-ORCH-STATE.md")
+rp_resume=$(flow-dispatch --resume "$F28/01-dispatch.md" --dir "$F28" 2>/dev/null | LC_ALL=C sed -n 's/^- \*\*接手点\*\*:\(.*\)$/\1/p')
+[ -n "$rp_state" ] && [ "$rp_state" = "$rp_resume" ] && ok "链2 状态档接手点 = --resume 接手点(①写:步骤账 同源)" || fail "链2 接手点不同源: 状态档「${rp_state}」 resume「${rp_resume}」"
+printf '%s' "$rp_state" | grep -q 'STEPS OK: 已勾 0 / 共 [0-9]* · 下一步 1 · 设计' && ok "链2 ①写 接手点 = 步骤账下一步" || fail "链2 ①写 接手点体例错: $rp_state"
+grep -q '^- 下一步:`flow-batch next '"$F28"'`' "$F28/00-ORCH-STATE.md" && ok "链2 状态档印下一步 = flow-batch next(B6)" || fail "链2 状态档缺下一步行"
+grep -q '手写区:只放裁决' "$F28/00-ORCH-STATE.md" && ok "链2 状态档手写区标题 = 只放裁决(不再「= 下一份可直接派的派单」)" || fail "链2 手写区标题旧: $(grep '^## 一' "$F28/00-ORCH-STATE.md")"
 n28=$(grep -c '^- \[ \]' "$F28/.steps-①写.md"); i=0; while [ $i -lt "$n28" ]; do i=$((i+1)); flow-step done "$F28" ①写 $i >/dev/null 2>&1; done
 expect_rc 0 "链2 flow-batch next ⟹ close ①写 → 派 ②A ②B → open 两轮" flow-batch next "$F28"
 printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: ②A ②B' && ok "链2 末行 BATCH NEXT: ②A ②B" || fail "链2 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
@@ -1557,6 +1565,12 @@ mkp "$F28/.evidence/②B-micro-202.patch" src/a.ts 'export const fix = 1;' "# re
 printf '# ②B 回件 · 链\n\n## 〇 · 正面结论\n必闭 2 条(不阻塞)\n\n## 甲栏 · 实测过的\n- unit:绿\n- lint:零\n\n## 丙栏 · 必闭\n- 补一条断言 · ev:unit · 期望 RC=0 · 不阻塞 · patch .evidence/②B-micro-201.patch\n- 补一个导出 · ev:lint · 期望 RC=0 · 不阻塞 · patch .evidence/②B-micro-202.patch\n' > "$F28/02b-review.md"
 flow-ev "$F28" ②A shasum -- 'echo 0' >/dev/null 2>&1
 printf '# ②A 回件 · 链\n\n## 〇 · 正面结论\n可进\n\n## 甲栏 · 实测过的\n- shasum:0\n\n## 丙栏 · 必闭\n- 零 · ev:shasum\n' > "$F28/02a-review.md"
+# B6:② 中断点(回件半截)—— 状态档接手点(②B 已落节 + 账)= --resume
+flow-round state "$F28" >/dev/null 2>&1
+rp_state=$(LC_ALL=C sed -n 's/^- 接手点 ②B:\(.*\)$/\1/p' "$F28/00-ORCH-STATE.md")
+rp_resume=$(flow-dispatch --resume "$F28/02b-dispatch.md" --dir "$F28" 2>/dev/null | LC_ALL=C sed -n 's/^- \*\*接手点\*\*(从回件已落的节生成;②③④ 不建步骤账):\(.*\)$/\1/p')
+[ -n "$rp_state" ] && [ "$rp_state" = "$rp_resume" ] && printf '%s' "$rp_state" | grep -q '已落: 〇(1 行) 甲栏(2 行) 丙栏(2 行) · flow-ev 账 2 条' && ok "链3 ②B 接手点(已落节 + 账)状态档 = --resume" || fail "链3 ②B 接手点不同源: 状态档「${rp_state}」 resume「${rp_resume}」"
+grep -q '^- 接手点 ①写:' "$F28/00-ORCH-STATE.md" && fail "链3 已收工的 ①写 仍印接手点" || ok "链3 已收工的轮不印接手点"
 expect_rc 0 "链3 flow-batch next(② 收工;MICRO OK 未落笔)⟹ 待裁决" flow-batch next "$F28"
 printf '%s' "$LAST_OUT" | grep -q '^BATCH NEXT: 待裁决 —— MICRO OK 但未落笔;定了就 flow-batch next .* --verdict <裁决号>' && ok "链3 末行 待裁决(编排方三个点之二)" || fail "链3 末行错: $(printf '%s' "$LAST_OUT" | tail -1)"
 tail -1 "$F28/.evidence/②A-close.txt" | grep -q '^ROUND-CLOSE OK' && tail -1 "$F28/.evidence/②B-close.txt" | grep -q '^ROUND-CLOSE OK' && [ ! -f "$F28/.after-②A-hashes.txt" ] && [ -f "$F28/.after-②B-hashes.txt" ] && ok "链3 ②A ②B 都收 OK;②A 快照不冻,②B 冻" || fail "链3 ② 收工态错: $(ls -a "$F28" "$F28/.evidence" | grep -E 'close|after')"

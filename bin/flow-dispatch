@@ -76,27 +76,14 @@ if [ "${1:-}" = "--resume" ]; then
   [ -n "$RROUND" ] || RROUND="$ORIGROUND"
   [ -n "$RROUND" ] || flow_die "原派单里没有「轮次 / 模型」行,取不到轮名($ORIG)—— 显式给 --round <原轮名>(不带 -续)"
   STEPS=$(flow_round_file "$RDIR" "$RROUND" steps)
+  # 1.1.0 / B6:接手点入库 flow_resume_point(与 flow-round state 事实段同源):①写 从步骤账、②③④ 从回件已落的节 + flow-ev 账(1.0.0 / A3),回件没落就从头
+  RP=$(flow_resume_point "$RDIR" "$RROUND")
   if [ -f "$STEPS" ]; then
-    LAST=$(flow-step show "$RDIR" "$RROUND" | tail -1)
-    case "$LAST" in "STEPS DONE"*) flow_die "步骤账已全勾($LAST)—— 不是断点,是收工;走 flow-round close" ;; esac
-    STEPLINE="- **步骤账**:$STEPS —— $LAST
+    case "$RP" in *"STEPS DONE"*) flow_die "步骤账已全勾($RP)—— 不是断点,是收工;走 flow-round close" ;; esac
+    STEPLINE="- **接手点**:$RP
   每完成一步:\`flow-step done $RDIR $RROUND <N> \"<一句>\"\`;续轮之外别的 agent 也可能接手,勾在文件里不在你脑子里"
   else
-    # 1.0.0 / A3:②③④ 没有步骤账,接手点从回件已落的节头与 flow-ev 的账生成。回件一个字没落就从头 —— 那本来就没有断点
-    RH=$(flow_find_handoff "$RDIR" "$RROUND")
-    RLOG=$(flow_round_file "$RDIR" "$RROUND" log); nlog=0; [ -f "$RLOG" ] && nlog=$(grep -c . "$RLOG" || true)
-    if [ -n "$RH" ]; then
-      have=""; lack=""
-      for sec in 〇 甲栏 乙栏 丙栏 丁栏 戊栏; do
-        n=$(LC_ALL=C awk -v S="## $sec" 'index($0, S) == 1 { on = 1; next } /^## /{ on = 0 } on && NF { c++ } END { print c + 0 }' "$RDIR/$RH")
-        if [ "$n" -gt 0 ]; then have="$have $sec($n 行)"; else lack="$lack $sec"; fi
-      done
-      STEPLINE="- **接手点**(从回件已落的节生成;②③④ 不建步骤账):回件 $RDIR/$RH
-  已落:${have:- 无} · flow-ev 账 $nlog 条($RLOG);缺:${lack:- 无}。已落的节**只追加不重写**,缺的节从头写"
-    else
-      STEPLINE="- **接手点**:目录里没有首行为「# $RROUND 回件」的件,flow-ev 账 $nlog 条 —— 回件一个字没落就没有断点,按原派单从头做(已有的 .evidence/$RROUND-*.txt 可直接引)"
-    fi
-    LAST="(无步骤账)"
+    STEPLINE="- **接手点**(从回件已落的节生成;②③④ 不建步骤账):$RP"
   fi
   # 0.9.0:快照轮的续轮不核 verify(副本里 FATAL),核上一轮交付态的 shasum -c
   RTREE=$(LC_ALL=C sed -n 's/^- \*\*树权限\*\*:\([^(]*\).*/\1/p' "$ORIG" | head -1)

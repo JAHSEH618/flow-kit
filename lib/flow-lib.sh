@@ -335,6 +335,25 @@ flow_batch_plan() {   # 用法: flow_batch_plan <流程目录(绝对)>;stdout �
   printf '%s · 已开 %s\n' "$_bp_t" "${_bp_r:-无}"
 }
 
+# —— 接手点(1.1.0 / B6 入库;flow-dispatch --resume 与 flow-round state 同源):①写 从步骤账、②③④ 从回件已落的节 + flow-ev 账 ——
+#   病根:状态档手写区第一节「= 下一份可直接派的派单」是 --resume 的手工副本,p4d 编排方 50k 输出砸在这。stdout 一行;RC 恒 0。
+flow_resume_point() {   # 用法: flow_resume_point <流程目录(绝对)> <轮名>
+  _rp_s=$(flow_round_file "$1" "$2" steps)
+  if [ -f "$_rp_s" ]; then
+    printf '步骤账 %s —— %s\n' "$_rp_s" "$(flow-step show "$1" "$2" 2>/dev/null | tail -1)"; return 0
+  fi
+  _rp_h=$(flow_find_handoff "$1" "$2"); _rp_l=$(flow_round_file "$1" "$2" log); _rp_n=0; [ -f "$_rp_l" ] && _rp_n=$(grep -c . "$_rp_l" || true)
+  if [ -z "$_rp_h" ]; then
+    printf '目录里没有首行为「# %s 回件」的件,flow-ev 账 %s 条 —— 回件一个字没落就没有断点,按原派单从头做(已有的 .evidence/%s-*.txt 可直接引)\n' "$2" "$_rp_n" "$2"; return 0
+  fi
+  _rp_have=""; _rp_lack=""
+  for _rp_sec in 〇 甲栏 乙栏 丙栏 丁栏 戊栏; do
+    _rp_c=$(LC_ALL=C awk -v S="## $_rp_sec" 'index($0, S) == 1 { on = 1; next } /^## /{ on = 0 } on && NF { c++ } END { print c + 0 }' "$1/$_rp_h")
+    if [ "$_rp_c" -gt 0 ]; then _rp_have="$_rp_have $_rp_sec($_rp_c 行)"; else _rp_lack="$_rp_lack $_rp_sec"; fi
+  done
+  printf '回件 %s/%s 已落:%s · flow-ev 账 %s 条(%s);缺:%s。已落的节**只追加不重写**,缺的节从头写\n' "$1" "$_rp_h" "${_rp_have:- 无}" "$_rp_n" "$_rp_l" "${_rp_lack:- 无}"
+}
+
 # —— 申报清单解析(1.0.5 / A2):四处消费者(flow-close 越面与交付态 / flow-manifest 测试锁 / 派生并集 / flow-micro 追号)只走这一条 ——
 #   病根:`path  # 裁决-4703,4800 micro` 这一行曾有四套 sed / awk 各剥一遍,任一处正则漂了就是静默漏(1.0.4 第二个裁决号丢失就是这一族)。
 #   行形三种都认:`<hash>  path`(shasum 体例)/ `git XY path`(porcelain 体例,rename 取箭头右侧)/ 裸 `path`;行尾 `␣+# …` 是注释。

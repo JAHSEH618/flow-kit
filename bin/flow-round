@@ -132,6 +132,12 @@ gen_state() {
     echo ""
     echo "- 最近落盘(.evidence,mtime 降序 3 条):$( ( cd "$EV" && ls -t 2>/dev/null | head -3 | tr '\n' ' ' ) )"
     echo "- 轮次计划(flow-batch 按目录判,零状态):$(flow_batch_plan "$DIR")"
+    # 1.1.0 / B6:未收工的轮各印一行接手点(与 flow-dispatch --resume 同源,lib flow_resume_point);手写区不再抄派单
+    for r in $(flow_rounds_opened "$DIR"); do
+      flow_round_closed "$DIR" "$r" && continue
+      echo "- 接手点 $r:$(flow_resume_point "$DIR" "$r")"
+    done
+    echo "- 下一步:\`flow-batch next $DIR\`(中断的轮先 \`flow-dispatch --resume <原派单> --dir $DIR\`,接手点同上)"
     echo "<!-- flow:gen-end -->"
   } > "$T"
   if [ -f "$S" ]; then
@@ -145,7 +151,7 @@ gen_state() {
       { cat "$T"; echo ""; cat "$S"; } > "$S.tmp" && mv "$S.tmp" "$S"
     fi
   else
-    { echo "# 00-ORCH-STATE —— 编排方状态档(中断点专用件,不连载)"; echo ""; cat "$T"; echo ""; echo "## 一 · 编排方裁决(手写区;第一节永远 = 下一份可直接派的派单)"; echo ""; } > "$S"
+    { echo "# 00-ORCH-STATE —— 编排方状态档(中断点专用件,不连载)"; echo ""; cat "$T"; echo ""; echo "## 一 · 编排方裁决(手写区:只放裁决 —— 号段 / 改档 / 扩面理由;派单与接手点由 kit 生成,不抄)"; echo ""; } > "$S"
   fi
   rm -f "$T"
   echo "状态档事实段已刷: $S"
