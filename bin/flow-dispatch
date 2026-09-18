@@ -35,6 +35,8 @@
 #   带 --plan 时另数任务节的 REQ:open > FLOW_REQ_CAP ⟹ RC=3(①写是最长的会话,携带成本随轮数平方长;拆任务,或 --cap-ok 带过,理由进派单)。
 #   flow-dispatch <任务号> --tree … --db … --seq … --lane-merge <路径清单文件(绝对)> [触面路径...]
 #       合并批模式:触面从清单文件读(一行一路径;# 注释与空行略过);命令行再给的触面必须都在清单里,否则 FATAL;拒绝 --plan。
+#   1.2.0 / C2:待填段的裁决一条一行 `【裁决 N】<文> → 判据 <命令> → RC=<n> [末行含 <子串>]`(写 / 改轮 flow-round close 经 flow-ev 跑随行判据);
+#     ①写 之后的轮 --dir 时把 ①写 派单待填段的裁决行同源抄进本轮待填段(lib flow_dispatch_verdict_lines),编排方只在 ①写 那份写一次。
 # 输出:整块 markdown 到 stdout,重定向成 <流程目录>/<轮号>-dispatch.md 就是派单;待填段只剩 裁决 与 必查(1.1.0 / B5:禁写 / 严重级 / 边界 / ③ 核心库权限
 #   都由 kit 印默认 —— 禁写 = 许写之外全部(close 越面判据保底)、严重级三档、边界 = `git ls-files -- <触面…>`、③ 只许 shell;要改档才 Edit),其余勿手改 —— 要改就重跑。
 #   生成段由 `<!-- flow:gen-begin -->` / `<!-- flow:gen-end -->` 括起(止标记落在「编排方待填」之前):flow-doc-budget 按总字节减去它判自写预算。
@@ -562,11 +564,17 @@ fi
 case "$ROUND" in
   ②*|④*) echo "- **patch 落点**:\`${DIR:-<流程目录>}/.evidence/$ROUND-micro-<裁决号>.patch\`(头两行 \`# repro: <命令> → RC=<n> [末行含 <子串>]\` · \`# ev:<名>\`;上限 非测试 $FLOW_MICRO_FIX_LINES · 生产 $FLOW_MICRO_PROD_LINES 行;没附 patch 的条目一律不算微改)" ;;
 esac
-cat <<FT
-<!-- flow:gen-end -->
-
-### 编排方待填(只放裁决与必查;禁写 / 严重级 / 边界的默认在生成段,改档 / 点名陷阱 / 扩类才在此追加)
-- 裁决:任务书之外的用户裁决正文(任务书节选已在生成段,不再抄)
-- 必查:必读之外本轮特有要核的(并行支另核 H1/H2 隔离:$SPECS 手工 cp / DB 单点 / 文件层不相交 / 号段)
-FT
+# 1.2.0 / C2:裁决一条一行 `【裁决 N】<文> → 判据 <命令> → RC=<n> [末行含 <子串>]`,写 / 改轮 close 经 flow-ev 跑随行判据(无判据只 WARN);
+#   ①写 之后的轮(--dir 才有)把 ①写 派单待填段里的裁决行同源抄进本轮待填段 —— ②④ 审「违反裁决」、③ close 复跑,都拿同一组;改裁决改 ①写 那份再重跑本轮派单。
+V1=""; NV1=0
+if [ -n "$DIR" ] && [ "${ROUND#①写}" = "$ROUND" ]; then
+  d1_=$(flow_find_dispatch "$DIR" ①写)
+  [ -n "$d1_" ] && V1=$(flow_dispatch_verdict_lines "$DIR/$d1_") && NV1=$(printf '%s\n' "$V1" | grep -c . || true)
+fi
+echo "<!-- flow:gen-end -->"
+echo ""
+echo "### 编排方待填(只放裁决与必查;禁写 / 严重级 / 边界的默认在生成段,改档 / 点名陷阱 / 扩类才在此追加)"
+echo "- 裁决:一条一行 \`【裁决 N】<文> → 判据 <命令> → RC=<n> [末行含 <子串>]\`(写 / 改轮 close 经 flow-ev 跑随行判据,不符 RED;无判据的只 WARN,靠审方核);任务书节选已在生成段,不再抄${V1:+;下面 $NV1 条同源抄自 ①写 派单待填段,本轮追加的写在其后}"
+[ -n "$V1" ] && printf '%s\n' "$V1"
+echo "- 必查:必读之外本轮特有要核的(并行支另核 H1/H2 隔离:$SPECS 手工 cp / DB 单点 / 文件层不相交 / 号段)"
 exit 0

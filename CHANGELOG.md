@@ -2,6 +2,9 @@
 
 版本记事(从 CLAUDE.md 搬来;CLAUDE.md 只留地图与契约)。新版本写在最上面。
 
+1.2.0(降价批,TODO §C 的 kit 侧;工作区 config(`FLOW_ROLE_MODELS` / `FLOW_REQ_CAP`)与影子批本身要用本版跑过一批再定;每条一个提交,两 locale × 两 OS 全绿才下一条;agent 面向接口不动):
+**C2a 裁决带随行命令**:派单待填段的裁决一条一行 `【裁决 N】<文> → 判据 <命令> → RC=<n> [末行含 <子串>]`(`【裁决-N】` 也认);写 / 改轮 `flow-round close` 在 between 之后对本轮派单待填段每条经 `flow-ev <目录> 裁决 verdict-<N>-g<代> -- <命令>` 跑(同名加 -rN,账 `.evidence/裁决-log.tsv`),RC / 末行子串不符 ⟹ RED 不冻;无随行判据的裁决只 WARN(仍归审方核 —— ② 的「违反裁决」判断不动)。①写 之后的派单 `--dir` 时由 flow-dispatch 把 ①写 派单待填段的裁决行**同源抄进本轮待填段**(lib `flow_dispatch_verdict_lines`;1.1.0 起 ② 派单不再 Edit,裁决其实断在 ①写),③改 close 复跑的就是同一组(名 g3)。解析与复跑入库 lib `flow_run_oracle`(flow-micro 的 repro 头改调它,输出一字不变)与 `flow_dispatch_verdicts`(只扫 `<!-- flow:gen-end -->` 之后:生成段的任务书节选会把 plan 自己写的「【裁决 558】…」原样带进来)。病根:StockSteer p4j–p4z 每批 1–10 条裁决,②A 对象每批都在、17 批零阻塞 —— 先机械化它的对象,再谈轴随对象(C2b)。GEN_CAP 2450 不动(裁决体例行在待填段,不计生成段)。
+
 1.1.0(换形状批,TODO §B 九条;编排方退到三个点,③④ 按需;每条一个提交(B2+B3 同一条 flow-micro 路径合一提交),两 locale × 两 OS 全绿才下一条。agent 面向接口不动;编排方面向接口定型为 `flow-batch open` / `next`):
 **B8 收口同会话 · 规则书退役条件触发**(只改字,smoke 不变):SKILL §5 / close-block 步 0 改「请求数超 `FLOW_TURN_CAP` 才另起会话」(§5c 的病根「末轮上下文 429k」是每轮 6–8 个过渡请求堆的,flow-batch 之后 ≤12 请求不再成立);删「每批退役 ≥ 1 条」—— 棘轮(变长即 RED)才是判据,wrap 报变长才 `flow-rulebook retire`;`.usage.md` 手填段的「本批退役规矩数」一格退役(`flow-usage --write` 新件零必填行),`flow-close --wrap` WOK 手工步 4 / 7 同步。
 **B9 协议与文档改字**:SKILL §0.1「四轮制」→「写 + 审 + 机械复验;③ 只在有阻塞 / 通道不收时起,④ 只在树上落了生产改动时起,面 = 那份改动」,§1 表 ③④ 标按需、④ 一轴、丁栏三态表,§1 各条 / §3 派单前顺序 → `flow-batch` / §5 / §6 / §8 工具速查(加 `flow-batch`,dispatch / round / micro 退到「排障与非标批次手跑」);why.md §1c 补 B2 B3 病根、§1d 补两轴分工数据(26 + 20 批:双红 7 批里同 bug 只 2 批,ShipLedger 只 A 红 7 / 只 B 红 1,StockSteer 只 B 红 2 / 只 A 红 0 —— 两轴是分工不是双保险)与 ④ 一轴理由、新 §3e、§5c / §5f 改字;dispatch-block(kit 生成骨架 · 审轮 patch 段 ④ 一轴 · ③ 交付)· review-template · handoff-template(丁栏 = 三态表)· close-block(步 0 / 1 / 4 / 5 / 7 / 8 与轮数账段)· CLAUDE.md 地图与契约 3 / 10 · README · plugin.json 描述。

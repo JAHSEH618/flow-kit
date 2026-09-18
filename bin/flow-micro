@@ -264,7 +264,7 @@ if [ "$APPLY" = 1 ]; then
   echo "RC=$rc"
   [ "$rc" = 0 ] || { echo "MICRO RED: git apply RC=$rc(--check 过了却落不下 —— 树在这两步之间变了)"; exit 1; }
   # —— 1.1.0 / B3:落笔后 kit 复跑每份 patch 的 oracle(repro 头),任一不符全流回退;之后才重打冻结 / 追加申报 ——
-  FDIR=$(dirname "$FREEZE"); FEV=$(flow_round_file "$FDIR" 微改 evdir)
+  FDIR=$(dirname "$FREEZE")
   hdr "oracle 复跑(每条 \`# repro: <命令> → RC=<n> [末行含 <子串>]\` 经 flow-ev $FDIR 微改 micro-$VERDICT-<k>;不符 ⟹ git apply -R 全流回退)"
   : > "$TMP/obad"; k=0
   for pf in "$@"; do
@@ -274,21 +274,14 @@ if [ "$APPLY" = 1 ]; then
     j=0; nrep=$(grep -c . "$TMP/repro")
     while IFS= read -r line; do
       j=$((j+1)); body=${line#"# repro: "}
-      case "$body" in
-        *" → RC="*) ;;
-        *) echo "      WARN 旧体例(不是 → RC=<n>),机械复跑不了,原样给人:$line"; continue ;;
-      esac
-      cmd=${body%% → RC=*}; rest=${body#"$cmd → RC="}; want=${rest%% *}; sub=""
-      case "$rest" in *" 末行含 "*) sub=${rest#* 末行含 } ;; esac
-      case "$want" in ''|*[!0-9]*) echo "      RED  RC 期望不是数字:「${want}」($line)"; echo x >> "$TMP/obad"; continue ;; esac
       nm="micro-$VERDICT-$k"; [ "$nrep" -gt 1 ] && nm="$nm-$j"
-      base_=$nm; r_=1; while [ -e "$FEV/微改-$nm.txt" ]; do r_=$((r_+1)); nm="$base_-r$r_"; done   # 同一裁决号重跑(上次 oracle 不符修了 patch)不烧名
-      flow-ev "$FDIR" 微改 "$nm" -- "$cmd" > "$TMP/ev" 2>&1; erc=$?
-      last=$(tail -1 "$FEV/微改-$nm.txt" 2>/dev/null || true)
-      okk=1; [ "$erc" = "$want" ] || okk=0
-      if [ -n "$sub" ]; then case "$last" in *"$sub"*) ;; *) okk=0 ;; esac; fi
-      if [ "$okk" = 1 ]; then echo "      ok   ev:$nm RC=$erc = 期望${sub:+ · 末行含「${sub}」}"
-      else echo "      RED  ev:$nm RC=$erc ≠ 期望 $want${sub:+ / 末行「${last}」须含「${sub}」}(全量 $FEV/微改-$nm.txt)"; echo x >> "$TMP/obad"; fi
+      # 1.2.0 / C2:解析 + 复跑入库 flow_run_oracle(与派单裁决的随行判据同一条);同名已在它自己加 -rN(同一裁决号修了 patch 重跑不烧名)
+      flow_run_oracle "$FDIR" 微改 "$nm" "$body" "      "; orc=$?
+      case "$orc" in
+        0) ;;
+        3) echo "      WARN 旧体例(不是 → RC=<n>),机械复跑不了,原样给人:$line" ;;
+        *) echo x >> "$TMP/obad" ;;
+      esac
     done < "$TMP/repro"
   done
   if [ -s "$TMP/obad" ]; then

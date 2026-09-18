@@ -354,6 +354,42 @@ flow_resume_point() {   # 用法: flow_resume_point <流程目录(绝对)> <轮�
   printf '回件 %s/%s 已落:%s · flow-ev 账 %s 条(%s);缺:%s。已落的节**只追加不重写**,缺的节从头写\n' "$1" "$_rp_h" "${_rp_have:- 无}" "$_rp_n" "$_rp_l" "${_rp_lack:- 无}"
 }
 
+# —— oracle 一句(1.2.0 / C2):`<命令> → RC=<n> [末行含 <子串>]` 的唯一解析 + 复跑 —— flow-micro 的 repro 头与派单裁决的随行判据同一条 ——
+#   病根:判据句由审方 / 编排方写、由 kit 跑,写读两方各持一份正则就是静默假绿的入口(A2 申报清单那一族);解析只在这一处。
+#   经 `flow-ev <目录> <轮名> <名> -- <命令>` 跑(单串 → bash -c);同名证据已在 ⟹ 名加 -rN(同一条修了再跑不烧名)。
+#   stdout 一行 `ok   ev:<名> …` / `RED  …`(缩进由第 5 参给);RC:0 符 · 1 不符(含期望不是数字)· 3 旧体例(没有 ` → RC=`,一个字不印,调用方自己定 WARN 文案)。
+flow_run_oracle() {   # 用法: flow_run_oracle <流程目录(绝对)> <轮名> <名> <一句> [<缩进>]
+  _ro_d="$1"; _ro_r="$2"; _ro_n="$3"; _ro_b="$4"; _ro_i="${5:-}"
+  case "$_ro_b" in *" → RC="*) ;; *) return 3 ;; esac
+  _ro_c=${_ro_b%% → RC=*}; _ro_rest=${_ro_b#"$_ro_c → RC="}; _ro_w=${_ro_rest%% *}; _ro_s=""
+  case "$_ro_rest" in *" 末行含 "*) _ro_s=${_ro_rest#* 末行含 } ;; esac
+  case "$_ro_w" in ''|*[!0-9]*) printf '%sRED  RC 期望不是数字:「%s」(%s)\n' "$_ro_i" "$_ro_w" "$_ro_b"; return 1 ;; esac
+  _ro_e=$(flow_round_file "$_ro_d" "$_ro_r" evdir)
+  _ro_base=$_ro_n; _ro_k=1; while [ -e "$_ro_e/$_ro_r-$_ro_n.txt" ]; do _ro_k=$((_ro_k+1)); _ro_n="$_ro_base-r$_ro_k"; done
+  flow-ev "$_ro_d" "$_ro_r" "$_ro_n" -- "$_ro_c" > /dev/null 2>&1; _ro_rc=$?
+  _ro_l=$(tail -1 "$_ro_e/$_ro_r-$_ro_n.txt" 2>/dev/null || true)
+  _ro_ok=1; [ "$_ro_rc" = "$_ro_w" ] || _ro_ok=0
+  if [ -n "$_ro_s" ]; then case "$_ro_l" in *"$_ro_s"*) ;; *) _ro_ok=0 ;; esac; fi
+  if [ "$_ro_ok" = 1 ]; then printf '%sok   ev:%s RC=%s = 期望%s\n' "$_ro_i" "$_ro_n" "$_ro_rc" "${_ro_s:+ · 末行含「${_ro_s}」}"; return 0; fi
+  printf '%sRED  ev:%s RC=%s ≠ 期望 %s%s(全量 %s)\n' "$_ro_i" "$_ro_n" "$_ro_rc" "$_ro_w" "${_ro_s:+ / 末行「${_ro_l}」须含「${_ro_s}」}" "$_ro_e/$_ro_r-$_ro_n.txt"; return 1
+}
+
+# —— 派单裁决(1.2.0 / C2):待填段(`<!-- flow:gen-end -->` 之后)里 `【裁决 N】<文>[ → 判据 <命令> → RC=<n> [末行含 <子串>]]` 的行 ——
+#   只扫待填段:生成段的任务书节选会把 plan 自己写的「【裁决 558】…」原样带进来,那是引文不是本批裁决。
+#   行首容 `- ` / 空白;`【裁决 N】` 与 `【裁决-N】` 都认;同号只取首条。
+#   flow_dispatch_verdict_lines 印原行(flow-dispatch 抄进后轮派单用);flow_dispatch_verdicts 印 `N<TAB>正文<TAB>判据句`(判据句可空 = 无随行命令,close 只 WARN)。
+flow_dispatch_verdict_lines() {   # 用法: flow_dispatch_verdict_lines <派单(绝对)>
+  LC_ALL=C awk '/^<!-- flow:gen-end -->/ { on = 1; next } on' "$1" | LC_ALL=C grep -E '^[-[:space:]]*【裁决[ -]?[0-9]+】' | LC_ALL=C awk '
+    { l = $0; sub(/^[-[:space:]]*/, "", l); n = l; sub(/^【裁决[ -]?/, "", n); sub(/】.*$/, "", n); if (!(n in seen)) { seen[n] = 1; print l } }'
+}
+flow_dispatch_verdicts() {   # 用法: flow_dispatch_verdicts <派单(绝对)>
+  flow_dispatch_verdict_lines "$1" | LC_ALL=C awk '
+    { n = $0; sub(/^【裁决[ -]?/, "", n); sub(/】.*$/, "", n)
+      t = $0; sub(/^【裁决[ -]?[0-9]+】[[:space:]]*/, "", t); b = ""
+      if ((i = index(t, " → 判据 ")) > 0) { b = substr(t, i + length(" → 判据 ")); t = substr(t, 1, i - 1) }
+      sub(/[[:space:]]+$/, "", t); print n "\t" t "\t" b }'
+}
+
 # —— 申报清单解析(1.0.5 / A2):四处消费者(flow-close 越面与交付态 / flow-manifest 测试锁 / 派生并集 / flow-micro 追号)只走这一条 ——
 #   病根:`path  # 裁决-4703,4800 micro` 这一行曾有四套 sed / awk 各剥一遍,任一处正则漂了就是静默漏(1.0.4 第二个裁决号丢失就是这一族)。
 #   行形三种都认:`<hash>  path`(shasum 体例)/ `git XY path`(porcelain 体例,rename 取箭头右侧)/ 裸 `path`;行尾 `␣+# …` 是注释。

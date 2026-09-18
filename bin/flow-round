@@ -21,13 +21,15 @@
 # 用法:
 #   flow-round open  <流程目录(绝对)> <轮名>                      # 开工:fact-lint verify(F-13;只 ①写)→ 上一轮交付态 shasum -c → manifest baseline → doc-budget(只 ①写)→ 步骤账在否(①写)→ 状态档事实段
 #   flow-round close <流程目录(绝对)> <轮名> [--task <号>] [--plan <plan绝对>]
-#                                                                   # 收工交接口:回件认领 → 派生申报 → flow-close --between → 全绿冻结 → 步骤账(①写)→ 回件六判 → 状态档事实段
+#                                                                   # 收工交接口:回件认领 → 派生申报 → flow-close --between → 裁决随行判据(写 / 改轮)→ 步骤账(①写)→ 回件六判 → 丁栏 → 全绿冻结 → 状态档事实段
 #   flow-round state <流程目录(绝对)>                             # 只刷状态档事实段(00-ORCH-STATE.md 的 <!-- flow:gen-* --> 段;段外是编排方的裁决,不动)
 # 派单 / 回件两列**按件里的内容认领**(0.7.1),不按件名前缀猜:派单看 flow-dispatch 印的「轮次 / 模型」行,回件看首行「# <轮名> 回件」(库函数 flow_find_handoff)。
 #   认不出才退回 glob 并标 ⚠glob猜。实测 P3-1 状态档 14 行行行取错(③改二 两行都印 03c-fix-handoff.md,实件 05b/05c)。
 # 约定文件名(flow-dispatch --dir 印进派单的就是这些;agent 与编排方两侧同源):
 #   .manifest-baseline-<轮名>.txt · .declared-<轮名>.txt(kit 派生)· .after-<轮名>-hashes.txt(kit 冻结)· .face-<轮名>.txt · .steps-<轮名>.md(只 ①写)· .evidence/<轮名>-*.txt · .evidence/<轮名>-log.tsv
 #   · .verdicts-<轮名>.md(1.1.0 / B4:close 从 ①写 / ③改 回件丁栏抽的三态表,flow-ledger apply dry-run 过才留;--wrap --verdicts 默认取 ①写 那份)
+# 1.2.0 / C2 裁决随行判据:写 / 改轮 close 对本轮派单待填段每条 `【裁决 N】<文> → 判据 <命令> → RC=<n> [末行含 <子串>]` 经 flow-ev 跑(轮名 裁决,
+#   名 verdict-<N>-g<代>,同名加 -rN;账 .evidence/裁决-log.tsv),不符 RED;无随行判据的裁决只 WARN。解析与复跑在 lib flow_run_oracle / flow_dispatch_verdicts(与 flow-micro repro 头同一条)。
 # F-13:开工序里从没有 `flow-fact-lint verify` 这一步 —— 落位段写进 specs/ 后直接 baseline 冻结,自带的 RED 潜到①写收工才炸,
 #   而那时 specs/ 已在所有 agent 的禁写面。open 先 verify,新增 RED > 0 即红(门定义刚改过就先 `flow-fact-lint baseline` 重打)。
 # 末行固定:`ROUND-OPEN OK|RED` / `ROUND-CLOSE OK|RED` / `ROUND-STATE OK`;参数错 FATAL RC=2。
@@ -249,6 +251,31 @@ close)
   flow-close --between "$@" > "$EV/$ROUND-close-between.txt" 2>&1; rc=$?
   LC_ALL=C grep -E '^== |^RED|^FATAL|^BETWEEN|^OK=|^info |RC=|^TRACE|^LINT|^WARN' "$EV/$ROUND-close-between.txt" | sed 's/^/  /'   # 1.1.0:子命令末行(TRACE / LINT)也过筛,RC=1 才有出处
   echo "RC=$rc(全量 $EV/$ROUND-close-between.txt)"; [ "$rc" = 0 ] || red=1
+  # 1.2.0 / C2:裁决随行判据 —— 写 / 改轮 close 对本轮派单待填段每条 `【裁决 N】<文> → 判据 <命令> → RC=<n> [末行含 <子串>]` 经 flow-ev 跑
+  #   (轮名 裁决,名 verdict-<N>-g<代>[-rN],账 .evidence/裁决-log.tsv),不符 RED;无随行判据的裁决只 WARN(靠人核 —— ② 的「违反裁决」判断仍归审方)。
+  #   病根:裁决是散文,遵不遵守只有审方读了再说;StockSteer p4j–p4z 每批 1–10 条裁决,②A 的对象每批都在、17 批零阻塞 —— 先把它机械化,才谈得上不起 ②A(轴随对象)。
+  #   ①写 之后的派单由 flow-dispatch 把 ①写 待填段的裁决行同源抄进待填段,③改 close 跑的就是同一组(加上 ③ 派单自己追加的)。
+  case "$ROUND" in ①写*|③改*)
+    hdr "裁决随行判据(派单待填段 【裁决 N】… → 判据 <命令> → RC=<n>;经 flow-ev $DIR 裁决 verdict-N-g$(flow_round_gen "$ROUND") 跑;无判据只 WARN)"
+    d_=$(find_dispatch "$ROUND")
+    if [ -z "$d_" ]; then echo "  info 本轮派单认不出(生成段无「轮次 / 模型:${ROUND}」行),零裁决可跑"
+    else
+      flow_dispatch_verdicts "$DIR/$d_" > "$EV/$ROUND-verdicts-src.tsv"
+      nv=$(grep -c . "$EV/$ROUND-verdicts-src.tsv" || true); nrun=0; nwarn=0; nbad=0
+      while IFS="$(printf '\t')" read -r vn_ vt_ vb_; do
+        [ -n "$vn_" ] || continue
+        if [ -z "$vb_" ]; then echo "  WARN 裁决 $vn_ 无随行判据(靠人核;体例 → 判据 <命令> → RC=<n>):$vt_"; nwarn=$((nwarn+1)); continue; fi
+        flow_run_oracle "$DIR" 裁决 "verdict-$vn_-g$(flow_round_gen "$ROUND")" "$vb_" "  "; orc=$?
+        case "$orc" in
+          0) nrun=$((nrun+1)) ;;
+          3) echo "  WARN 裁决 $vn_ 判据旧体例(没有 → RC=<n>),跑不了,原样给人:$vb_"; nwarn=$((nwarn+1)) ;;
+          *) nrun=$((nrun+1)); nbad=$((nbad+1)) ;;
+        esac
+      done < "$EV/$ROUND-verdicts-src.tsv"
+      echo "  裁决 $nv 条:跑了 $nrun(不符 $nbad)· 无判据 $nwarn($d_ 待填段)"
+      if [ "$nbad" != 0 ]; then echo "  RED:裁决随行判据不符 $nbad 条 —— 树违反了裁决(或裁决的判据句写错);改树重收,或改派单里那条再重跑 close"; red=1; fi
+    fi ;;
+  esac
   hdr "步骤账(只 ①写;②③④ 为 info)"
   if [ -f "$(flow_round_file "$DIR" "$ROUND" steps)" ]; then
     last=$(flow-step show "$DIR" "$ROUND" | tail -1); echo "  $last"
