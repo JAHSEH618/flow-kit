@@ -422,10 +422,10 @@ WRAP OK: 机械段全绿。剩下的归编排方(判断步,照这个顺序;不�
      (已还条目的开口项单开新条;owner 不锚已收工任务;新条落接收位,flow-receipts 能扫到)
   2. spec:任务节写「落地记录 <日期> · 收口」+ 下一刀的接收位;REQ 状态已由 --mark-done 翻好,不再手改
   3. 根文档:只改门读数与批次标签 —— 上面「门读数(照抄进根文档…)」那一行照抄
-  4. 规则书:flow-rulebook retire <行号> --section "<§X · 批次>" --reason "<一句>"(每批 ≥ 1 条;先 flow-rulebook show 看行号)
+  4. 规则书:上面「规则书棘轮」那步没红就跳过;红了 flow-rulebook show 看行号 → retire <行号>[.<子句号>] --section "<§X · 批次>" --reason "<一句>"(1.1.0:条件触发,不再每批 ≥ 1)
   5. git commit(消息 = 〇 正面结论 + 裁决号段 + 门 + 账;单独一条命令,前面不串别的)
   6. flow-close --ship <commit> --subject "<PR 标题>" [--verdicts <三态表>] --dir $DIR(末尾重跑轮数账,窗含收口)
-  7. memory(号段 / 门 / 进度 / 下一批从 N 起);轮数账手填段只剩「本批退役规矩数」
+  7. memory(号段 / 门 / 进度 / 下一批从 N 起);轮数账全由 --write 生成,零手填
 WOK
     exit 0
   else echo "WRAP RED"; exit 1; fi
