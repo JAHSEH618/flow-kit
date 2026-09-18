@@ -142,12 +142,9 @@ cd "$FLOW_REPO_DIR" || exit 2
 step=0
 hdr() { step=$((step+1)); echo "== $step. $1 =="; }
 
-# 申报清单 → 纯路径集(剥哈希前缀 / git 状态位 / rename 箭头 / 行尾注释)
-declp=$(sed -e 's/^[0-9a-f]\{40,\}  //' -e 's/^git \(..\) //' -e 's/^git //' "$DECL" | sed 's/.* -> //' | sed 's/^[[:space:]]*//' | grep -v '^#' | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' | grep . | sort -u)
-# 申报行尾带 `# 裁决-N` 的路径 → `路径<TAB>N` 表(越面与交付态哈希共用;与 flow-manifest 的 declared_verdict 同一条解析)
-grep -v '^[[:space:]]*#' "$DECL" | sed -e 's/^[0-9a-f]\{40,\}  //' -e 's/^git \(..\) //' -e 's/^git //' | sed 's/.* -> //' | sed 's/^[[:space:]]*//' \
-  | LC_ALL=C awk '{ if (!match($0, /[[:space:]]+#[^#]*裁决[- ]*[0-9]+/)) next; path=substr($0, 1, RSTART-1); s=substr($0, RSTART, RLENGTH); sub(/.*裁决[- ]*/, "", s); print path "\t" s }' \
-  | sort -u > "$TMP/declv"
+# 申报清单 → 纯路径集 / 带裁决号的行(`路径<TAB>号串`;越面与交付态哈希共用)—— 1.0.5 / A2:解析只走 lib flow_declared_*,与 flow-manifest / 派生 / flow-micro 同一条
+declp=$(flow_declared_paths "$DECL")
+flow_declared_verdicts "$DECL" > "$TMP/declv"
 declv=$(cut -f1 "$TMP/declv")
 
 step_after() {

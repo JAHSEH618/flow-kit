@@ -1417,11 +1417,34 @@ printf 'export const q3 = 3;\n' >> src/q.test.ts; git -c core.quotepath=false di
 expect_rc 0 "flow-micro --apply 第二次(裁决-4890)" flow-micro "$M4/q2.patch" --face "$F104/.face-m.txt" --freeze "$F104/.after-m-hashes.txt" --apply --verdict 4890
 grep -q '^src/q.test.ts  # 裁决-4703,4800,4890$' "$F104/.declared-m.txt" && ok "三个号都在一行" || fail "第三号丢了: $(cat "$F104/.declared-m.txt")"
 git add -A >/dev/null 2>&1; git commit -qm q3base >/dev/null 2>&1
+expect_rc 0 "flow-manifest baseline(A2 用:q3 落笔前的测试锁)" flow-manifest baseline "$F104/.manifest-baseline-a2.txt"
 printf 'export const q4 = 4;\n' >> src/q.test.ts; git -c core.quotepath=false diff > "$M4/q3.patch"; git checkout -- src/q.test.ts
 expect_rc 0 "flow-micro --apply 同号再落(不重复)" flow-micro "$M4/q3.patch" --face "$F104/.face-m.txt" --freeze "$F104/.after-m-hashes.txt" --apply --verdict 4890
 grep -q '^src/q.test.ts  # 裁决-4703,4800,4890$' "$F104/.declared-m.txt" && ok "已含的号不重复" || fail "重复追加: $(cat "$F104/.declared-m.txt")"
 sh -c ". '$KIT/lib/flow-lib.sh'; flow_derive_declared '$F104' ④A '' '$F104/.declared-④A.txt'" >/dev/null 2>&1
 grep -q '^src/q.test.ts  # 裁决-4703,4800,4890$' "$F104/.declared-④A.txt" && ok "派生并集原样带累加号(消费者只取首号,向后兼容)" || fail "派生丢号: $(cat "$F104/.declared-④A.txt")"
+# 1.0.5 / A2:同一份带累加号的清单,三处读方(flow-manifest 测试锁 · flow-close --between 越面例外 · 派生)读到的号一致 —— 解析只走 lib flow_declared_*
+expect_rc 0 "flow-manifest verify 累加号清单(测试锁经 lib 解析)" flow-manifest verify "$F104/.manifest-baseline-a2.txt" "$F104/.declared-m.txt"
+printf '%s' "$LAST_OUT" | grep -q 'ok   测试锁: src/q.test.ts 改动带裁决号' && ok "测试锁认累加号行" || fail "测试锁未认累加号行: $(printf '%s' "$LAST_OUT" | grep 测试锁)"
+printf '# 面\nsrc/note.md\n' > "$F104/.face-a2.txt"
+expect_rc 0 "flow-close --between 累加号清单(越面例外经 lib 解析)" flow-close --between "$F104" "$F104/.manifest-baseline-a2.txt" "$F104/.declared-m.txt" --face "$F104/.face-a2.txt"
+printf '%s' "$LAST_OUT" | grep -q 'ok   面外但申报行带裁决号: src/q.test.ts' && ok "越面例外认累加号行" || fail "越面例外未认: $(printf '%s' "$LAST_OUT" | grep -E '越面|src/q')"
+v1=$(sh -c ". '$KIT/lib/flow-lib.sh'; flow_declared_verdicts '$F104/.declared-m.txt'"); v2=$(sh -c ". '$KIT/lib/flow-lib.sh'; flow_declared_verdicts '$F104/.declared-④A.txt'")
+[ "$v1" = "$(printf 'src/q.test.ts\t4703,4800,4890')" ] && [ "$v1" = "$v2" ] && ok "原件与派生件经同一条解析读到同一串号(4703,4800,4890)" || fail "号不一致: 原「$v1」派生「$v2」"
+# lib 单测:三种行形(sha 前缀 / git 状态位 / rename 箭头)都剥对,行尾注释与号串原样带出,注释行 / 空行不出
+printf '# 头\n%s  src/h.ts\ngit M  src/m.ts  # 裁决-4703,4800 micro\ngit R  src/old.ts -> src/new.ts\n  src/bare.ts   # 说明 无号\n\nsrc/x.ts\n' "$(printf 'x' | shasum -a 256 | cut -c1-64)" > "$F104/.declared-forms.txt"
+rows=$(sh -c ". '$KIT/lib/flow-lib.sh'; flow_declared_rows '$F104/.declared-forms.txt'" | tr '\t' '|')
+[ "$rows" = "$(printf 'src/h.ts||\nsrc/m.ts|4703,4800|裁决-4703,4800 micro\nsrc/new.ts||\nsrc/bare.ts||说明 无号\nsrc/x.ts||')" ] && ok "flow_declared_rows 三形都剥对(sha / git M / rename),注释与号串带出" || fail "rows 解析错:
+$rows"
+paths=$(sh -c ". '$KIT/lib/flow-lib.sh'; flow_declared_paths '$F104/.declared-forms.txt'" | tr '\n' ' ')
+[ "$paths" = "src/bare.ts src/h.ts src/m.ts src/new.ts src/x.ts " ] && ok "flow_declared_paths = 纯路径去重排序" || fail "paths 错: $paths"
+# 已有无号的行再落微改 ⟹ 就地补号(不追加重复路径行);kit 头保留
+printf '# declared · a2\nsrc/q.test.ts\n' > "$F104/.declared-a2.txt"
+git add -A >/dev/null 2>&1; git commit -qm a2base >/dev/null 2>&1
+printf 'export const q5 = 5;\n' >> src/q.test.ts; git -c core.quotepath=false diff > "$M4/q5.patch"; git checkout -- src/q.test.ts
+expect_rc 0 "flow-freeze(A2 无号行补号前)" flow-freeze "$F104/.after-a2-hashes.txt"
+expect_rc 0 "flow-micro --apply 申报里已有无号行 ⟹ 就地补号" flow-micro "$M4/q5.patch" --face "$F104/.face-m.txt" --freeze "$F104/.after-a2-hashes.txt" --apply --verdict 4901 --declared "$F104/.declared-a2.txt"
+[ "$(grep -c 'src/q.test.ts' "$F104/.declared-a2.txt")" = 1 ] && grep -q '^src/q.test.ts  # 裁决-4901 micro$' "$F104/.declared-a2.txt" && head -1 "$F104/.declared-a2.txt" | grep -q '^# declared · a2' && ok "无号行就地补 # 裁决-4901 micro(一行,kit 头保留)" || fail "补号错: $(cat "$F104/.declared-a2.txt")"
 git checkout -q -- . 2>/dev/null; git add -A >/dev/null 2>&1; git commit -qm micro104-end >/dev/null 2>&1
 # (8) flow-trace 只认标题行:console.log / 注释里的 [REQ] 不计;prettier 折行的标题(标题串在下一行)计
 cat > "$WS/specs/plan-title.md" <<'EOF'

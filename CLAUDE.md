@@ -5,7 +5,7 @@
 ## 地图
 
 - `bin/` —— 全部命令,前缀 `flow-`,plugin 启用后进 Bash PATH,按名调用不写路径。每个脚本头注 = 它的说明书。编排方一轮:`flow-dispatch --dir` → `flow-round open` → (agent) → `flow-round close`;② / ④ 后 `flow-micro`;收口 `flow-close --wrap|--ship`;退役 `flow-rulebook`。agent 面向的只有 `flow-ev`(判据命令的唯一通道,1.0.0)、独占轮经它跑的 `flow-gates --reset`、快照轮的 `shasum -c`、①写 的 `flow-step done`。版本记事在 CHANGELOG.md。
-- `lib/flow-lib.sh` —— 唯一共享库:找配置(从 cwd 向上找 `.claude/flow.config.sh`,找不到 FATAL)、可移植 sha256、实改集 git 轴枚举(`flow_changed_paths`)、冻结(`flow_freeze_to`)、回件认领 / 〇表解析 / 派生申报(`flow_find_handoff` / `flow_handoff_paths` / `flow_derive_declared`,1.0.0;`flow_handoff_skipped` 列不进申报却像路径的行,1.0.4)、流程目录残件守卫(`flow_check_flow_dir`,1.0.4)、欠账标记与 REQ-ID 模式(`flow_mark_re` / `flow_req_re`)、机器头字段提取、kit 自身根目录 `FLOW_KIT_DIR`。
+- `lib/flow-lib.sh` —— 唯一共享库:找配置(从 cwd 向上找 `.claude/flow.config.sh`,找不到 FATAL)、可移植 sha256、实改集 git 轴枚举(`flow_changed_paths`)、冻结(`flow_freeze_to`)、回件认领 / 〇表解析 / 派生申报(`flow_find_handoff` / `flow_handoff_paths` / `flow_derive_declared`,1.0.0;`flow_handoff_skipped` 列不进申报却像路径的行,1.0.4)、申报清单解析(`flow_declared_rows` / `flow_declared_paths` / `flow_declared_verdicts`,1.0.5:五处读方只走这一条,写方 flow-micro 也经它重写)、流程目录残件守卫(`flow_check_flow_dir`,1.0.4)、欠账标记与 REQ-ID 模式(`flow_mark_re` / `flow_req_re`)、机器头字段提取、kit 自身根目录 `FLOW_KIT_DIR`。
 - `skills/protocol/` —— 编排协议 SKILL.md(只留规矩 + `→ why §x`);`references/` 里是照抄用的模板(派单块 + 三行 prompt / 写改回件 / 复审回件 / 收口块 / 三态表 / 轮数账)与 `why.md`(每条规矩的实测与病根,编排方按需读,agent 不读)。
 - `skills/init/` —— 把 kit 装进一个工作区:写 config、装 git shim、建流程目录、建账本骨架、按 FLOW_KEEP_* 收窄会话(`flow-settings` 写 `.claude/settings.local.json`:关掉本项目不用的插件与用户级 MCP;实测开局 44k token 里 CLAUDE.md 只占 10k,其余是插件 skill 清单与工具表,sub-agent 每轮重付)。
 - `hooks/hooks.json` —— SessionStart 新鲜度检查(`flow-freshness`,全绿静默)。

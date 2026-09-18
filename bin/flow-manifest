@@ -148,10 +148,8 @@ verify)
   #   ⟹ 全红。这是**假红**,而假红与「真的全部漏申报」输出**逐字相同**,人只能靠猜区分 —— 探测器一旦
   #   开始说狼来了,下一次真的漏申报就会被耸肩略过。故:① 剥行尾 `␣+#...`;
   #   ② 剥完仍含空白的行 **FATAL**(路径不许含空白,那种行必是格式错,不许当路径静默不匹配)。
-  declared_paths=$(sed -e 's/^[0-9a-f]\{40,\}  //' -e 's/^git \(..\) //' -e 's/^git //' "$declared" \
-                   | sed 's/.* -> //' | sed 's/^[[:space:]]*//' | grep -v '^#' \
-                   | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' \
-                   | grep . | sort -u)
+  #   1.0.5 / A2:归一只走 lib flow_declared_paths(与 flow-close / 派生 / flow-micro 同一条解析)。
+  declared_paths=$(flow_declared_paths "$declared")
 
   if printf '%s\n' "$declared_paths" | grep -q '[[:space:]]'; then
     echo "FATAL: 申报清单归一后仍有含空白的行,判为格式错(路径不许含空白),拒绝给出红/绿结论:" >&2
@@ -160,9 +158,7 @@ verify)
   fi
 
   # 申报行尾带 `# 裁决-N` 的路径:测试锁与越面(flow-close)的例外通道 —— 例外要有号,能追到裁决
-  declared_verdict=$(grep -v '^[[:space:]]*#' "$declared" | LC_ALL=C grep -E '#[^#]*裁决[- ]*[0-9]+' \
-                     | sed -e 's/^[0-9a-f]\{40,\}  //' -e 's/^git \(..\) //' -e 's/^git //' | sed 's/.* -> //' | sed 's/^[[:space:]]*//' \
-                     | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' | grep . | sort -u)
+  declared_verdict=$(flow_declared_verdicts "$declared" | cut -f1)
 
   # 1.0.0 / A5:RED 行注明轴口径 —— git 轴是自 HEAD 的未提交改动(不是自基线),ignored 轴是与基线比;p4n ②A 为这一句读了本文件两段
   red=0

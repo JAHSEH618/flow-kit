@@ -230,6 +230,28 @@ flow_handoff_skipped() {   # 用法: flow_handoff_skipped <回件(绝对)>
       printf "%d\t%s\t%s\n", NR, k, f }' "$1"
 }
 
+# —— 申报清单解析(1.0.5 / A2):四处消费者(flow-close 越面与交付态 / flow-manifest 测试锁 / 派生并集 / flow-micro 追号)只走这一条 ——
+#   病根:`path  # 裁决-4703,4800 micro` 这一行曾有四套 sed / awk 各剥一遍,任一处正则漂了就是静默漏(1.0.4 第二个裁决号丢失就是这一族)。
+#   行形三种都认:`<hash>  path`(shasum 体例)/ `git XY path`(porcelain 体例,rename 取箭头右侧)/ 裸 `path`;行尾 `␣+# …` 是注释。
+#   stdout 每行 `path<TAB>号串<TAB>注释`:号串 = 注释里 `裁决-N[,M…]` 的数字部分(可空;累加号原样带出,消费者要首号自己 `cut -d, -f1`),
+#   注释 = `#` 之后去首空白的原文(可空;B2 起行尾词 `micro` / `prod` 由此带出)。注释行 / 空行不出;顺序保持、不去重。
+#   路径里的 tab 换成空格再印:含空白的路径本就是格式错,flow-manifest 要 FATAL 它,换成空格是让它仍能被 `grep '[[:space:]]'` 抓住(fail-closed)。
+#   格式**不动**(不换 TSV 存盘):写方只有 flow-micro,读方全经这里。
+flow_declared_rows() {   # 用法: flow_declared_rows <申报件(绝对)>
+  sed -e 's/^[0-9a-f]\{40,\}  //' -e 's/^git \(..\) //' -e 's/^git //' -e 's/^[[:space:]]*//' "$1" \
+  | LC_ALL=C awk '
+      /^#/ || /^[ \t]*$/ { next }
+      { line = $0; path = line; cmt = ""
+        if (match(line, /[ \t]+#/)) { path = substr(line, 1, RSTART - 1); cmt = substr(line, RSTART + RLENGTH); sub(/^[ \t]+/, "", cmt) }
+        sub(/.* -> /, "", path); sub(/[ \t]+$/, "", path); gsub(/\t/, " ", path)
+        if (path == "") next
+        nums = ""
+        if (match(cmt, /裁决[- ]*[0-9]+(,[0-9]+)*/)) { nums = substr(cmt, RSTART, RLENGTH); sub(/^裁决[- ]*/, "", nums) }
+        printf "%s\t%s\t%s\n", path, nums, cmt }'
+}
+flow_declared_paths()    { flow_declared_rows "$1" | cut -f1 | sort -u; }                                   # 纯路径集(去重排序)
+flow_declared_verdicts() { flow_declared_rows "$1" | LC_ALL=C awk -F'\t' '$2 != "" { print $1 "\t" $2 }' | sort -u; }   # 有号的行:`path<TAB>号串`
+
 # —— 流程目录守卫(1.0.4):以 `-` 开头的 md 件当场 FATAL ——
 #   病根:`flow-dispatch … > "$DIR/$ROUND-dispatch.md"` 里 $ROUND 为空(zsh 变量没设)⟹ 塌出 `-dispatch.md` 0 字节残件,
 #   之后每次扫目录的 `head` / `ls` 都把它当选项报 usage(P4-T 实测每次 dispatch 都报)。0 字节件**不能**判死:同一条重定向在 flow-dispatch
@@ -250,7 +272,7 @@ flow_derive_declared() {   # 用法: flow_derive_declared <流程目录(绝对)>
     for f in "$_dd_dir"/.declared-*.txt; do
       [ -f "$f" ] || continue
       [ "$f" = "$_dd_dir/.declared-$_dd_round.txt" ] && continue
-      grep -v '^[[:space:]]*#' "$f" | sed -e 's/^[0-9a-f]\{40,\}  //' -e 's/^git \(..\) //' -e 's/^git //' -e 's/.* -> //' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep . | sed 's/^/1\t/'
+      flow_declared_rows "$f" | LC_ALL=C awk -F'\t' '{ print ($3 != "" ? $1 "  # " $3 : $1) }' | sed 's/^/1\t/'   # 1.0.5 / A2:经同一条解析,行重写成规范形 `path  # 注释`
     done; } > "$_dd_tmp"
   { echo "# declared · $_dd_round(flow-round close 派生 $(date +%F\ %H:%M):〇表路径 ∪ 先前轮清单;勿手改,重跑 close 重生)"
     LC_ALL=C awk -F'\t' '{ line = $2; p = line; sub(/[ \t][ \t]*#.*$/, "", p); sub(/[ \t]*$/, "", p); if (p == "") next

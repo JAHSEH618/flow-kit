@@ -327,7 +327,8 @@ if [ -n "$DIR" ]; then
     else
       # 1.0.4:④ 的「③改 回件」行 —— 目录里没有 ③改 回件、但申报清单里有 flow-micro 追加的 ` micro` 行 ⟹ 本批跳了 ③(C1 通道),印裁决号不留待填
       mv_=""
-      case "$r" in ③改*) mv_=$(cat "$DIR"/.declared-*.txt 2>/dev/null | LC_ALL=C grep -E '#[^#]*裁决[- ]*[0-9]+(,[0-9]+)* micro' | LC_ALL=C grep -oE '裁决[- ]*[0-9]+(,[0-9]+)*' | sed 's/^裁决[- ]*//' | tr ',' '\n' | sort -un | tr '\n' ',' | sed 's/,$//') ;; esac
+      case "$r" in ③改*) mv_=$(for df in "$DIR"/.declared-*.txt; do [ -f "$df" ] && flow_declared_rows "$df"; done \
+                           | LC_ALL=C awk -F'\t' '$2 != "" && $3 ~ /(^|[ \t])micro([ \t]|$)/ { print $2 }' | tr ',' '\n' | sort -un | tr '\n' ',' | sed 's/,$//') ;; esac   # 1.0.5 / A2:经 lib rows 取号
       if [ -n "$mv_" ]; then
         MUSTREAD="$MUSTREAD
     $r 回件:本批跳 ③(微改通道已落笔,裁决-$mv_;patch 见 $DIR/.evidence/*-micro-<裁决号>.patch,复现头在 flow-micro 输出里)"

@@ -227,21 +227,26 @@ if [ "$APPLY" = 1 ]; then
     flow_warn "申报清单不存在,新建: $DECLARED"
     echo "# declared · $(printf '%s' "$DECLARED" | sed -n 's|.*/\.declared-\(.*\)\.txt$|\1|p')(flow-micro 新建 $(date +%F\ %H:%M))" > "$DECLARED"
   fi
-  nadd=0
+  # 1.0.5 / A2:读 rows(lib flow_declared_rows,与三处读方同一条解析)→ 改内存中那行 → 整件重写;不再对原件 awk 就地正则。
+  #   已有带号的行:号累加(`裁决-4703` → `裁决-4703,4800`,已含本号不重复);已有无号的行:就地补 `# 裁决-N micro`;没有的行:追加。
+  #   注释行(kit 头)原样保留在前;数据行按规范形 `path  # 注释` 重写(与派生并集同一形状)。
   cut -f3 "$TMP/sum" | while IFS= read -r p; do
     [ -n "$p" ] || continue
-    if grep -v '^[[:space:]]*#' "$DECLARED" | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' | grep -qxF -- "$p" \
-       && grep -v '^[[:space:]]*#' "$DECLARED" | grep -F -- "$p" | LC_ALL=C grep -qE '#[^#]*裁决[- ]*[0-9]+'; then
-      # 1.0.4:号累加到已有那行的号表(`裁决-4703` → `裁决-4703,4800`);已含本号就不重复。只动路径恰等于 p 的那一行
-      have=$(grep -v '^[[:space:]]*#' "$DECLARED" | grep -F -- "$p" | LC_ALL=C grep -oE '裁决[- ]*[0-9]+(,[0-9]+)*' | head -1 | sed 's/^裁决[- ]*//')
-      if printf '%s' ",$have," | grep -qF -- ",$VERDICT,"; then echo "  已有(裁决-$have 已含 $VERDICT,不重复): $p"
-      else
-        LC_ALL=C awk -v p="$p" -v v="$VERDICT" '{ line = $0; path = line; sub(/[ \t][ \t]*#.*$/, "", path); sub(/[ \t]*$/, "", path)
-            if (path == p && match(line, /裁决[- ]*[0-9]+(,[0-9]+)*/)) line = substr(line, 1, RSTART + RLENGTH - 1) "," v substr(line, RSTART + RLENGTH)
-            print line }' "$DECLARED" > "$DECLARED.tmp" && mv "$DECLARED.tmp" "$DECLARED"
-        echo "  已有(裁决-$have),追加 → 裁决-$have,$VERDICT: $p"
-      fi
-    else printf '%s  # 裁决-%s micro\n' "$p" "$VERDICT" >> "$DECLARED"; echo "  + $p  # 裁决-$VERDICT micro"; fi
+    have=$(flow_declared_rows "$DECLARED" | P="$p" LC_ALL=C awk -F'\t' '$1 == ENVIRON["P"] { print $2; exit }')
+    seen=$(flow_declared_rows "$DECLARED" | P="$p" LC_ALL=C awk -F'\t' '$1 == ENVIRON["P"] { print "y"; exit }')
+    if [ -n "$have" ] && printf '%s' ",$have," | grep -qF -- ",$VERDICT,"; then echo "  已有(裁决-$have 已含 $VERDICT,不重复): $p"; continue; fi
+    { grep '^[[:space:]]*#' "$DECLARED" || true
+      flow_declared_rows "$DECLARED" | P="$p" V="$VERDICT" LC_ALL=C awk -F'\t' '
+        { path = $1; cmt = $3
+          if (path == ENVIRON["P"]) {
+            if (match(cmt, /裁决[- ]*[0-9]+(,[0-9]+)*/)) cmt = substr(cmt, 1, RSTART + RLENGTH - 1) "," ENVIRON["V"] substr(cmt, RSTART + RLENGTH)
+            else cmt = (cmt == "" ? "" : cmt " ") "裁决-" ENVIRON["V"] " micro" }
+          print (cmt != "" ? path "  # " cmt : path) }'
+      [ -n "$seen" ] || printf '%s  # 裁决-%s micro\n' "$p" "$VERDICT"
+    } > "$DECLARED.tmp" && mv "$DECLARED.tmp" "$DECLARED"
+    if [ -n "$have" ]; then echo "  已有(裁决-$have),追加 → 裁决-$have,$VERDICT: $p"
+    elif [ -n "$seen" ]; then echo "  已有(无号),补号 → 裁决-$VERDICT micro: $p"
+    else echo "  + $p  # 裁决-$VERDICT micro"; fi
   done
   hdr "复现命令清单(每份 patch 头部 diff --git 之前以 # 起的行;编排方逐条复跑对期望读数)"
   for pf in "$@"; do
